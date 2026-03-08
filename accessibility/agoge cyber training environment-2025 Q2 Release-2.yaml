@@ -1,0 +1,2244 @@
+title: Agoge Cyber Training Environment Accessibility Conformance Report
+product:
+  name: Agoge Cyber Training Environment
+  version: 2025 Q2 Release
+  description: >-
+    Agoge’s platform simulates complex, real-world cybersecurity environments in
+    the cloud. It create virtual replicas of real-world systems, devices, and
+    networks, offering trainees the opportunity to practice and refine their
+    skills in an environment that mimics real cyber environments.
+author:
+  name: Thao Le-Vasicek
+  company_name: 'Bastazo, Inc.'
+  address: '110 NW 2nd St, Suite 210, Bentonville AR 72712'
+  email: thao@bastazo.com
+  phone: 918-410-9283
+  website: 'https://www.bastazo.com/products/agoge'
+vendor:
+  name: ''
+  company_name: ''
+  address: ''
+  email: ''
+  phone: ''
+  website: ''
+report_date: 7/14/2025
+last_modified_date: 7/16/2025
+version: 2
+notes: ''
+evaluation_methods_used: >-
+  The accessibility assessment of the Agoge CTE (Student Mode) software involved
+  a combination of manual inspection, automated tools, and assistive technology
+  testing.
+
+
+  Manual Code Inspection - Evaluators reviewed the provided HTML, CSS,
+  JavaScript, and React component source files to identify accessibility support
+  and gaps according to WCAG 2.1 guidelines and Section 508 Functional
+  Performance Criteria.
+
+
+  Automated Testing: Lighthouse was used to perform automated analysis on sample
+  pages and interactive components, verifying compliance with WCAG 2.1 Level A
+  and AA success criteria.
+
+
+  Keyboard Navigation Testing: Manual keyboard navigation tests (Tab, Shift+Tab,
+  Enter, and Spacebar) were conducted to verify operability, focus visibility,
+  and absence of keyboard traps throughout user workflows.
+
+
+  Color Contrast Analysis: Contrast levels were evaluated using WCAG-approved
+  color contrast analyzers (e.g., WebAIM Contrast Checker) for text and
+  interactive elements.
+
+
+  Identified accessibility issues have been documented, and specific
+  enhancements are planned and detailed in this report, targeted for completion
+  in the 2025 Q4 software release.
+legal_disclaimer: >-
+  © 2025 Bastazo, Inc. All rights reserved.
+
+  Agoge CTE software and all related documentation are proprietary to Bastazo,
+  Inc. and are licensed only under the Bastazo End‑User License Agreement
+  (EULA).
+
+
+  This Accessibility Conformance Report (ACR) is provided solely to assist
+  customers in evaluating Agoge’s conformance with U.S. Revised Section 508 and
+  WCAG 2.1 requirements. It may be reproduced and distributed unaltered and in
+  its entirety. Excerpts or partial reproductions are not permitted without
+  prior written consent from Bastazo, Inc.
+
+
+  The information herein is furnished “as is,” without warranty of any kind, and
+  does not create any contractual obligations or modify the terms of any
+  existing agreement with Bastazo, Inc. Bastazo reserves the right to revise the
+  product and this document without notice.
+repository: ''
+feedback: ''
+license: CC-BY-4.0
+related_openacrs: []
+catalog: 2.4-edition-wcag-2.1-508-en
+chapters:
+  success_criteria_level_a:
+    notes: ''
+    disabled: false
+    criteria:
+      - num: 1.1.1
+        components:
+          - name: web
+            adherence:
+              level: partially-supports
+              notes: >-
+                All functional icons are inside  elements whose text provides
+                the accessible name, and status graphics are SVGs with
+                aria-hidden="true" (per MUI defaults). We still need to verify
+                any inline images or InfoCard graphics have alt or
+                role="presentation". 
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: The software has no electronic documents
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: Software only exists as a web application.
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: The software has no authoring tools for students.
+      - num: 1.2.1
+        components:
+          - name: web
+            adherence:
+              level: not-applicable
+              notes: No prerecorded media present in student workflow.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 1.2.2
+        components:
+          - name: web
+            adherence:
+              level: not-applicable
+              notes: No prerecorded media present in student workflow.
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 1.2.3
+        components:
+          - name: web
+            adherence:
+              level: not-applicable
+              notes: No prerecorded media present in student workflow.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 1.3.1
+        components:
+          - name: web
+            adherence:
+              level: partially-supports
+              notes: >-
+                Current release uses accessible MUI controls (DataGrid, Buttons)
+                but page regions are wrapped in generic &lt;div&gt; elements
+                without landmarks or heading hierarchy. Screen-reader users must
+                linear-scan the page. We will add semantic landmarks
+                (&lt;header&gt; / &lt;nav&gt; / &lt;main&gt; / &lt;footer&gt;)
+                and H1–H3 headings in our 2025-Q4 release (target Q4
+                2025).&lt;/footer&gt;&lt;/main&gt;&lt;/nav&gt;&lt;/header&gt;&lt;/div&gt;
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 1.3.2
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                DOM order matches visual order in the provided HTML; React state
+                updates do not reorder content unexpectedly.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 1.3.3
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                All user instructions reference on-screen labels (“Click
+                Connect”, “Press Go to Assessment”) rather than color or
+                positional cues alone.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 1.4.1
+        components:
+          - name: web
+            adherence:
+              level: partially-supports
+              notes: >-
+                Status pills (“Ready”, “Running”, “Error”) convey meaning purely
+                by color, and two tokens fall below the 3:1 contrast threshold
+                on light mode. Design team has committed to a WCAG-compliant
+                color palette and redundant text/shape indicators in the 2025 Q4
+                theme refresh.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 1.4.2
+        components:
+          - name: web
+            adherence:
+              level: not-applicable
+              notes: No auto-playing audio
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.1.1
+        components:
+          - name: web
+            adherence:
+              level: partially-supports
+              notes: >-
+                DataGrid rows and the Configure Access modal expose focusable
+                elements, but current focus rings are faint and row-level
+                navigation is inconsistent. Migration to MUI v6 DataGridPro with
+                custom focus styling is targeted for Q4 2025, delivering
+                predictable keyboard traversal and visible focus.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.1.2
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: No component captures focus without an Escape or close button.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.1.4
+        components:
+          - name: web
+            adherence:
+              level: not-applicable
+              notes: No single-key shortcuts are implemented.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.2.1
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                There are no moving/scrolling/auto-updating elements that last
+                &gt;5 s and lack controls.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.2.2
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                The student application allows the student to extend it lab time
+                beyond the default 2 hour window.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.3.1
+        components:
+          - name: web
+            adherence:
+              level: not-applicable
+              notes: No flashing content exists
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.4.1
+        components:
+          - name: web
+            adherence:
+              level: partially-supports
+              notes: >-
+                No “Skip to main content” link and no landmark regions in the
+                current build. A global skip-link plus ARIA landmarks will be
+                introduced in the 2025 Q4 navigation refactor.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.4.2
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: The React router sets descriptive document titles.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.4.3
+        components:
+          - name: web
+            adherence:
+              level: partially-supports
+              notes: >-
+                Toggling between Workout and Assessment views re-mounts
+                components, occasionally dropping keyboard focus to the document
+                body. Refactor in Q4 2025 will persist both views in the DOM and
+                toggle with aria-hidden, preserving focus order.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.4.4
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                All links and buttons (“Go to Assessment”, “Back to Workout”)
+                contain visible text describing their purpose.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.5.1
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                No multipoint or path-based gestures. All actions invokable with
+                a single click.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.5.2
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                Click actions are triggered on up-events via default MUI
+                Buttons. Pointer cancellation is handled natively.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.5.3
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                Accessible names of form fields and buttons match or include the
+                visible label text.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.5.4
+        components:
+          - name: web
+            adherence:
+              level: not-applicable
+              notes: 'No shaking, device-tilt, or motion input features.'
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 3.1.1
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: ' is present in the root HTML of all student application pages.'
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 3.2.1
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                No UI change is triggered solely by focus; actions require
+                explicit click/Enter.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 3.2.2
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                Form submission or navigation occurs only after explicit user
+                action (click/Enter), not simply on field input.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 3.3.1
+        components:
+          - name: web
+            adherence:
+              level: partially-supports
+              notes: >-
+                Inline form validation is visually apparent but not announced to
+                assistive technologies, and inputs lack aria-described by ties
+                to error text. The 2025 Q4 form layer will use ARIA-live regions
+                and MUI’s new FormHelperText pattern to announce errors
+                programmatically.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 3.3.2
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                All form fields (Join code, Email) have visible labels or
+                placeholders and explanatory text in the help guide.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 4.1.1
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                React renders valid HTML and no duplicated ID are found in the
+                student web pages.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 4.1.2
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                MUI components expose correct ARIA roles and properties (e.g.,
+                role="button", aria-selected). Custom icons inside Buttons are
+                marked aria-hidden so they don’t override the button’s
+                accessible name.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+  success_criteria_level_aa:
+    notes: ''
+    disabled: false
+    criteria:
+      - num: 1.2.4
+        components:
+          - name: web
+            adherence:
+              level: not-applicable
+              notes: No live audio/video content provided.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 1.2.5
+        components:
+          - name: web
+            adherence:
+              level: not-applicable
+              notes: No prerecorded video content requiring audio description.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 1.3.4
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                The application fully supports both portrait and landscape
+                orientations on mobile/tablet displays.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 1.3.5
+        components:
+          - name: web
+            adherence:
+              level: partially-supports
+              notes: >-
+                Form fields (email, join-code) lack autocomplete attributes. The
+                2025 Q4 release will implement HTML5 input types and
+                autocomplete attributes (autocomplete="email" etc.) to improve
+                input recognition and auto-fill support.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 1.4.3
+        components:
+          - name: web
+            adherence:
+              level: partially-supports
+              notes: >-
+                Default MUI palette meets contrast requirements, but custom
+                status labels (e.g., "Running", "Ready", "Error") fall below the
+                required 4.5:1 contrast ratio. The 2025 Q4 design refresh will
+                provide WCAG-compliant colors.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 1.4.4
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                Text scales effectively to 200% without loss of content or
+                functionality, supported by responsive CSS.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 1.4.5
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                No images of text are utilized; all text is rendered with
+                HTML/CSS.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 1.4.10
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                Content and layouts adapt responsively down to 320px wide
+                without horizontal scrolling or content loss.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 1.4.11
+        components:
+          - name: web
+            adherence:
+              level: partially-supports
+              notes: >-
+                Interactive components (buttons, icons, form controls) currently
+                meet contrast requirements, but certain icons within InfoCards
+                and TimerBoxes have borderline contrast issues. The 2025 Q4
+                release will audit and adjust non-text elements (icons, borders)
+                to fully comply with a 3:1 ratio minimum.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 1.4.12
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                UI supports text-spacing customizations (line-height, spacing,
+                letter-spacing) without clipping or loss of
+                content/functionality.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 1.4.13
+        components:
+          - name: web
+            adherence:
+              level: partially-supports
+              notes: >-
+                Tooltips and hoverable info-cards appear on hover but currently
+                do not provide easy dismissal via keyboard or persist on pointer
+                movement. The 2025 Q4 update will enhance tooltips/cards to
+                include a keyboard-dismissable pattern and pointer stabilization
+                to fully support this criterion.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.4.5
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                Agoge’s student interface offers multiple paths to key pages
+                (main lab, assessments, and configurations) via navigation and
+                dashboard links.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.4.6
+        components:
+          - name: web
+            adherence:
+              level: partially-supports
+              notes: >-
+                Form labels and buttons are clearly labeled. However, headings
+                are inconsistently used or missing altogether on some dynamic
+                pages. A systematic review and application of a consistent
+                heading hierarchy is scheduled for the 2025 Q4 release.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 2.4.7
+        components:
+          - name: web
+            adherence:
+              level: partially-supports
+              notes: >-
+                Focus outlines are present via default MUI styles but lack
+                strong visibility on certain elements (DataGrid rows, tabs). The
+                2025 Q4 update includes customized, highly-visible focus
+                indicators for all interactive components.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 3.1.2
+        components:
+          - name: web
+            adherence:
+              level: not-applicable
+              notes: >-
+                Application content is English only. No foreign language
+                sections exist.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 3.2.3
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                Navigation components and placement remain consistent across the
+                application.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 3.2.4
+        components:
+          - name: web
+            adherence:
+              level: supports
+              notes: >-
+                Buttons, icons, and interactive controls maintain consistent
+                labels, appearance, and functionality throughout.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 3.3.3
+        components:
+          - name: web
+            adherence:
+              level: partially-supports
+              notes: >-
+                Basic error messages appear for form fields but do not
+                consistently provide suggestions for correction. The 2025 Q4
+                form-system update will introduce standardized, helpful inline
+                validation suggestions for all form errors (e.g., "Invalid email
+                address, please use example@domain.com").
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 3.3.4
+        components:
+          - name: web
+            adherence:
+              level: not-applicable
+              notes: >-
+                The platform does not currently handle legal commitments,
+                financial transactions, or critical irreversible user data
+                submissions.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+      - num: 4.1.3
+        components:
+          - name: web
+            adherence:
+              level: partially-supports
+              notes: >-
+                Some status updates (lab status changes, timer expiration
+                warnings) are visually conveyed but not announced
+                programmatically for screen readers. The 2025 Q4 release will
+                implement ARIA live regions to announce dynamic status messages
+                clearly to assistive technology users.
+          - name: electronic-docs
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: software
+            adherence:
+              level: not-applicable
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: not-applicable
+              notes: ''
+  success_criteria_level_aaa:
+    notes: ''
+    disabled: true
+    criteria:
+      - num: 1.2.6
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 1.2.7
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 1.2.8
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 1.2.9
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 1.3.6
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 1.4.6
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 1.4.7
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 1.4.8
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 1.4.9
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 2.1.3
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 2.2.3
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 2.2.4
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 2.2.5
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 2.2.6
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 2.3.2
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 2.3.3
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 2.4.8
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 2.4.9
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 2.4.10
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 2.5.5
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 2.5.6
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 3.1.3
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 3.1.4
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 3.1.5
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 3.1.6
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 3.2.5
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 3.3.5
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+      - num: 3.3.6
+        components:
+          - name: web
+            adherence:
+              level: ''
+              notes: ''
+          - name: electronic-docs
+            adherence:
+              level: ''
+              notes: ''
+          - name: software
+            adherence:
+              level: ''
+              notes: ''
+          - name: authoring-tool
+            adherence:
+              level: ''
+              notes: ''
+  functional_performance_criteria:
+    notes: ''
+    disabled: false
+    criteria:
+      - num: '302.1'
+        components:
+          - name: none
+            adherence:
+              level: partially-supports
+              notes: >-
+                Most interactive elements are accessible via keyboard and
+                labeled correctly for screen readers. However, current lack of
+                semantic landmarks, consistent heading structure, and ARIA-live
+                announcements of status changes create barriers for blind users.
+                The 2025 Q4 release will add semantic landmarks (&lt;main&gt;,
+                &lt;nav&gt;, &lt;header&gt;), consistent headings (&lt;h1&gt;,
+                &lt;h2&gt; hierarchy), and ARIA-live status messages to fully
+                support screen reader
+                navigation.&lt;/h2&gt;&lt;/h1&gt;&lt;/header&gt;&lt;/nav&gt;&lt;/main&gt;
+      - num: '302.2'
+        components:
+          - name: none
+            adherence:
+              level: partially-supports
+              notes: >-
+                The interface is responsive and supports zooming and text
+                resizing, but certain status labels and interactive elements
+                have insufficient contrast. The 2025 Q4 release will improve the
+                color palette, contrast ratios, and add clearer visible focus
+                indicators for low-vision users.
+      - num: '302.3'
+        components:
+          - name: none
+            adherence:
+              level: partially-supports
+              notes: >-
+                Most content does not rely solely on color; however, certain
+                status indicators ("Ready," "Running," "Error") depend primarily
+                on color cues. The 2025 Q4 update will introduce redundant text
+                labels and shape-based indicators to eliminate color-only
+                dependencies.
+      - num: '302.4'
+        components:
+          - name: none
+            adherence:
+              level: supports
+              notes: >-
+                The software does not contain audio-only or audio-dependent
+                content. All instructions and notifications are visually
+                displayed.
+      - num: '302.5'
+        components:
+          - name: none
+            adherence:
+              level: supports
+              notes: Same as 302.4. No barriers exist related to hearing limitations.
+      - num: '302.6'
+        components:
+          - name: none
+            adherence:
+              level: supports
+              notes: The software does not require speech input or interaction.
+      - num: '302.7'
+        components:
+          - name: none
+            adherence:
+              level: partially-supports
+              notes: >-
+                Keyboard navigation is generally functional, but some
+                interactive elements (like modal dialogs and DataGrid rows) have
+                inconsistent keyboard navigation paths. The planned 2025 Q4
+                release includes enhancements to ensure robust, predictable
+                keyboard access to all interactive elements and clearer focus
+                indicators.
+      - num: '302.8'
+        components:
+          - name: none
+            adherence:
+              level: supports
+              notes: >-
+                The software does not require precise reach or significant
+                physical exertion. Standard interface controls are easily
+                operable without demanding dexterity or prolonged physical
+                interaction.
+      - num: '302.9'
+        components:
+          - name: none
+            adherence:
+              level: partially-supports
+              notes: >-
+                While instructions and UI labels are clear, current form
+                validation messages lack specific, actionable error suggestions,
+                potentially creating confusion for users with cognitive or
+                learning disabilities. The 2025 Q4 update will provide improved
+                inline validation with specific correction guidance and
+                standardized messages to simplify understanding and interaction.
+  hardware:
+    notes: ''
+    disabled: true
+    criteria:
+      - num: 402.2.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 402.2.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 402.2.3
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 402.2.4
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 402.2.5
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 402.3.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 402.3.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '402.4'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '402.5'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '403.1'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '404.1'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '405.1'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '406.1'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '407.2'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 407.3.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 407.3.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 407.3.3
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '407.4'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '407.5'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '407.6'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '407.7'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 407.8.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 407.8.1.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 407.8.1.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 407.8.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 407.8.2.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 407.8.2.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 407.8.3
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 407.8.3.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 407.8.3.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 407.8.3.2.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 407.8.3.2.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '408.2'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '408.3'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '409.1'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '410.1'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '411.1'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 412.2.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 412.2.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 412.3.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 412.3.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '412.4'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '412.5'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '412.6'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '412.7'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 412.8.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 412.8.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 412.8.3
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 412.8.4
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 413.1.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 413.1.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 414.1.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 414.1.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 415.1.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 415.1.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+  software:
+    notes: ''
+    disabled: true
+    criteria:
+      - num: 502.2.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 502.2.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 502.3.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 502.3.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 502.3.3
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 502.3.4
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 502.3.5
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 502.3.6
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 502.3.7
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 502.3.8
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 502.3.9
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 502.3.10
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 502.3.11
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 502.3.12
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 502.3.13
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 502.3.14
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '502.4'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '503.2'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '503.3'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 503.4.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 503.4.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '504.2'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 504.2.1
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: 504.2.2
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '504.3'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '504.4'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+  support_documentation_and_services:
+    notes: ''
+    disabled: true
+    criteria:
+      - num: '602.2'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '602.3'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '602.4'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '603.2'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''
+      - num: '603.3'
+        components:
+          - name: none
+            adherence:
+              level: ''
+              notes: ''

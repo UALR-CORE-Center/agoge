@@ -1,0 +1,1 @@
+For more information on how the guacamole server is configured, refer to the deployment [README](/build_files/server_config/guacamole/README.md)

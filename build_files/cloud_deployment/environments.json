@@ -1,0 +1,22 @@
+{
+  "agoge-test": {
+    "impersonation_account": "agoge-service@agoge-test-427119.iam.gserviceaccount.com",
+    "project_id": "agoge-test-427119"
+  },
+  "ualr-cybersecurity": {
+    "impersonation_account": "agoge-service@ualr-cybersecurity.iam.gserviceaccount.com",
+    "project_id": "ualr-cybersecurity"
+  },
+  "fate": {
+    "impersonation_account": "agoge-service@fate-433117.iam.gserviceaccount.com",
+      "project_id": "fate-433117"
+  },
+  "ualr-agoge-OLD": {
+    "impersonation_account": "agoge-service@ualr-agoge.iam.gserviceaccount.com",
+      "project_id": "ualr-agoge"
+  },
+  "agoge-ualr": {
+    "impersonation_account": "agoge-service@agoge-ualr.iam.gserviceaccount.com",
+      "project_id": "agoge-ualr"
+  }
+}

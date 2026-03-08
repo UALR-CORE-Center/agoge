@@ -1,0 +1,133 @@
+version: '3.7'
+
+services:
+  #########################################################################
+  # MySQL (Persistent)
+  #########################################################################
+  db:
+    image: mysql:8.0
+    # Swarm ignores container_name, so omit it
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+      MYSQL_DATABASE: "guacamole_db"
+      MYSQL_USER: "guacamole_user"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD}"
+    volumes:
+      - db_data:/var/lib/mysql
+      # If you have a custom init script:
+      - ./initdb.sql:/docker-entrypoint-initdb.d/initdb.sql
+    networks:
+      - guacnet
+    deploy:
+      mode: replicated
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  #########################################################################
+  # Guacamole Daemon (guacd)
+  #########################################################################
+  guacd:
+    image: guacamole/guacd
+    environment:
+      GUACD_LOG_LEVEL: "info"
+    volumes:
+        - guac_recordings:/recordings  # Volume to store recordings
+    networks:
+      - guacnet
+    # Swarm-specific parameters:
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: [ "CMD-SHELL", "nc -z 127.0.0.1 4822 || exit 1" ]
+      interval: 30s    # Check every 30 seconds (instead of the default 5 minutes)
+      timeout: 5s      # Give the command 5 seconds to succeed
+      start_period: 15s  # Wait 15 seconds after starting before performing the first check
+
+  #########################################################################
+  # Guacamole Web Application
+  #########################################################################
+  guacamole:
+    image: guacamole/guacamole
+    environment:
+      GUACD_HOSTNAME: guacd
+      GUACD_PORT: 4822
+      MYSQL_HOSTNAME: db
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: guacamole_db
+      MYSQL_USER: guacamole_user
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD}"
+    volumes:
+      - guac_recordings:/recordings # Mount volume to persist recordings
+    networks:
+      - guacnet
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  #########################################################################
+  # Nginx (Reverse Proxy)
+  #########################################################################
+  nginx:
+    image: nginx:latest
+    # We remove container_name; not used by Swarm
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    networks:
+      - guacnet
+    # We can replicate it or just run one instance:
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+    command: >
+      /bin/sh -c "
+        sed -i 's|server_name GUAC_HOST;|server_name $GUAC_HOST;|' /etc/nginx/conf.d/guacamole.conf &&
+        sed -i 's|GUAC_DOMAIN|$GUAC_DOMAIN|g' /etc/nginx/conf.d/guacamole.conf &&
+        nginx -g 'daemon off;'
+      "
+
+#######################################################################
+# Named Volumes
+#######################################################################
+volumes:
+  db_data:
+  guac_recordings:
+
+networks:
+  guacnet:
+    driver: overlay
+    attachable: true

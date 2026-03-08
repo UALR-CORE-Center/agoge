@@ -1,0 +1,72 @@
+import time
+from datetime import datetime, timezone
+import subprocess
+import pathlib
+
+from common.constants.database import DatabaseTypes, DATABASE_NAME, DbCollections
+from common.constants.build_constants import BuildConstants
+from common.document_database import DocumentDatabaseFactory
+
+from cloud_deployment.utilities.menu_options import SetupOptions
+from cloud_deployment.operations.app_install_updates.base_build import BaseBuild
+from cloud_deployment.operations.env_and_quotas.environment_variables import EnvironmentVariables
+from cloud_deployment.operations.app_install_updates.agoge_app import AgogeApp
+from cloud_deployment.operations.app_install_updates.classified_app import ClassifiedApp
+from cloud_deployment._archive.build_specification import BuildSpecification
+from cloud_deployment.operations.images_and_specs.default_server_image import DefaultServerImage
+from cloud_deployment.operations.images_and_specs.local_to_cloud import LocalToCloud
+from cloud_deployment.operations.env_and_quotas.increase_quotas import QuotaManager
+from cloud_deployment.operations.project_manager import ProjectManager
+from cloud_deployment.operations.images_and_specs.custom_image_import_manager import CustomImageImportManager
+from cloud_deployment.operations.guacamole_image_management.guacamole_image_manager import GuacamoleImageManager
+from cloud_deployment.operations.app_install_updates.install_update_manager import InstallUpdateManager
+
+
+class SetupManager:
+    """
+    Handles the execution of selected setup operations (e.g., full updates, environment variable syncs, etc.)
+    based on the user's choice from the menu system.
+    """
+
+    def __init__(self, selection, project) -> None:
+        """
+        :param selection: A SetupOptions enum value indicating which operation to run.
+        :param project: The GCP project ID to apply operations to.
+        """
+        self.selection = selection
+        self.project = project
+
+    def run(self, new_selection: SetupOptions = None) -> None:
+        """
+        Executes the selected operation. In case of missing environment variables (KeyError),
+        attempts to synchronize environment variables before retrying or exiting.
+        """
+        self.selection = new_selection or self.selection
+        # Create a map of selection values to the corresponding operations
+        operation_map = {
+            SetupOptions.FULL: lambda: InstallUpdateManager(self.project).run_full_install(),
+            SetupOptions.UPDATE: lambda: InstallUpdateManager(self.project).run_update(),
+            SetupOptions.CLOUD_FUNCTION: lambda: AgogeApp().deploy_cloud_functions(),
+            SetupOptions.MAIN_APP: lambda: AgogeApp().deploy_main_app(),
+            SetupOptions.DEFAULT_SERVER_IMAGES: lambda: DefaultServerImage().run(),
+            SetupOptions.CLASSIFIED_APP: lambda: ClassifiedApp().deploy(),
+            SetupOptions.ENV: lambda: EnvironmentVariables(project=self.project).run(),
+            SetupOptions.IMPORT_CUSTOM_IMAGES: lambda: CustomImageImportManager().run(),
+            SetupOptions.IMPORT_LOCAL_IMAGE: lambda: LocalToCloud().run(),
+            SetupOptions.STARTUP_SCRIPTS_AND_INSTRUCTIONS: lambda: BuildSpecification().sync_startup_scripts_and_instructions(),
+            SetupOptions.INCREASE_QUOTAS: lambda: QuotaManager(project=self.project).request_all(),
+            SetupOptions.PROJECT_CREATION: lambda: ProjectManager().create(),
+            SetupOptions.PROJECT_DELETE: lambda: ProjectManager().delete(),
+            SetupOptions.REFRESH_GUACAMOLE_IMAGE_AND_CERT: lambda: GuacamoleImageManager(project=self.project).create_guac_project_image()
+        }
+
+        try:
+            # Retrieve the operation based on the current selection
+            operation = operation_map.get(self.selection)
+            if operation:
+                operation()  # execute
+
+        except KeyError as e:
+            print(f"A KeyError occurred, possibly due to a missing environment variable: {e}")
+            print(f"Attempting to synchronize environment variables for project '{self.project}' before retrying.")
+            EnvironmentVariables(project=self.project).run()

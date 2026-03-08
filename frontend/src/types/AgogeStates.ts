@@ -1,0 +1,61 @@
+export enum WorkoutStates {
+    NOT_BUILT = -1,
+    START = 0,
+    BUILDING_ASSESSMENT = 1,
+    BUILDING_NETWORKS = 2,
+    COMPLETED_NETWORKS = 3,
+    BUILDING_SERVERS = 4,
+    COMPLETED_SERVERS = 5,
+    BUILDING_FIREWALL = 6,
+    COMPLETED_FIREWALL = 7,
+    BUILDING_ROUTES = 8,
+    COMPLETED_ROUTES = 9,
+    BUILDING_FIREWALL_RULES = 10,
+    COMPLETED_FIREWALL_RULES = 11,
+    BUILDING_STUDENT_ENTRY = 12,
+    COMPLETED_STUDENT_ENTRY = 13,
+    GUACAMOLE_SERVER_LOAD_TIMEOUT = 28,
+    RUNNING = 50,
+    STOPPING = 51,
+    STARTING = 52,
+    READY = 53,
+    EXPIRED = 60,
+    MISFIT = 61,
+    BROKEN = 62,
+    DELETING_SERVERS = 70,
+    COMPLETED_DELETING_SERVERS = 71,
+    DELETED = 72
+}
+
+export enum ServerStates {
+    START = 0,
+    BUILDING = 1,
+    READY = 2,
+    STARTING = 3,
+    RUNNING = 4,
+    STOPPING = 5,
+    STOPPED = 6,
+    EXPIRED = 7,
+    MISFIT = 8,
+    RESETTING = 9,
+    RELOADING = 10,
+    BROKEN = 11,
+    DELETING = 12,
+    DELETED = 13
+}
+
+export enum ImageStates {
+    CHECKED_IN = 0,
+    CHECKED_OUT = 1
+}
+
+export enum SpecificationStates {
+    EDIT = 'edit',
+    COPY = 'copy',
+    CREATE = 'create',
+    READY = 'ready',
+    CANCEL = 'cancel'
+}
+
+
+

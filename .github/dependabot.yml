@@ -1,0 +1,50 @@
+# To get started with Dependabot version updates, you'll need to specify which
+# package ecosystems to update and where the package manifests are located.
+# Please see the documentation for all configuration options:
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  - package-ecosystem: "pip" # See documentation for possible values
+    directories: # Location of package manifests
+      - "/requirements.txt"
+      - "/cloud_functions/requirements.txt"
+      - "/main_app/api/requirements.txt"
+    schedule:
+      interval: "weekly"
+    reviewers:
+      - "0xfut1le"
+      - "klmcclan"
+    groups:
+      python-prod-security:
+        applies-to: security-updates
+        dependency-type: production
+      python-prod-version:
+        applies-to: version-updates
+        dependency-type: production
+      python-dev-security:
+        applies-to: security-updates
+        dependency-type: development
+      python-dev-version:
+        applies-to: version-updates
+        dependency-type: development
+  - package-ecosystem: "npm" # See documentation for possible values
+    directory: "/" # Location of package manifests
+    schedule:
+      interval: "weekly"
+    reviewers:
+      - "0xfut1le"
+      - "klmcclan"
+    groups:
+      react-prod-security:
+        applies-to: security-updates
+        dependency-type: production
+      react-prod-version:
+        applies-to: version-updates
+        dependency-type: production
+      react-dev-security:
+        applies-to: security-updates
+        dependency-type: development
+      react-dev-version:
+        applies-to: version-updates
+        dependency-type: development

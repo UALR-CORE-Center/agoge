@@ -1,0 +1,89 @@
+{
+  "name": "frontend",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@emotion/react": "^11.13.3",
+    "@emotion/styled": "^11.13.0",
+    "@fontsource/roboto": "^5.1.0",
+    "@mdxeditor/editor": "^3.11.5",
+    "@mui/icons-material": "^6.1.1",
+    "@mui/lab": "^6.0.0-beta.10",
+    "@mui/material": "^6.1.1",
+    "@mui/styled-engine-sc": "^6.1.1",
+    "@mui/x-data-grid": "^7.18.0",
+    "@mui/x-data-grid-pro": "^7.18.0",
+    "@mui/x-date-pickers": "^7.18.0",
+    "@mui/x-date-pickers-pro": "^7.18.0",
+    "@mui/x-license": "^7.18.0",
+    "@mui/x-tree-view": "^7.18.0",
+    "@radix-ui/colors": "^3.0.0",
+    "@testing-library/jest-dom": "^6.5.0",
+    "@testing-library/react": "^16.0.1",
+    "@testing-library/user-event": "^14.5.2",
+    "@types/jest": "^29.5.13",
+    "@types/node": "^22.6.0",
+    "@types/react": "^18.3.8",
+    "@types/react-dom": "^18.3.0",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "axios": "^1.7.7",
+    "buffer": "^6.0.3",
+    "date-fn": "^0.0.2",
+    "date-fns": "^4.1.0",
+    "dotenv": "^16.4.5",
+    "firebase": "^11.6.1",
+    "firebaseui": "^6.1.0",
+    "guacamole-common-js": "^1.5.0",
+    "mui-modal-provider": "^2.4.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.1",
+    "react-router-dom": "^6.26.2",
+    "react-syntax-highlighter": "^15.5.0",
+    "react-timezone-select": "^3.2.8",
+    "react-window": "^1.8.10",
+    "rehype-raw": "^7.0.0",
+    "remark-gfm": "^4.0.0",
+    "styled-components": "^6.1.13",
+    "typescript": "^5.6.2",
+    "unified": "^11.0.5"
+  },
+  "overrides": {
+    "firebase": "$firebase"
+  },
+  "scripts": {
+    "start": "vite --debug",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "devDependencies": {
+    "@types/guacamole-common-js": "^1.5.2",
+    "@types/react-window": "^1.8.8",
+    "@typescript-eslint/eslint-plugin": "^8.7.0",
+    "@typescript-eslint/parser": "^8.7.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "eslint": "^8.57.1",
+    "eslint-plugin-import": "^2.30.0",
+    "eslint-plugin-react": "^7.36.1",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "vite": "^6.3.5"
+  }
+}
