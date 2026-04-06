@@ -49,6 +49,7 @@ class SetupOptions(bytes, Enum):
     PROJECT_CREATION = (14, "Create a New GCP Production Project")
     PROJECT_EDIT = (15, "Edit Settings for an Existing GCP Production Project")
     PROJECT_DELETE = (16, "Delete a GCP Production Project")
+    PROJECT_MAINTENANCE = (17, "Perform Maintenance Operations on a GCP Production Project")
 
     # Shared Labs
     SHARED_LAB_MANAGEMENT = (20, "Managed Shared Labs")
@@ -93,11 +94,12 @@ category_menu = {
         ],
     },
     SetupCategories.PROJECTS: {
-        "label": "GCP Project Creation/Management",
+        "label": "GCP Project Management",
         "options": [
             (SetupOptions.PROJECT_CREATION, SetupOptions.PROJECT_CREATION.description),
             (SetupOptions.PROJECT_EDIT, SetupOptions.PROJECT_EDIT.description),
             (SetupOptions.PROJECT_DELETE, SetupOptions.PROJECT_DELETE.description),
+            (SetupOptions.PROJECT_MAINTENANCE, SetupOptions.PROJECT_MAINTENANCE.description),
             (SetupOptions.BACK, SetupOptions.BACK.description),
         ],
     },
@@ -120,6 +122,16 @@ category_menu = {
         ],
     }
 }
+
+class ProjectMaintenanceOptions(bytes, Enum):
+    def __new__(cls, value, description):
+        obj = bytes.__new__(cls, [value])
+        obj._value_ = value
+        obj.description = description
+        return obj
+
+    REIMAGE_GUACAMOLE = (1, "Reimage Guacamole Server (Refresh TLS Certificate)")
+    BACK = (99, "Back")
 
 
 def display_main_menu():
