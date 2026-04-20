@@ -19,11 +19,19 @@ from cloud_deployment.operations.env_and_quotas.increase_quotas import QuotaMana
 from cloud_deployment.operations.project_manager import ProjectManager
 from cloud_deployment.operations.images_and_specs.custom_image_import_manager import CustomImageImportManager
 from cloud_deployment.operations.app_install_updates.install_update_manager import InstallUpdateManager
-from .utilities.maintenance_menu_options import (display_project_maintenance_menu, get_project_maintenance_selection,
-                                                 project_maintenance_menu)
+from cloud_deployment.utilities.menu_options import (
+    SetupOptions,
+    ProjectMaintenanceOptions,
+    display_project_maintenance_menu,
+    get_project_maintenance_selection,
+    get_project_maintenance_operation,
+    get_project_maintenance_menu_length,
+    get_user_selection,
+)
 from cloud_deployment.utilities.menu_options import get_user_selection
 
 from .operations.project_maintenance.rebuild_guacamole_for_unit import RebuildGuacamoleForUnit
+from .operations.project_maintenance.extend_project_expiration import ExtendWorkoutExpirations
 
 class SetupManager:
     """
@@ -75,31 +83,17 @@ class SetupManager:
             EnvironmentVariables(project=self.project).run()
 
     def _run_project_maintenance_menu(self) -> None:
-        """
-        Display and execute the project maintenance submenu until the user selects Back.
-        """
         while True:
             display_project_maintenance_menu()
-            choice = get_user_selection(len(project_maintenance_menu["options"]))
-            maintenance_selection = get_project_maintenance_selection(choice)
+            choice = get_user_selection(get_project_maintenance_menu_length())
+            selection = get_project_maintenance_selection(choice)
 
-            if maintenance_selection == ProjectMaintenanceOptions.BACK:
+            if selection == ProjectMaintenanceOptions.BACK:
                 break
 
-            self._run_project_maintenance_operation(maintenance_selection)
+            operation_class = get_project_maintenance_operation(choice)
+            if operation_class:
+                operation_class().run()
+            else:
+                print(f"Unsupported maintenance selection: {selection}")
 
-    def _run_project_maintenance_operation(
-            self,
-            selection: ProjectMaintenanceOptions,
-    ) -> None:
-        maintenance_operation_map = {
-            ProjectMaintenanceOptions.REIMAGE_GUACAMOLE: (
-                lambda: RebuildGuacamoleForUnit().run()
-            ),
-        }
-
-        operation = maintenance_operation_map.get(selection)
-        if operation:
-            operation()
-        else:
-            print(f"Unsupported maintenance selection: {selection}")

@@ -1,3 +1,4 @@
+# agoge/setup.py
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from colorama import Fore, Style, init
 
