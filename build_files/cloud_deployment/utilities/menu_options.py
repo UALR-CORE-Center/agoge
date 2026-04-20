@@ -1,3 +1,4 @@
+# agoge/cloud_deployment/utilities/menu_options.py
 from enum import Enum
 from colorama import Fore, Style, init
 
@@ -49,6 +50,7 @@ class SetupOptions(bytes, Enum):
     PROJECT_CREATION = (14, "Create a New GCP Production Project")
     PROJECT_EDIT = (15, "Edit Settings for an Existing GCP Production Project")
     PROJECT_DELETE = (16, "Delete a GCP Production Project")
+    PROJECT_MAINTENANCE = (17, "Perform Maintenance Operations on a GCP Production Project")
 
     # Shared Labs
     SHARED_LAB_MANAGEMENT = (20, "Managed Shared Labs")
@@ -58,6 +60,22 @@ class SetupOptions(bytes, Enum):
 
     # Exit
     EXIT = (40, "Exit")
+
+
+class ProjectMaintenanceOptions(bytes, Enum):
+    """
+    Enum for project maintenance submenu options.
+    """
+    def __new__(cls, value, description):
+        obj = bytes.__new__(cls, [value])
+        obj._value_ = value
+        obj.description = description
+        return obj
+
+    REIMAGE_GUACAMOLE = (1, "Reimage Guacamole Server (Refresh TLS Certificate)")
+    EXTEND_PROJECT_EXPIRATION = (2, "Extend Project Expiration Date")
+    BACK = (99, "Back")
+
 
 # Organize categories and their sub-options
 category_menu = {
@@ -78,9 +96,14 @@ category_menu = {
             (SetupOptions.DEFAULT_SERVER_IMAGES, SetupOptions.DEFAULT_SERVER_IMAGES.description),
             (SetupOptions.IMPORT_CUSTOM_IMAGES, SetupOptions.IMPORT_CUSTOM_IMAGES.description),
             (SetupOptions.IMPORT_LOCAL_IMAGE, SetupOptions.IMPORT_LOCAL_IMAGE.description),
-            (SetupOptions.STARTUP_SCRIPTS_AND_INSTRUCTIONS,
-             SetupOptions.STARTUP_SCRIPTS_AND_INSTRUCTIONS.description),
-            (SetupOptions.REFRESH_GUACAMOLE_IMAGE_AND_CERT, SetupOptions.REFRESH_GUACAMOLE_IMAGE_AND_CERT.description),
+            (
+                SetupOptions.STARTUP_SCRIPTS_AND_INSTRUCTIONS,
+                SetupOptions.STARTUP_SCRIPTS_AND_INSTRUCTIONS.description,
+            ),
+            (
+                SetupOptions.REFRESH_GUACAMOLE_IMAGE_AND_CERT,
+                SetupOptions.REFRESH_GUACAMOLE_IMAGE_AND_CERT.description,
+            ),
             (SetupOptions.BACK, SetupOptions.BACK.description),
         ],
     },
@@ -93,11 +116,12 @@ category_menu = {
         ],
     },
     SetupCategories.PROJECTS: {
-        "label": "GCP Project Creation/Management",
+        "label": "GCP Project Management",
         "options": [
             (SetupOptions.PROJECT_CREATION, SetupOptions.PROJECT_CREATION.description),
             (SetupOptions.PROJECT_EDIT, SetupOptions.PROJECT_EDIT.description),
             (SetupOptions.PROJECT_DELETE, SetupOptions.PROJECT_DELETE.description),
+            (SetupOptions.PROJECT_MAINTENANCE, SetupOptions.PROJECT_MAINTENANCE.description),
             (SetupOptions.BACK, SetupOptions.BACK.description),
         ],
     },
@@ -130,7 +154,7 @@ def display_main_menu():
     print(Fore.YELLOW + "=== Select a Category ===" + Style.RESET_ALL)
     for category in SetupCategories:
         category_label = category_menu[category]["label"]
-        if category_label == 'Back':
+        if category_label == "Back":
             continue
         print(Fore.GREEN + f"{category.value}. {category_label}")
     print(Style.RESET_ALL, end="")
@@ -138,13 +162,20 @@ def display_main_menu():
 
 def display_sub_menu(selected_category: SetupCategories):
     """
-    Displays the sub-menu options for a given category, such as 'Full or Partial Updates'.
+    Displays the sub-menu options for a given category.
     """
     sub_options = category_menu[selected_category]["options"]
     print(Fore.BLUE + f"\n-- {category_menu[selected_category]['label']} --" + Style.RESET_ALL)
-    for idx, (enum_option, description) in enumerate(sub_options, start=1):
+    for idx, (_, description) in enumerate(sub_options, start=1):
         print(f"{idx}. {description}")
     print("")
+
+
+def get_setup_selection(selected_category: SetupCategories, choice: int) -> SetupOptions:
+    """
+    Returns the SetupOptions enum corresponding to the selected submenu choice.
+    """
+    return category_menu[selected_category]["options"][choice - 1][0]
 
 
 def get_user_selection(max_choice: int) -> int:
@@ -157,8 +188,56 @@ def get_user_selection(max_choice: int) -> int:
             choice = int(input("Enter your choice: ").strip())
             if 1 <= choice <= max_choice:
                 return choice
-            else:
-                print(Fore.RED + f"Invalid choice. Please enter a number between 1 and {max_choice}."
-                      + Style.RESET_ALL)
+            print(
+                Fore.RED
+                + f"Invalid choice. Please enter a number between 1 and {max_choice}."
+                + Style.RESET_ALL
+            )
         except ValueError:
             print(Fore.RED + "Invalid input. Please enter a valid number." + Style.RESET_ALL)
+
+
+# ------------------------------
+# Single-source registry section
+# ------------------------------
+
+from cloud_deployment.operations.project_maintenance.rebuild_guacamole_for_unit import RebuildGuacamoleForUnit
+from cloud_deployment.operations.project_maintenance.extend_project_expiration import ExtendWorkoutExpirations
+
+
+PROJECT_MAINTENANCE_REGISTRY = [
+    {
+        "option": ProjectMaintenanceOptions.REIMAGE_GUACAMOLE,
+        "description": ProjectMaintenanceOptions.REIMAGE_GUACAMOLE.description,
+        "operation_class": RebuildGuacamoleForUnit,
+    },
+    {
+        "option": ProjectMaintenanceOptions.EXTEND_PROJECT_EXPIRATION,
+        "description": ProjectMaintenanceOptions.EXTEND_PROJECT_EXPIRATION.description,
+        "operation_class": ExtendWorkoutExpirations,
+    },
+    {
+        "option": ProjectMaintenanceOptions.BACK,
+        "description": ProjectMaintenanceOptions.BACK.description,
+        "operation_class": None,
+    },
+]
+
+
+def display_project_maintenance_menu():
+    print(Fore.BLUE + "\n-- Project Maintenance --" + Style.RESET_ALL)
+    for idx, item in enumerate(PROJECT_MAINTENANCE_REGISTRY, start=1):
+        print(f"{idx}. {item['description']}")
+    print("")
+
+
+def get_project_maintenance_selection(choice: int) -> ProjectMaintenanceOptions:
+    return PROJECT_MAINTENANCE_REGISTRY[choice - 1]["option"]
+
+
+def get_project_maintenance_operation(choice: int):
+    return PROJECT_MAINTENANCE_REGISTRY[choice - 1]["operation_class"]
+
+
+def get_project_maintenance_menu_length() -> int:
+    return len(PROJECT_MAINTENANCE_REGISTRY)

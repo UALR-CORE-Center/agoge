@@ -7,7 +7,7 @@ from common.constants.database import DatabaseTypes, DATABASE_NAME, DbCollection
 from common.constants.build_constants import BuildConstants
 from common.document_database import DocumentDatabaseFactory
 
-from cloud_deployment.utilities.menu_options import SetupOptions
+from cloud_deployment.utilities.menu_options import SetupOptions, ProjectMaintenanceOptions
 from cloud_deployment.operations.app_install_updates.base_build import BaseBuild
 from cloud_deployment.operations.env_and_quotas.environment_variables import EnvironmentVariables
 from cloud_deployment.operations.app_install_updates.agoge_app import AgogeApp
@@ -18,9 +18,20 @@ from cloud_deployment.operations.images_and_specs.local_to_cloud import LocalToC
 from cloud_deployment.operations.env_and_quotas.increase_quotas import QuotaManager
 from cloud_deployment.operations.project_manager import ProjectManager
 from cloud_deployment.operations.images_and_specs.custom_image_import_manager import CustomImageImportManager
-from cloud_deployment.operations.guacamole_image_management.guacamole_image_manager import GuacamoleImageManager
 from cloud_deployment.operations.app_install_updates.install_update_manager import InstallUpdateManager
+from cloud_deployment.utilities.menu_options import (
+    SetupOptions,
+    ProjectMaintenanceOptions,
+    display_project_maintenance_menu,
+    get_project_maintenance_selection,
+    get_project_maintenance_operation,
+    get_project_maintenance_menu_length,
+    get_user_selection,
+)
+from cloud_deployment.utilities.menu_options import get_user_selection
 
+from .operations.project_maintenance.rebuild_guacamole_for_unit import RebuildGuacamoleForUnit
+from .operations.project_maintenance.extend_project_expiration import ExtendWorkoutExpirations
 
 class SetupManager:
     """
@@ -57,7 +68,7 @@ class SetupManager:
             SetupOptions.INCREASE_QUOTAS: lambda: QuotaManager(project=self.project).request_all(),
             SetupOptions.PROJECT_CREATION: lambda: ProjectManager().create(),
             SetupOptions.PROJECT_DELETE: lambda: ProjectManager().delete(),
-            SetupOptions.REFRESH_GUACAMOLE_IMAGE_AND_CERT: lambda: GuacamoleImageManager(project=self.project).create_guac_project_image()
+            SetupOptions.PROJECT_MAINTENANCE: lambda: self._run_project_maintenance_menu(),
         }
 
         try:
@@ -70,3 +81,19 @@ class SetupManager:
             print(f"A KeyError occurred, possibly due to a missing environment variable: {e}")
             print(f"Attempting to synchronize environment variables for project '{self.project}' before retrying.")
             EnvironmentVariables(project=self.project).run()
+
+    def _run_project_maintenance_menu(self) -> None:
+        while True:
+            display_project_maintenance_menu()
+            choice = get_user_selection(get_project_maintenance_menu_length())
+            selection = get_project_maintenance_selection(choice)
+
+            if selection == ProjectMaintenanceOptions.BACK:
+                break
+
+            operation_class = get_project_maintenance_operation(choice)
+            if operation_class:
+                operation_class().run()
+            else:
+                print(f"Unsupported maintenance selection: {selection}")
+
