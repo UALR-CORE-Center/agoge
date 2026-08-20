@@ -25,7 +25,7 @@ cybersecurity training infrastructure, including:
 2. Clone the repository
 
 ```bash
-git clone https://github.com/bastazo/agoge.git
+git clone https://github.com/UALR-CORE-Center/agoge.git
 cd agoge
 python setup.py
 ```
@@ -50,7 +50,7 @@ Agoge runs entirely in Google Cloud and uses several managed services:
 The platform supports multi-tenant deployments where multiple training environments share a central resource project.
 
 ## Project Status
-Agoge is actively developed and maintained by Bastazo, Inc. in partnership with the University of Arkansas at Little Rock.
+Agoge is actively developed and maintained by the UALR CORE Center.
 
 The platform is currently used for cybersecurity education and research environments. Contributions and feedback from 
 the academic and security communities are welcome.

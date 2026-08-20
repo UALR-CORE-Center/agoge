@@ -30,6 +30,10 @@ from cloud_deployment.utilities.menu_options import (
 )
 from cloud_deployment.utilities.menu_options import get_user_selection
 
+from cloud_deployment.operations.guacamole_image_management.guacamole_image_manager import (
+    GuacamoleImageManager,
+)
+
 from .operations.project_maintenance.rebuild_guacamole_for_unit import RebuildGuacamoleForUnit
 from .operations.project_maintenance.extend_project_expiration import ExtendWorkoutExpirations
 
@@ -69,6 +73,11 @@ class SetupManager:
             SetupOptions.PROJECT_CREATION: lambda: ProjectManager().create(),
             SetupOptions.PROJECT_DELETE: lambda: ProjectManager().delete(),
             SetupOptions.PROJECT_MAINTENANCE: lambda: self._run_project_maintenance_menu(),
+            SetupOptions.REFRESH_GUACAMOLE_IMAGE_AND_CERT: (
+                lambda: GuacamoleImageManager(
+                    project=self.project
+                ).create_guac_project_image()
+            ),
         }
 
         try:

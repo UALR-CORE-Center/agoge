@@ -6,7 +6,7 @@ If you discover a security vulnerability in this project, please report it respo
 Do not open a public GitHub issue for security vulnerabilities.
 
 Instead, please report the issue privately to:
-**[security@bastazo.com](mailto:security@bastazo.com)**
+**[security@ar-core.org](mailto:security@ar-core.org)**
 
 Include the following information if possible:
 * Description of the vulnerability
