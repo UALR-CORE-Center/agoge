@@ -1,15 +1,6 @@
 from .google_classroom_object import GoogleClassroomObject
 from .user_object import UserObject
 
-__author__ = "Andrew Bomberger"
-__copyright__ = "Copyright 2024, Bastazo, Inc."
-__credits__ = ["Andrew Bomberger"]
-__license__ = "MIT"
-__version__ = "0.0.1"
-__maintainer__ = "Andrew Bomberger"
-__email__ = "andrew@bastazo.com"
-__status__ = "Testing"
-
 
 class Students(GoogleClassroomObject):
     def __init__(self, client):

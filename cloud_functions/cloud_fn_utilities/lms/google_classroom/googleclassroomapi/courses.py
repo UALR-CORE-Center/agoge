@@ -4,15 +4,6 @@ from .exceptions import InvalidRequest
 from .teachers import Teacher
 from .students import Students
 
-__author__ = "Andrew Bomberger"
-__copyright__ = "Copyright 2024, Bastazo, Inc."
-__credits__ = ["Andrew Bomberger"]
-__license__ = "MIT"
-__version__ = "0.0.1"
-__maintainer__ = "Andrew Bomberger"
-__email__ = "andrew@bastazo.com"
-__status__ = "Testing"
-
 
 class Courses(GoogleClassroomObject):
     """Manages courses in Google Classroom.

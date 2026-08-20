@@ -20,8 +20,8 @@ const Copyright = () => {
             {'Copyright © '}
             {new Date().getFullYear()}
             {' '}
-            <Link color="inherit" href="https://www.bastazo.com/">
-                Bastazo, Inc.
+            <Link color="inherit" href="https://github.com/UALR-CORE-Center">
+                UALR CORE Center
             </Link>{' '}
         </Typography>
     );
