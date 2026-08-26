@@ -117,7 +117,7 @@ Add each server and select its reusable **Server Image**. Configure its machine 
 - **Enable External NAT** when the exercise requires outbound internet access.
 - **Enable Direct Connections** when learners should connect directly to the server.
 
-RDP, SSH, or VNC connection credentials are part of the reusable server image's **Human Interaction** configuration under **Manage Servers**; they are not selected in this template step.
+Connection credentials and protocols are part of the reusable server image's **Human Interaction** configuration under **Manage Servers**; they are not selected in this template step. The standard connection dialog presents RDP and SSH details, so verify any deployment-specific protocol extension before assigning it to learners.
 
 ### Configure web applications and assessments
 
@@ -163,7 +163,7 @@ Reusable server images provide the operating system, applications, data, and con
 1. Open **Teachers → Manage Servers**.
 2. For a checked-in image, choose **Check Out Template Server**. Wait for the modifiable server to be prepared.
 3. Click **Start Template Server** and wait for the state to become **Running**.
-4. Click **Connect** and use the configured RDP, SSH, or VNC method.
+4. Click **Connect** and use the configured connection method.
 5. Make and verify the required changes inside the server.
 6. Stop the server when it is idle.
 7. Choose **Check In Template Server** to create or update the reusable image. Check-in may take several minutes.
