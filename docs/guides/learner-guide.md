@@ -127,7 +127,7 @@ There is no single final-submit button for the whole assessment. Enter exact val
 | Problem | What to try |
 | --- | --- |
 | **Join code not found** | Re-enter the code without spaces and confirm it with your instructor |
-| Lab capacity has been reached | Contact your instructor; only the instructor can increase availability or provide another Lab |
+| Lab capacity has been reached | Contact your instructor for another Lab or other course-specific direction |
 | **Finding your lab ...** remains on screen | Allow 5–10 minutes, then refresh once; if it still does not advance, contact your instructor |
 | **Connect** is disabled | Wait for the Workout to reach **Running** |
 | Direct connection is denied or times out | Wait for **Access Configuration**, refresh after any network or VPN change, then try Guacamole |
