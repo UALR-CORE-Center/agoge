@@ -38,6 +38,12 @@ python setup.py
 - Works within restricted institutional networks
 - Multi-tenant architecture for shared lab infrastructure
 
+## Documentation
+
+- [Instructor Guide](docs/guides/instructor-guide.md)
+- [Learner Guide](docs/guides/learner-guide.md)
+- [Documentation Index](docs/README.md)
+
 ## Architecture Overview
 Agoge runs entirely in Google Cloud and uses several managed services:
 - **Cloud Run** – hosts the Agoge API and web application
