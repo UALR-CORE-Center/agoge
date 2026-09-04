@@ -22,6 +22,92 @@ class BaseBuild:
         self.suppress = suppress  # When True, auto‑accept every prompt (CI runs)
         self.service = discovery.build("iam", "v1")
 
+    @staticmethod
+    def _command_error(command: str, result: subprocess.CompletedProcess) -> RuntimeError:
+        stderr = result.stderr.decode() if isinstance(result.stderr, bytes) else result.stderr
+        return RuntimeError(
+            f"Command failed ({result.returncode}): {command}\n{(stderr or '').strip()}"
+        )
+
+    def _enable_apis(self, api_commands=None) -> None:
+        """Enable APIs in the requested tenant project and fail closed."""
+        for item in api_commands or ShellCommands.EnableAPIs:
+            command = f"{item.value} --project={self.project}"
+            print(f"Running: {command}")
+            result = subprocess.run(command, capture_output=True, shell=True, text=True)
+            if result.returncode != 0:
+                raise self._command_error(command, result)
+
+    def ensure_wireguard_prerequisites(self) -> None:
+        """Idempotently migrate and validate prerequisites used by gateways."""
+        self._enable_apis((
+            ShellCommands.EnableAPIs.COMPUTE,
+            ShellCommands.EnableAPIs.DNS,
+        ))
+        settings = EnvironmentVariables(project=self.project)
+        settings.ensure_wireguard_defaults()
+        required = {
+            'parent_project': settings.env.get('parent_project'),
+            'parent_dnszone': settings.env.get('parent_dnszone'),
+            'wireguard_dns_suffix': settings.env.get('wireguard_dns_suffix'),
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            raise ValueError(
+                f"Missing WireGuard DNS prerequisite(s): {', '.join(missing)}"
+            )
+        env = CloudEnv(project=self.project)
+
+        dns_service = discovery.build('dns', 'v1', cache_discovery=False)
+        zone = dns_service.managedZones().get(
+            project=env.parent_project,
+            managedZone=env.parent_zone,
+        ).execute()
+        if str(zone.get('visibility') or 'public').lower() != 'public':
+            raise ValueError(
+                f"Managed zone '{env.parent_zone}' must be public for remote WireGuard peers"
+            )
+        zone_suffix = str(zone.get('dnsName') or '').strip().lower().rstrip('.')
+        wireguard_suffix = str(env.wireguard_dns_suffix).strip().lower().strip('.')
+        if not zone_suffix or not (
+            wireguard_suffix == zone_suffix
+            or wireguard_suffix.endswith(f'.{zone_suffix}')
+        ):
+            raise ValueError(
+                f"wireguard_dns_suffix '{env.wireguard_dns_suffix}' is not in managed "
+                f"zone '{zone.get('dnsName')}'"
+            )
+
+        managed_zones = dns_service.managedZones()
+        zone_resource = (
+            f"projects/{env.parent_project}/managedZones/{env.parent_zone}"
+        )
+        policy = managed_zones.getIamPolicy(
+            resource=zone_resource,
+            body={'options': {'requestedPolicyVersion': 3}},
+        ).execute()
+        member = f"serviceAccount:agoge-service@{env.project}.iam.gserviceaccount.com"
+        bindings = policy.setdefault('bindings', [])
+        dns_admin = next(
+            (
+                binding
+                for binding in bindings
+                if binding.get('role') == 'roles/dns.admin'
+                and not binding.get('condition')
+            ),
+            None,
+        )
+        if dns_admin is None:
+            dns_admin = {'role': 'roles/dns.admin', 'members': []}
+            bindings.append(dns_admin)
+        members = dns_admin.setdefault('members', [])
+        if member not in members:
+            members.append(member)
+            managed_zones.setIamPolicy(
+                resource=zone_resource,
+                body={'policy': policy},
+            ).execute()
+
     # ---------------------------------------------------------------------
     # Helpers
     # ---------------------------------------------------------------------
@@ -44,9 +130,7 @@ class BaseBuild:
             else "Y"
         )
         if confirmation != "N":
-            for item in ShellCommands.EnableAPIs:
-                print(f"Running: {item.value}")
-                subprocess.run(item.value, capture_output=True, shell=True, text=True)
+            self._enable_apis()
 
         # 2. Create the default VPC & firewall rules --------------------------------------
         confirmation = (
@@ -152,18 +236,18 @@ class BaseBuild:
         if confirmation != "N":
             EnvironmentVariables(project=self.project).run()
 
-        # 8. Shared‑resource IAM tweaks ----------------------------------------------------
+        # 8. Shared-resource and parent-DNS IAM permissions -------------------------------
         confirmation = (
             str(
                 input(
-                    "Do you want to update permissions for shared resources at this time? (Y/n): "
+                    "Do you want to update shared-resource and parent-DNS permissions at this time? (Y/n): "
                 )
             ).upper()
             if not self.suppress
             else "Y"
         )
         if confirmation != "N":
-            env = CloudEnv()
+            env = CloudEnv(project=self.project)
             for item in ShellCommands.SharedResourcePermissions:
                 cmd = item.value.format(
                     shared_resource_project=BuildConstants.SharedResourceProjects.MAIN_SHARED_RESOURCE_PROJECT,
@@ -174,3 +258,5 @@ class BaseBuild:
                 print(ret.stderr.decode())
                 if ret.returncode != 0:
                     print(f"Error adding project permission to shared resources!")
+
+            self.ensure_wireguard_prerequisites()

@@ -1,6 +1,9 @@
+import time
+from datetime import datetime, timezone
+
 from common.constants.database import DbCollections
 from common.constants.pub_sub import PubSub
-from common.constants.states import WorkoutStates
+from common.constants.states import ServerStates, WorkoutStates
 from common.utilities.timestamps import Timestamps
 from common.models.agoge import WorkoutModel, UnitModel, ServerModel
 
@@ -30,6 +33,8 @@ class CommunityWorkout(BaseWorkout):
         debug (bool, optional): Enables debug mode if True. Defaults to False.
         env_dict (dict, optional): Environment variables for compute instances. Defaults to None.
     """
+    SHARED_START_CLAIM_SECONDS = 300
+
     def __init__(
         self,
         workout_id,
@@ -56,22 +61,30 @@ class CommunityWorkout(BaseWorkout):
     def build(self):
         # Build the servers for each student workout that are not designated for the entire unit
         self.logger.info(f"{self.class_name}:{self.workout_id} - Beginning to build servers for workout ID")
+        current_state = self.state_manager.get_state()
+        if current_state >= self.s.RUNNING.value:
+            return
+
         server_build_count = 0
-        if self.state_manager.get_state() < self.s.BUILDING_SERVERS.value:
-            self.state_manager.state_transition(self.s.BUILDING_SERVERS)
+        if current_state < self.s.COMPLETED_SERVERS.value:
+            if current_state != self.s.BUILDING_SERVERS.value:
+                self.state_manager.state_transition(self.s.BUILDING_SERVERS)
             servers = self.unit_model.servers or []
             for server in servers:
                 if not server.community_server:
                     server_build_count += 1
                     self.__send_server_build_msg(server)
-        if not self.state_manager.are_server_builds_finished():
-            self.state_manager.state_transition(self.s.BROKEN)
-            self.logger.error(f"{self.class_name}:{self.workout_id} - Workout timed out waiting for server "
-                              f"builds to complete!")
-        else:
-            self.state_manager.state_transition(self.s.READY)
-            self.logger.info(f"{self.class_name}:{self.workout_id} - Finished building {server_build_count} for "
-                             f"workout ID")
+            if not self.state_manager.are_server_builds_finished():
+                # Preserve BUILDING_SERVERS so a Pub/Sub redelivery can resume
+                # provisioning instead of stranding the Workout in BROKEN.
+                raise TimeoutError(
+                    f"Timed out waiting for servers for Workout {self.workout_id}"
+                )
+            self.state_manager.state_transition(self.s.COMPLETED_SERVERS)
+
+        self.state_manager.state_transition(self.s.READY)
+        self.logger.info(f"{self.class_name}:{self.workout_id} - Finished building {server_build_count} for "
+                         f"workout ID")
 
     def start(self):
         """
@@ -88,6 +101,7 @@ class CommunityWorkout(BaseWorkout):
         self._add_build_action(PubSub.Actions.START.value, True)
         self.state_manager.state_transition(self.s.STARTING)
         servers_to_start, first_in = self.__get_servers_for_action(action=PubSub.Actions.START)
+        servers_to_start = self.__claim_shared_servers_for_start(servers_to_start)
 
         if first_in:
             self.packet_mirroring.start()
@@ -128,11 +142,14 @@ class CommunityWorkout(BaseWorkout):
         """
         self.logger.info(f"Beginning to stop servers for workout ID {self.workout_id}")
         self._add_build_action(PubSub.Actions.STOP.value, True)
+        # Persist STOPPING before counting siblings. If two Workouts stop at
+        # nearly the same time, at least the later observer sees the other as
+        # non-running and includes the shared gateway in its stop set.
+        self.state_manager.state_transition(self.s.STOPPING)
         servers_to_stop, last_one_out = self.__get_servers_for_action(action=PubSub.Actions.STOP)
 
         self.logger.info(f"Workout {self.workout_id}: Stopping {len(servers_to_stop)} servers.")
         if servers_to_stop:
-            self.state_manager.state_transition(self.s.STOPPING)
             if last_one_out:
                 self.packet_mirroring.stop()
 
@@ -158,15 +175,102 @@ class CommunityWorkout(BaseWorkout):
                 self.update_record(doc_id=self.workout_id, data=self.workout)
                 self.logger.info(f"Finished stopping {len(servers_to_stop)} servers for workout ID {self.workout_id}")
         else:
+            self.state_manager.state_transition(self.s.READY)
             self.logger.info(f'No compute resources found for workout: {self.workout_id}. Ignoring stop request...')
 
     def delete(self):
-        """Community workout deletion takes place at the Unit level"""
-        pass
+        """Delete only the student-owned servers and release their Unit IP reservations."""
+        if self.state_manager.get_state() == self.s.DELETED.value:
+            return
+        self._add_build_action(PubSub.Actions.DELETE.value, True)
+        self.state_manager.state_transition(self.s.DELETING_SERVERS)
+        servers_to_delete = self.db_queries.get_servers(parent_id=self.workout_id)
+
+        for server in servers_to_delete:
+            server_name = f'{server["parent_id"]}-{server["name"]}'
+            if self.debug:
+                try:
+                    self.compute_manager.load(server_name=server_name)
+                    self.compute_manager.delete()
+                except LookupError:
+                    self.logger.warning(
+                        f"{self.class_name}:{self.workout_id} - Could not find server record "
+                        f"for {server_name}; treating it as already deleted."
+                    )
+            else:
+                self.pubsub_manager.msg(
+                    handler=str(PubSub.Handlers.CONTROL.value),
+                    action=str(PubSub.Actions.DELETE.value),
+                    build_id=server_name,
+                    course_object=str(PubSub.CourseObjects.LAB_SERVER.value)
+                )
+
+        server_names = [
+            f'{server["parent_id"]}-{server["name"]}'
+            for server in servers_to_delete
+        ]
+        if self.__are_servers_deleted(server_names):
+            for server, server_name in zip(servers_to_delete, server_names):
+                self.unit_dhcp.release_server_leases(
+                    server_name,
+                    claim_id=server.get(UnitDHCP.LEASE_CLAIM_FIELD),
+                )
+            self.state_manager.state_transition(self.s.DELETED)
+            self.logger.info(f"{self.class_name}:{self.workout_id} - Finished deleting the Workout!")
+        else:
+            self.state_manager.state_transition(self.s.BROKEN)
+            self.logger.error(
+                f"{self.class_name}:{self.workout_id} - Timed out waiting for server deletions to complete!"
+            )
 
     def nuke(self):
-        """Community workout nuking takes place at the Unit level"""
-        pass
+        """Rebuild only the servers owned by this student workout."""
+        self._add_build_action(PubSub.Actions.NUKE.value, True)
+        servers_to_nuke = self.db_queries.get_servers(parent_id=self.workout_id)
+        for server in servers_to_nuke:
+            server_name = f'{server["parent_id"]}-{server["name"]}'
+            if self.debug:
+                try:
+                    self.compute_manager.load(server_name=server_name)
+                    self.compute_manager.nuke()
+                except LookupError:
+                    self.logger.warning(
+                        f"{self.class_name}:{self.workout_id} - Could not find server record "
+                        f"for {server_name}; skipping it."
+                    )
+            else:
+                self.pubsub_manager.msg(
+                    handler=str(PubSub.Handlers.CONTROL.value),
+                    action=str(PubSub.Actions.NUKE.value),
+                    build_id=server_name,
+                    course_object=str(PubSub.CourseObjects.LAB_SERVER.value)
+                )
+
+        if not self.state_manager.are_server_builds_finished():
+            self.state_manager.state_transition(self.s.BROKEN)
+            self.logger.error(
+                f"{self.class_name}:{self.workout_id} - Timed out waiting for server builds to complete!"
+            )
+        else:
+            self.state_manager.state_transition(self.s.READY)
+            self.logger.info(f"{self.class_name}:{self.workout_id} - Finished nuking Workout!")
+
+    def __are_servers_deleted(self, server_names):
+        """Do not recycle an address while a broken or deleting VM might still use it."""
+        wait_time = 0
+        deleted_state = self.state_manager.server_states.DELETED.value
+        while wait_time < self.state_manager.MAX_WAIT_TIME:
+            if all(
+                not (server := self.db.get(
+                    collection_name=DbCollections.SERVER,
+                    doc_id=server_name
+                )) or server.get('state') == deleted_state
+                for server_name in server_names
+            ):
+                return True
+            time.sleep(self.state_manager.SLEEP_TIME)
+            wait_time += self.state_manager.SLEEP_TIME
+        return False
 
     def __send_server_build_msg(self, server: ServerModel):
         """
@@ -187,23 +291,42 @@ class CommunityWorkout(BaseWorkout):
             - Stores the updated server configuration in the datastore.
             - In debug mode, directly builds the server. Otherwise, sends a message to PubSub for server build.
         """
+        # Work from a copy of the Unit template so one student's DHCP address,
+        # hostname, or parent metadata cannot leak into another workout.
+        server = server.model_copy(deep=True)
         server_name = f"{self.workout_id}-{server.name}"
         server.parent_id = self.workout_id
         server.parent_build_type = self.workout.build_type
-        for nic in server.nics:
-            internal_ip = self.unit_dhcp.get_network_address(nic.network)
-            self.logger.info(f"Unit {self.unit_id} DHCP server returning available IP address {internal_ip} for "
-                             f"Workout {self.workout_id}")
-            nic.internal_ip = internal_ip
+        existing_server = self.db.get(
+            collection_name=DbCollections.SERVER,
+            doc_id=server_name,
+        )
+        if existing_server.get('state') == ServerStates.RUNNING.value:
+            return
 
+        for nic in server.nics or []:
             # If direct connect is true, create the hostname that will be used to access this machine
-            if nic.direct_connect and not server.hostname:
-                server.hostname = f'{server_name}{self.env.parent_dns_suffix}'
-                server.tags.append(f"{self.workout_id}-direct-connect")
-                # Get the updated workout first before saving it back. Otherwise, this will overwrite the workout state.
-                self.workout = self.get_record()
-                self.workout = self.update_record(doc_id=self.workout_id, data=self.workout)
-        self.db.update(collection_name=DbCollections.SERVER, doc_id=server_name, data=server)
+            if nic.direct_connect:
+                if not server.hostname:
+                    server.hostname = f'{server_name}{self.env.parent_dns_suffix}'
+                server.tags = list(server.tags or [])
+                direct_connect_tag = f"{self.workout_id}-direct-connect"
+                if direct_connect_tag not in server.tags:
+                    server.tags.append(direct_connect_tag)
+
+        # The reservation and server-record writes share one transaction. This
+        # closes the duplicate-delivery window where two workers could allocate
+        # distinct addresses and overwrite the same server document.
+        server_data = self.unit_dhcp.claim_server_leases(
+            server_name=server_name,
+            server_data=server.model_dump(exclude_none=True),
+        )
+        for nic in server_data.get('nics') or []:
+            self.logger.info(
+                f"Unit {self.unit_id} DHCP server returning claimed IP address "
+                f"{nic.get('internal_ip')} for Workout {self.workout_id}"
+            )
+
         if self.debug:
             self.compute_manager.load(
                 server_name=server_name,
@@ -229,17 +352,20 @@ class CommunityWorkout(BaseWorkout):
         Returns:
             List[str]: A list of server names to be acted upon.
         """
-        # Determine if this is the last workout to stop in case of a community build.
-        last_one_out = True
-        if action == PubSub.Actions.STOP:
-            workouts = self.db_queries.get_children(
-                child_collection=DbCollections.WORKOUT,
-                parent_id=self.workout.parent_id
-            )
-            for workout in workouts:
-                if workout['id'] != self.workout_id and workout['state'] == WorkoutStates.RUNNING:
-                    last_one_out = False
-                    break
+        if action not in (PubSub.Actions.START, PubSub.Actions.STOP):
+            raise ValueError(f'Unsupported Community Workout server action: {action}')
+
+        # Shared resources start with the first running Workout and stop with
+        # the last one. Firestore stores the state as the Enum's integer value.
+        workouts = self.db_queries.get_children(
+            child_collection=DbCollections.WORKOUT,
+            parent_id=self.workout.parent_id
+        )
+        boundary_workout = not any(
+            workout.get('id') != self.workout_id
+            and workout.get('state') == WorkoutStates.RUNNING.value
+            for workout in workouts
+        )
 
         servers = []
         unit_servers = self.unit_model.servers or []
@@ -249,10 +375,92 @@ class CommunityWorkout(BaseWorkout):
             if is_community_server:
                 server_name = f"{self.unit_id}-{server.name}"
 
-            # Add server if it's non-community or if it's a community server and starting or the last workout stopping.
-            if not is_community_server or (is_community_server and (
-                    action == PubSub.Actions.START or (
-                    action == PubSub.Actions.STOP and last_one_out))):
+            # Student servers always follow their Workout. Shared servers are
+            # touched only on the first start or the last stop.
+            if not is_community_server or (is_community_server and boundary_workout):
                 servers.append(server_name)
 
-        return servers, last_one_out
+        return servers, boundary_workout
+
+    def __claim_shared_servers_for_start(self, server_names: list[str]) -> list[str]:
+        """Atomically select one publisher for each shared-server START action.
+
+        Two Workouts can both become STARTING before either becomes RUNNING, so
+        the sibling query alone cannot safely identify the first one. The
+        server document is the shared point of coordination: only the Workout
+        that owns its unexpired claim publishes the shared START message.
+        Student-owned servers are never filtered here.
+        """
+        shared_server_names = {
+            f'{self.unit_id}-{server.name}'
+            for server in (self.unit_model.servers or [])
+            if server.community_server
+        }
+        return [
+            server_name
+            for server_name in server_names
+            if (
+                server_name not in shared_server_names
+                or self.__claim_shared_server_start(server_name)
+            )
+        ]
+
+    def __claim_shared_server_start(self, server_name: str) -> bool:
+        now = Timestamps.get_current_timestamp_utc()
+        return self.db.transaction(
+            operation_func=self.__claim_shared_server_start_transaction,
+            server_name=server_name,
+            now=now,
+        )
+
+    def __claim_shared_server_start_transaction(
+        self,
+        transaction,
+        server_name: str,
+        now: float,
+    ) -> bool:
+        doc_ref = self.db.db.collection(DbCollections.SERVER.value).document(server_name)
+        snapshot = doc_ref.get(transaction=transaction)
+        if not snapshot.exists:
+            raise LookupError(f'Shared server {server_name} does not exist.')
+
+        server = snapshot.to_dict()
+        state = server.get('state')
+        if state == ServerStates.RUNNING.value:
+            return False
+        if state in (
+            ServerStates.STOPPING.value,
+            ServerStates.EXPIRED.value,
+            ServerStates.MISFIT.value,
+            ServerStates.DELETING.value,
+            ServerStates.DELETED.value,
+        ):
+            raise RuntimeError(
+                f'Shared server {server_name} cannot be claimed from '
+                f'{ServerStates(state).name}.'
+            )
+
+        claim = server.get('community_start_claim') or {}
+        if state == ServerStates.STARTING.value:
+            claim_owner = claim.get('owner')
+            claim_expires = float(claim.get('expires') or 0)
+            # A STARTING server without this claim predates the coordinator or
+            # was started by another lifecycle path. Let that operation finish.
+            if not claim_owner:
+                return False
+            if claim_owner != self.workout_id and claim_expires > now:
+                return False
+
+        transaction.set(
+            doc_ref,
+            {
+                'state': ServerStates.STARTING.value,
+                'state_timestamp': datetime.now(timezone.utc).isoformat(),
+                'community_start_claim': {
+                    'owner': self.workout_id,
+                    'expires': now + self.SHARED_START_CLAIM_SECONDS,
+                },
+            },
+            merge=True,
+        )
+        return True

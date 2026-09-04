@@ -16,6 +16,7 @@ export const transformToSpecificationEdit = (data: any) : SpecificationEdit => {
         instructor_id: data?.instructor_id,
         lms_quiz: data?.lms_quiz,
         networks: data?.networks,
+        routes: data?.routes,
         promiscuous_mode: data?.promiscuous_mode,
         servers: data?.servers,
         status: data.status,

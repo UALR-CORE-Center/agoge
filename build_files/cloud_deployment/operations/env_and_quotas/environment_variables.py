@@ -9,6 +9,7 @@ from google.api_core.exceptions import NotFound
 
 from common.document_database.factory import DocumentDatabaseFactory
 from common.constants.database import DatabaseTypes, DATABASE_NAME, DbCollections, ADMIN_INFO_DOCUMENT
+from common.models.agoge import CloudEnvModel
 
 from cloud_deployment.utilities.globals import ShellCommands
 
@@ -19,8 +20,13 @@ class EnvironmentVariables:
     DEFAULT_TIMEZONE = "America/Chicago"
     VARIABLES = ['dns_suffix', 'dnszone', 'main_app_url', 'admin_email', 'project_number', 'max_workspaces',
                  'default_server_image_project', 'firebase_auth_domain', 'app_sub_domain', 'parent_project',
-                 'parent_dnszone', 'parent_dns_suffix']
+                 'parent_dnszone', 'parent_dns_suffix', 'wireguard_dns_prefix',
+                 'wireguard_dns_suffix', 'wireguard_port']
     SECRET_VARIABLES = ['api_key', 'sendgrid_api_key', 'shodan_api_key', 'openai_api_key', 'jwt_private_key','jwt_public_key']
+    WIREGUARD_DEFAULTS = {
+        'wireguard_dns_prefix': 'wg',
+        'wireguard_port': 51820,
+    }
 
     def __init__(self, project):
         self.project = project
@@ -60,6 +66,48 @@ class EnvironmentVariables:
             for var in self.VARIABLES + self.SECRET_VARIABLES:
                 self.set_variable(var)
 
+    def ensure_wireguard_defaults(self) -> dict:
+        """Backfill non-secret WireGuard settings for an existing installation.
+
+        Updates must be non-interactive so the normal application upgrade path
+        can safely migrate projects that predate WireGuard support.
+        """
+        updates = {}
+        if not self.env.get('wireguard_dns_prefix'):
+            updates['wireguard_dns_prefix'] = self.WIREGUARD_DEFAULTS['wireguard_dns_prefix']
+        if not self.env.get('wireguard_port'):
+            updates['wireguard_port'] = self.WIREGUARD_DEFAULTS['wireguard_port']
+        if not self.env.get('wireguard_dns_suffix'):
+            parent_suffix = self.env.get('parent_dns_suffix')
+            if not parent_suffix:
+                raise ValueError(
+                    'parent_dns_suffix must be configured before enabling WireGuard DNS'
+                )
+            updates['wireguard_dns_suffix'] = parent_suffix
+
+        # Validate both migrated defaults and truthy pre-existing values. Keep
+        # the stored representation canonical so update and runtime paths use
+        # exactly the same port, prefix, and suffix.
+        effective = {**self.env, **updates}
+        validated = CloudEnvModel.model_validate(effective)
+        for setting in (
+            'wireguard_dns_prefix',
+            'wireguard_dns_suffix',
+            'wireguard_port',
+        ):
+            canonical = getattr(validated, setting)
+            if effective.get(setting) != canonical:
+                updates[setting] = canonical
+
+        if updates:
+            self.env.update(updates)
+            self.db.update(
+                collection_name=DbCollections.ADMIN_INFO,
+                doc_id=ADMIN_INFO_DOCUMENT,
+                data=updates,
+            )
+        return updates
+
     def set_variable(self, var, new_value=None):
         if var in self.SECRET_VARIABLES:
             current_val = self.get_secret(var)
@@ -91,8 +139,23 @@ class EnvironmentVariables:
                 self.store_secret(var, new_value)
             else:
                 if not new_value:
-                    new_value = str(input(f"What value would you like to set for {var}? "))
-                if var == 'dns_suffix':
+                    default_value = self.WIREGUARD_DEFAULTS.get(var)
+                    if var == 'wireguard_dns_suffix':
+                        default_value = self.env.get('parent_dns_suffix')
+                    default_hint = f" [{default_value}]" if default_value else ""
+                    new_value = str(
+                        input(f"What value would you like to set for {var}?{default_hint} ")
+                    ).strip() or default_value
+                if var == 'wireguard_port':
+                    try:
+                        new_value = int(new_value)
+                    except (TypeError, ValueError) as error:
+                        raise ValueError('wireguard_port must be an integer from 1 through 65535') from error
+                    if not 1 <= new_value <= 65535:
+                        raise ValueError('wireguard_port must be an integer from 1 through 65535')
+                if var in ('dns_suffix', 'wireguard_dns_suffix'):
+                    if not new_value:
+                        raise ValueError(f'{var} cannot be empty')
                     if not new_value.startswith("."):
                         new_value = f'.{new_value}'
                 self.env[var] = new_value

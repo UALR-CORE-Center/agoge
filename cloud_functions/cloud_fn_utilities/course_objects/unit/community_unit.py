@@ -1,15 +1,19 @@
 import time
 
 from common.constants.build_constants import BuildConstants
-from common.constants.database import DbCollections, DbOperationTypes, DbOperators
+from common.constants.database import DbCollections
 from common.constants.pub_sub import PubSub
+from common.constants.states import ServerStates
 from common.models.agoge import UnitModel, ServerModel
+from common.services.wireguard_endpoint import WireGuardEndpointRegistry
+from common.utilities.wireguard_firewall import has_public_wireguard_ingress
 
 from ...gcp.vpc_manager import VpcManager
 from ..compute.factory import ComputeManagerFactory
 from ...gcp.firewall_rule_manager import FirewallManager
 from ...server_specific.firewall_server import FirewallServer
 from ...gcp.packet_mirroring.packet_mirror_factory import PacketMirrorFactory
+from ..workout.factory_workout import WorkoutFactory
 from .base_unit import BaseUnit
 
 
@@ -70,35 +74,54 @@ class CommunityUnit(BaseUnit):
         """
         self.logger.info(f"{self.class_name}:{self.unit_id} - Beginning a community unit build for unit ID")
         current_state = self.state_manager.get_state()
-        if not current_state:
-            self.state_manager.state_transition(self.s.START)
-        elif current_state < self.s.READY.value:
-            # The unit components are either already built or in the process of being built.
+        # Build deliveries are at-least-once. A delayed delivery must not rewind a
+        # Unit that has already entered its runtime or teardown lifecycle.
+        if current_state >= self.s.RUNNING.value:
             return
 
-        if self.state_manager.get_state() < self.s.BUILDING_NETWORKS.value:
-            self.state_manager.state_transition(self.s.BUILDING_NETWORKS)
+        # Re-run an incomplete phase. The GCP managers treat already-created
+        # networks/firewall rules as success, which makes a phase safe to resume
+        # after a process crash between resource creation and its COMPLETED state.
+        if current_state < self.s.COMPLETED_NETWORKS.value:
+            if current_state != self.s.BUILDING_NETWORKS.value:
+                self.state_manager.state_transition(self.s.BUILDING_NETWORKS)
             for network in self.unit_model.networks:
                 self.__set_promiscuous_mode(network=network)
                 self.vpc_manager.build(network=network)
             self.state_manager.state_transition(self.s.COMPLETED_NETWORKS)
 
         # Servers are built asynchronously and kicked off through pubsub messages.
-        if self.state_manager.get_state() < self.s.BUILDING_SERVERS.value:
-            self.state_manager.state_transition(self.s.BUILDING_SERVERS)
-            for server in self.unit_model.servers:
-                if server.get.community_server:
+        current_state = self.state_manager.get_state()
+        if current_state < self.s.COMPLETED_SERVERS.value:
+            if current_state != self.s.BUILDING_SERVERS.value:
+                self.state_manager.state_transition(self.s.BUILDING_SERVERS)
+            for server in self.unit_model.servers or []:
+                if server.community_server:
                     self.__send_server_build_msg(server)
+            if not self.state_manager.are_server_builds_finished():
+                # Leave the Unit in BUILDING_SERVERS. Raising makes the Pub/Sub
+                # delivery retryable and the next delivery reuses server records.
+                raise TimeoutError(
+                    f"Timed out waiting for community servers for Unit {self.unit_id}"
+                )
+            self.state_manager.state_transition(self.s.COMPLETED_SERVERS)
 
-        if self.state_manager.get_state() < self.s.BUILDING_FIREWALL_RULES.value:
-            self.state_manager.state_transition(self.s.BUILDING_FIREWALL_RULES)
-            self.firewall_manager.build(self.unit_id, self.unit_model.firewall_rules)
+        current_state = self.state_manager.get_state()
+        if current_state < self.s.COMPLETED_FIREWALL_RULES.value:
+            if current_state != self.s.BUILDING_FIREWALL_RULES.value:
+                self.state_manager.state_transition(self.s.BUILDING_FIREWALL_RULES)
+            if self.unit_model.firewall_rules:
+                self.firewall_manager.build(self.unit_id, self.unit_model.firewall_rules)
             self.state_manager.state_transition(self.s.COMPLETED_FIREWALL_RULES)
 
+        # A retry may begin after the network phase, so reconstruct this derived
+        # flag from the Unit model before deciding whether to create mirroring.
+        self.__set_promiscuous_mode()
         # If needed, build packet mirror resource using previously created firewall rules
         if self.promiscuous_mode:
             self.packet_mirroring.create()
 
+        self._activate_wireguard_endpoint()
         self.state_manager.state_transition(self.s.READY)
         self.logger.info(f"Finished community unit build for {self.unit_id}!")
 
@@ -181,21 +204,55 @@ class CommunityUnit(BaseUnit):
         """
         Deletes the unit by deleting all servers, including workout servers, and then deleting the network objects
         """
+        if self.state_manager.get_state() == self.s.DELETED.value:
+            return
         self.logger.info(f"{self.class_name}:{self.unit_id} - Beginning to delete community unit")
         self.state_manager.state_transition(self.s.DELETING_SERVERS)
-        servers_to_delete = self.__get_servers()
+
+        # Workouts own student-specific servers and DHCP reservations. Let each
+        # workout clean those up and mark itself deleted before tearing down the
+        # shared network.
+        workouts = self.db_queries.get_children(
+            parent_id=self.unit_id,
+            child_collection=DbCollections.WORKOUT
+        )
+        for workout_record in workouts:
+            workout_id = str(workout_record['id'])
+            if self.debug:
+                workout = WorkoutFactory.create_workout_object(
+                    workout_id=workout_id,
+                    debug=self.debug,
+                    env_dict=self.env_dict
+                )
+                workout.delete()
+            else:
+                self.pubsub_manager.msg(
+                    handler=str(PubSub.Handlers.CONTROL.value),
+                    action=str(PubSub.Actions.DELETE.value),
+                    build_id=workout_id,
+                    course_object=str(PubSub.CourseObjects.WORKOUT.value)
+                )
+
+        all_servers_to_wait_for = self.__get_servers()
+        servers_to_delete = self.__get_community_servers()
 
         # Delete any packet mirror resources
         self.__set_promiscuous_mode()
         if self.promiscuous_mode:
             self.packet_mirroring.delete()
 
-        # Check if we need to delete any firewall servers
+        # Check if we need to delete any firewall servers.
         firewall_names = []
-        if self.unit_model.firewalls is not None:
+        if self.unit_model.firewalls:
             firewalls = self.unit_model.firewalls
-            firewall_names = [f'{self.workout_id}-{fw["name"]}' for fw in firewalls]
-            FirewallServer(initial_build_id=self.unit_id, full_build_model=self.unit_model).delete()
+            firewall_names = [f'{self.unit_id}-{fw.name}' for fw in firewalls]
+            FirewallServer(
+                initial_build_id=self.unit_id,
+                full_build_model=self.unit_model,
+                env_dict=self.env_dict,
+                debug=self.debug
+            ).delete()
+            all_servers_to_wait_for.extend(firewall_names)
 
         # Delete remaining servers
         for server_name in servers_to_delete:
@@ -216,15 +273,32 @@ class CommunityUnit(BaseUnit):
                         course_object=str(PubSub.CourseObjects.LAB_SERVER.value)
                     )
 
-        if self.state_manager.are_servers_deleted():
-            for network in self.unit_model.networks:
-                self.vpc_manager.delete(network=network)
+        workouts_deleted = self.state_manager.are_workouts_deleted()
+        servers_deleted = self.__are_servers_deleted(all_servers_to_wait_for)
+        if workouts_deleted and servers_deleted:
+            # Firewall rules must be removed before their VPC networks.
+            if not self.firewall_manager.delete(self.unit_id):
+                self.state_manager.state_transition(self.s.BROKEN)
+                raise ConnectionError(
+                    f'Firewall deletion was not confirmed for community Unit {self.unit_id}'
+                )
+            try:
+                for network in self.unit_model.networks:
+                    if not self.vpc_manager.delete(network=network):
+                        raise ConnectionError(
+                            f'VPC deletion was not confirmed for community Unit {self.unit_id}'
+                        )
+            except Exception:
+                self.state_manager.state_transition(self.s.BROKEN)
+                raise
             self.state_manager.state_transition(self.s.DELETED)
             self.logger.info(f"{self.class_name}:{self.unit_id} - Finished deleting the community unit")
         else:
             self.state_manager.state_transition(self.s.BROKEN)
-            self.logger.error(f"{self.class_name}:{self.unit_id} - Timed out waiting for server deletions to "
-                              f"complete for community unit")
+            self.logger.error(
+                f"{self.class_name}:{self.unit_id} - Timed out waiting for workout or shared-server "
+                f"deletions to complete for community unit"
+            )
 
     def nuke(self):
         """
@@ -234,29 +308,100 @@ class CommunityUnit(BaseUnit):
                           f"implemented yet for community units!")
         pass
 
-    def __send_server_build_msg(self, server):
+    def _activate_wireguard_endpoint(self) -> None:
+        """Publish the locator only after the Unit's firewall phase succeeds."""
+        endpoint = getattr(self.unit_model, 'wireguard_endpoint', None)
+        if not endpoint:
+            return
+        if not has_public_wireguard_ingress(self.unit_model, endpoint.port):
+            raise ValueError(
+                f'Refusing to activate WireGuard endpoint {endpoint.id}: the Unit '
+                f'does not allow public UDP/{endpoint.port} ingress to its gateway.'
+            )
+        WireGuardEndpointRegistry(
+            env_dict=self.env_dict,
+            db=self.db,
+        ).activate(endpoint.id, unit_id=self.unit_id)
+
+    def __send_server_build_msg(self, server: ServerModel):
         """
         Sends a build message for a specified server.
 
         Args:
-            server (dict): A dictionary containing the server's configuration.
+            server (ServerModel): The server configuration.
 
         This private method is responsible for configuring and sending a build message for a given server.
         It sets the server's parent information and internal IP, then either builds the server directly
         or sends a build message through PubSub.
         """
-        server_name = f"{self.unit_id}-{server['name']}"
-        server['parent_id'] = self.unit_id
-        server['parent_build_type'] = self.unit_model.build_type
-        if server['nics'][0].get('direct_connect', False):
-            server['hostname'] = f"{server_name}{self.env.parent_dns_suffix}"
-            if 'tags' in server:
-                server.get('tags', []).append(f'{self.unit_id}-direct-connect')
-            else:
-                server['tags'] = [f'{self.unit_id}-direct-connect']
+        # Each build receives its own copy. Mutating the UnitModel template can leak
+        # generated hostnames and addresses into later student workouts.
+        server = server.model_copy(deep=True)
+        server_name = f"{self.unit_id}-{server.name}"
+        server.parent_id = self.unit_id
+        server.parent_build_type = self.unit_model.build_type
 
-        if server := self.validator(ServerModel, data=server, as_dict=True):
-            self.db.update(collection_name=DbCollections.SERVER, doc_id=server_name, data=server)
+        if server.wireguard_gateway:
+            endpoint = self.unit_model.wireguard_endpoint
+            if endpoint is None:
+                raise ValueError(
+                    f"WireGuard gateway {server_name} does not have an allocated endpoint."
+                )
+            if endpoint.server_name != server_name:
+                raise ValueError(
+                    f"WireGuard endpoint {endpoint.id} belongs to {endpoint.server_name}, not {server_name}."
+                )
+            server.hostname = endpoint.hostname
+            server.wireguard_endpoint_id = endpoint.id
+            public_nic = next(
+                (nic for nic in server.nics or [] if nic.external_nat),
+                None
+            )
+            if public_nic is None:
+                raise ValueError(f"WireGuard gateway {server_name} requires an external NAT interface.")
+            if endpoint.external_ip_name:
+                public_nic.external_ip_name = endpoint.external_ip_name
+
+
+        # Static routes are created by the next-hop server's build after that VM
+        # exists. This applies to every shared router, not only WireGuard gateways.
+        if server.community_server:
+            unit_routes = [
+                route.model_copy(deep=True)
+                for route in getattr(self.unit_model, 'routes', None) or []
+                if route.next_hop_instance in {server.name, server_name}
+            ]
+            routes_by_name = {
+                route.name: route
+                for route in [*(server.routes or []), *unit_routes]
+            }
+            server.routes = list(routes_by_name.values())
+
+        if any(bool(nic.direct_connect) for nic in server.nics or []):
+            if not server.hostname:
+                server.hostname = f"{server_name}{self.env.parent_dns_suffix}"
+            server.tags = list(server.tags or [])
+            direct_connect_tag = f'{self.unit_id}-direct-connect'
+            if direct_connect_tag not in server.tags:
+                server.tags.append(direct_connect_tag)
+
+        existing_server = self.db.get(
+            collection_name=DbCollections.SERVER,
+            doc_id=server_name,
+        )
+        if existing_server.get('state') == ServerStates.RUNNING.value:
+            # A redelivery after the asynchronous build finished is already
+            # satisfied; do not overwrite its runtime state or publish again.
+            return
+
+        # Omit template nulls so a retry cannot erase state written by the
+        # asynchronous LabServer build. Firestore update() merges these fields.
+        server_data = server.model_dump(exclude_none=True)
+        for runtime_field in ('state', 'state_timestamp', 'shutoff_timestamp'):
+            if runtime_field in existing_server:
+                server_data[runtime_field] = existing_server[runtime_field]
+        if self.validator(ServerModel, log_location=self.log_name).load(data=server_data):
+            self.db.update(collection_name=DbCollections.SERVER, doc_id=server_name, data=server_data)
         if self.debug:
             self.compute_manager.load(server_name=server_name)
             self.compute_manager.build()
@@ -280,15 +425,42 @@ class CommunityUnit(BaseUnit):
         """
         self.workout_ids = self.__get_workouts()
         servers = []
-        for server in self.unit_model.servers:
+        for server in self.unit_model.servers or []:
             if server.community_server:
-                server_name = f"{self.unit_id}-{server.get('name')}"
+                server_name = f"{self.unit_id}-{server.name}"
                 servers.append(server_name)
             else:
                 for workout_id in self.workout_ids:
-                    server_name = f"{workout_id}-{server.get('name')}"
+                    server_name = f"{workout_id}-{server.name}"
                     servers.append(server_name)
         return servers
+
+    def __get_community_servers(self):
+        return [
+            f"{self.unit_id}-{server.name}"
+            for server in self.unit_model.servers or []
+            if server.community_server
+        ]
+
+    def __are_servers_deleted(self, server_names):
+        """Wait for every named server, including workout-owned servers, to be deleted."""
+        wait_time = 0
+        deleted_states = {
+            self.state_manager.server_states.DELETED.value,
+        }
+
+        while wait_time < self.state_manager.MAX_WAIT_TIME:
+            all_deleted = True
+            for server_name in server_names:
+                server = self.db.get(collection_name=DbCollections.SERVER, doc_id=server_name)
+                if server and server.get('state') not in deleted_states:
+                    all_deleted = False
+                    break
+            if all_deleted:
+                return True
+            time.sleep(self.state_manager.SLEEP_TIME)
+            wait_time += self.state_manager.SLEEP_TIME
+        return False
 
     def __get_workouts(self):
         workouts = self.db_queries.get_children(parent_id=self.unit_id, child_collection=DbCollections.WORKOUT)
@@ -321,4 +493,3 @@ class CommunityUnit(BaseUnit):
                 time.sleep(wait_time)
         self.logger.error(f"{self.class_name}:{self.unit_id} - Timed out waiting for Unit "
                           f"to finish building networks!")
-

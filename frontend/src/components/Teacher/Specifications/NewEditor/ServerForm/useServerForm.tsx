@@ -30,7 +30,10 @@ export interface IUseServerForm {
     doesServerNetworkHaveErrors: (serverIdx: number) => boolean;
     doesNicHaveErrors: (nic: IServerFormNetworks) => boolean;
 
-    validateNetworkAndServerNics: (networkLookup: { [key: string]: string }) => void;
+    validateNetworkAndServerNics: (
+        networkLookup: { [key: string]: string },
+        isCommunityBuild?: boolean
+    ) => void;
 
     getField: (key: (keyof IServerForm | keyof IServerFormNetworks), serverIdx: number, nicIndex?: number) => IServerFormField
     isEmpty: () => boolean;
@@ -85,8 +88,28 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
             [ServerFormKeys.serverSettingCommunity]: {
                 ...createDefaultFormFieldMeta(server?.community_server || false, [])
             },
+            [ServerFormKeys.serverSettingWireGuardGateway]: {
+                ...createDefaultFormFieldMeta(server?.wireguard_gateway || false, [])
+            },
+            [ServerFormKeys.serverSettingCanIpForward]: {
+                ...createDefaultFormFieldMeta(server?.can_ip_forward || false, [])
+            },
             [ServerFormKeys.serverSettingDeny]: {
                 ...createDefaultFormFieldMeta(server?.tags?.includes("deny-outbound") || false, [])
+            },
+            [ServerFormKeys.serverSettingTags]: {
+                ...createDefaultFormFieldMeta(
+                    server?.tags?.filter(tag => tag !== "deny-outbound").join(", ") || '',
+                    []
+                )
+            },
+            [ServerFormKeys.serverStartupScript]: {
+                ...createDefaultFormFieldMeta(server?.startup_script || '', [])
+            },
+            // Routes are configured in JSON today, but retaining them here prevents
+            // an unrelated visual edit from removing them from an existing server.
+            [ServerFormKeys.serverRoutes]: {
+                ...createDefaultFormFieldMeta(server?.routes || [], [])
             },
             [ServerFormKeys.serverNetworks]: []
         }
@@ -125,6 +148,9 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
             [ServerFormKeys.serverNicEnableExternalNat]: {
                 ...createDefaultFormFieldMeta(nic?.external_nat || false, [])
             },
+            [ServerFormKeys.serverNicExternalIpName]: {
+                ...createDefaultFormFieldMeta(nic?.external_ip_name || '', [])
+            },
             [ServerFormKeys.serverEnableDirectConnections]: {
                 ...createDefaultFormFieldMeta(nic?.direct_connect || false, [])
             },
@@ -161,7 +187,7 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
     }
 
 
-    const handleServerValueChange = (key: keyof IServerForm, value: string, idx: number) => {
+    const handleServerValueChange = (key: keyof IServerForm, value: any, idx: number) => {
         if (key !== ServerFormKeys.serverNetworks) {
             const copyOfForms = [...forms];
             const copy = {
@@ -170,6 +196,18 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
                     ...copyOfForms[idx][key],
                     value: value
                 }
+            }
+
+            // A WireGuard next-hop VM must be shared and have GCE IP forwarding.
+            if (key === ServerFormKeys.serverSettingWireGuardGateway && value) {
+                copy[ServerFormKeys.serverSettingCommunity] = {
+                    ...copy[ServerFormKeys.serverSettingCommunity],
+                    value: true,
+                };
+                copy[ServerFormKeys.serverSettingCanIpForward] = {
+                    ...copy[ServerFormKeys.serverSettingCanIpForward],
+                    value: true,
+                };
             }
 
             validateFormField(key, copy[key], forms[idx], idx, -1);
@@ -306,7 +344,7 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
 
 
     const serverNameValidator = (v: string, k: keyof IServerForm, form: IServerForm, forms: IServerForm[], formIndex: number, nicIndex: number): string | null => {
-        const pattern = /^[a-z](?!.*-$)[a-z0-9-]{0,52}$/;
+        const pattern = /^[a-z](?!.*-$)[a-z0-9-]{0,51}$/;
         if (v?.trim() !== "")
             return pattern.test(v) ? null : "Name must start with a lowercase letter, can contain lowercase letters, numbers, and hyphens, must not end with a hyphen, and can be up to 52 characters long"
 
@@ -357,7 +395,10 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
      */
     const serverNICValidator = (networkLookup: {
         [key: string]: string
-    }, network: string, ipAddress: string, allServerIPs: string[]): string | null => {
+    }, network: string, ipAddress: string, allServerIPs: string[], allowDynamicAddress = false): string | null => {
+        if (allowDynamicAddress && !ipAddress?.trim()) {
+            return null;
+        }
         const hasDuplicates = () => {
             if (allServerIPs.includes(ipAddress)) {
                 return `Address ${ipAddress} is already in use by another server or this server!`;
@@ -395,7 +436,10 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
         return null;
     }
 
-    const validateNetworkAndServerNics = (networkLookup: { [key: string]: string }): void => {
+    const validateNetworkAndServerNics = (
+        networkLookup: { [key: string]: string },
+        isCommunityBuild = false
+    ): void => {
         // todo - this could be enhanced by introducing a debouncer on these fields
         // tread lightly... max depth can happen in here....
         let wasChanged = false;
@@ -405,6 +449,8 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
         let ipFieldError = null;
         for (const serverFormIndex in serverForms) {
             const copyOfServerForm: IServerForm = {...serverForms[serverFormIndex]};
+            const allowDynamicAddress = isCommunityBuild &&
+                !copyOfServerForm[ServerFormKeys.serverSettingCommunity].value;
             for (const nicIdx in copyOfServerForm[ServerFormKeys.serverNetworks]) {
                 const copyOfNic = {...copyOfServerForm[ServerFormKeys.serverNetworks][nicIdx]}
 
@@ -415,7 +461,13 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
                     networkFieldError = "Network is not defined in Networks";
                 } else {
                     networkFieldError = null;
-                    ipFieldError = serverNICValidator(networkLookup, networkField.value, ipField.value, ipsInUse);
+                    ipFieldError = serverNICValidator(
+                        networkLookup,
+                        networkField.value,
+                        ipField.value,
+                        ipsInUse,
+                        allowDynamicAddress
+                    );
                 }
 
                 if (networkFieldError != networkField.error || ipFieldError != ipField.error) {
@@ -424,7 +476,9 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
                     wasChanged = true;
                 }
 
-                ipsInUse.push(ipField.value);
+                if (ipField.value) {
+                    ipsInUse.push(ipField.value);
+                }
             }
         }
 
@@ -436,11 +490,17 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
         const serverValues: Server[] = [];
         for (const form of forms!) {
             const image = images.find(img => img.image == form[ServerFormKeys.serverBaseImage].value);
+            const configuredTags = form[ServerFormKeys.serverSettingTags].value;
+            const parsedTags = Array.isArray(configuredTags)
+                ? configuredTags
+                : String(configuredTags || '').split(',').map(tag => tag.trim()).filter(Boolean);
+            const tags = Array.from(new Set([...(image?.tags || []), ...parsedTags]));
             const serverValue: Server = {
                 name: form[ServerFormKeys.serverName].value,
                 image: form[ServerFormKeys.serverBaseImage].value,
                 hidden: form[ServerFormKeys.serverSettingHide].value,
                 community_server: form[ServerFormKeys.serverSettingCommunity].value,
+                wireguard_gateway: form[ServerFormKeys.serverSettingWireGuardGateway].value,
                 deny_outbound: form[ServerFormKeys.serverSettingDeny].value,
                 disk_size: form[ServerFormKeys.serverSettingsDiskSizeGb].value,
                 details: {
@@ -448,8 +508,10 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
                     os: image?.os || '',
                     labels: image?.labels || []
                 },
-                tags: image?.tags || [],
-                can_ip_forward: form[ServerFormKeys.serverSettingDeny].value,
+                tags,
+                can_ip_forward: form[ServerFormKeys.serverSettingCanIpForward].value,
+                startup_script: form[ServerFormKeys.serverStartupScript].value || undefined,
+                routes: form[ServerFormKeys.serverRoutes].value || undefined,
                 machine_type: form[ServerFormKeys.serverSettingsMachineType].value || image?.machine_type,
                 human_interaction: image?.human_interaction ? image.human_interaction : [],
                 nics: [],
@@ -462,6 +524,7 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
                         internal_ip: nic[ServerFormKeys.serverNicIPv4Addr].value,
                         subnet_name: "default",
                         external_nat: nic[ServerFormKeys.serverNicEnableExternalNat].value,
+                        external_ip_name: nic[ServerFormKeys.serverNicExternalIpName].value || undefined,
                         ip_aliases: nic[ServerFormKeys.serverNicIpAliases].value,
                         direct_connect: nic[ServerFormKeys.serverEnableDirectConnections].value
                     }
@@ -505,4 +568,3 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
         hasErrors
     }
 }
-

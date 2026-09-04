@@ -12,6 +12,7 @@ Agoge documentation is organized by audience. These pages describe the current i
 ## Project documentation
 
 - [Project overview and deployment](../README.md)
+- [Community WireGuard example](examples/community-wireguard.md)
 - [Contributing](../CONTRIBUTING.md)
 - [Security policy](../SECURITY.md)
 - [Release notes](../release-notes/)

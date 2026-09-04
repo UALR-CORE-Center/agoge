@@ -15,7 +15,10 @@ class RoutesResource:
         return f'projects/{self.project}/global/networks/{network_name}'
 
     def next_hop_instance(self, build_id: str, server_name: str) -> str:
-        return f'projects/{self.project}/zones/{self.zone}/instances/{build_id}-{server_name}'
+        if server_name.startswith('projects/'):
+            return server_name
+        instance_name = server_name if server_name.startswith(f'{build_id}-') else f'{build_id}-{server_name}'
+        return f'projects/{self.project}/zones/{self.zone}/instances/{instance_name}'
 
     def new(
         self,
@@ -36,6 +39,7 @@ class RoutesResource:
         route_resource = Route(
             name=name,
             description=description,
+            network=network,
             priority=priority,
             tags=tags,
             dest_range=dest_range

@@ -133,7 +133,8 @@ class FirestoreDatabase(DocumentDatabase):
                     data=data,
                     merge=True
                 )
-            doc_ref.set(data, merge=True)
+            else:
+                doc_ref.set(data, merge=True)
             self.logger.debug(f"Updated document with ID: {doc_id}", custom_id=doc_id)
         except Exception as e:
             logging.error(f"Error updating document: {e}")
@@ -301,9 +302,11 @@ class FirestoreDatabase(DocumentDatabase):
         transaction = self.db.transaction()
 
         try:
-            # Run the operation_func within the transaction
-            result = transaction.run(operation_func, *args, **kwargs)
-            return result
+            # ``Transaction`` does not expose a run method. The transactional
+            # wrapper executes the callback and retries it when Firestore detects
+            # a concurrent write conflict.
+            transaction_callable = firestore.transactional(operation_func)
+            return transaction_callable(transaction, *args, **kwargs)
         except Exception as e:
             self.logger.error(f"Transaction failed: {e}")
             raise

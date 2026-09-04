@@ -41,6 +41,10 @@ class InstallUpdateManager:
         """
         Updates the main application and cloud functions.
         """
+        # Existing projects did not run the WireGuard DNS bootstrap that was
+        # added to full installs. Perform the same idempotent migration before
+        # deploying code that depends on it.
+        BaseBuild(project=self.project_id, suppress=True).ensure_wireguard_prerequisites()
         agoge_app = AgogeApp()
         app_deployed = agoge_app.deploy_main_app()
         function_deployed = agoge_app.deploy_cloud_functions()

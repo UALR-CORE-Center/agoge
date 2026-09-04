@@ -5,6 +5,7 @@ from common.document_database import DocumentDatabaseFactory, DatabaseQueries
 from common.constants.pub_sub import PubSub
 from common.exceptions import NotFound, BadRequest, BaseAgogeException
 from common.models.agoge import SnapshotsModel
+from common.services.wireguard_endpoint import WireGuardEndpointRegistry
 from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
@@ -31,6 +32,11 @@ class HourlyMaintenance:
             database_name=DATABASE_NAME
         )
         self.db_queries = DatabaseQueries(db=self.db)
+        self.wireguard_registry = WireGuardEndpointRegistry(
+            env_dict=self.env_dict,
+            db=self.db,
+            log_name=LoggerNames.CLOUD_FN,
+        )
         self.snapshot_manager = ComputeManagerFactory.create_manager_object(env_dict=env_dict)
 
     def run(self) -> None:
@@ -42,9 +48,23 @@ class HourlyMaintenance:
         self.logger.info(f"{self.class_name} - Completed deleting expired workouts")
         self._delete_expired_snapshots()
         self.logger.info(f"{self.class_name} - Completed deleting expired workout snapshots")
+        self._purge_wireguard_endpoint_tombstones()
         self.logger.info(f"{self.class_name} - Beginning to sync LMS students with active workouts")
         self._lms_sync()
         self.logger.info(f"{self.class_name} - Completed syncing LMS students")
+
+    def _purge_wireguard_endpoint_tombstones(self) -> None:
+        try:
+            purged = self.wireguard_registry.purge_released()
+            self.logger.info(
+                f"{self.class_name} - Purged {purged} released WireGuard endpoint tombstones"
+            )
+        except Exception as error:
+            # Endpoint-ID recycling should not prevent the other hourly cleanup
+            # tasks from running.
+            self.logger.error(
+                f"{self.class_name} - Failed purging WireGuard endpoint tombstones: {error}"
+            )
 
     def _delete_expired_units(self) -> None:
         expired_units = self.db_queries.get_expired(collection_name=DbCollections.UNIT)

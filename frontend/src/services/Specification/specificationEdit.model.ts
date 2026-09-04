@@ -79,11 +79,22 @@ export interface LMSQuiz {
 
 interface Nic {
     network: string;
-    internal_ip?: string;
+    internal_ip?: string | null;
     subnet_name?: string;
     external_nat?: boolean;
+    external_ip_name?: string;
     ip_aliases?: string[];
     direct_connect?: boolean;
+}
+
+export interface Route {
+    name: string;
+    network: string;
+    dest_range: string;
+    next_hop_instance: string;
+    priority?: number;
+    tags?: string[];
+    description?: string;
 }
 
 interface SubNetwork {
@@ -95,6 +106,7 @@ interface SubNetwork {
 export interface Network {
     name: string;
     subnets?: SubNetwork[];
+    reservations?: string[];
 }
 
 export interface HumanInteraction {
@@ -132,6 +144,10 @@ export interface Server {
     machine_type?: string;
     sshkey?: string;
     can_ip_forward?: boolean;
+    wireguard_gateway?: boolean;
+    wireguard_endpoint_id?: string;
+    startup_script?: string;
+    routes?: Route[];
     nics?: Nic[];
     human_interaction?: HumanInteraction[];
     community_server?: boolean;
@@ -161,7 +177,6 @@ export interface Summary {
     description: string;
     teacher_instructions_url?: string;
     student_instructions_url?: string;
-    unit_type: UnitType
     author?: string;
     hourly_cost?: number;
     standard_mappings?: StandardMappings[];
@@ -181,11 +196,12 @@ export interface SpecificationEdit {
     id: string;
     instructor_id?: string | string[];
     networks: Network[];
+    routes?: Route[];
     promiscuous_mode?: boolean;
     servers: Server[];
     status: string;
     summary: Summary;
-    unit_type: string;
+    unit_type: UnitType;
     version: number;
     workout_duration_days?: number;
     web_applications: WebApplication[];

@@ -143,6 +143,9 @@ class CloudEnv:
         self.dnszone = env['dnszone']
         self.dns_suffix = env['dns_suffix']
         self.parent_dns_suffix = env['parent_dns_suffix']
+        self.wireguard_dns_prefix = get('wireguard_dns_prefix', 'wg')
+        self.wireguard_dns_suffix = get('wireguard_dns_suffix') or self.parent_dns_suffix
+        self.wireguard_port = int(get('wireguard_port') or 51820)
         self.parent_project = env['parent_project']
         self.parent_zone = env['parent_dnszone']
         self.main_app_url = env['main_app_url']

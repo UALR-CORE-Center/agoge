@@ -6,14 +6,23 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from typing import List, Optional, Union, Any, Dict
+from typing import List, Optional, Union, Any, Dict, Literal
 from datetime import datetime
+from ipaddress import ip_network
+import re
 import uuid
 
 from common.constants.build_constants import BuildConstants
 from common.constants.buckets import Buckets
 from common.constants.enumerators import SnapshotTypes
 from common.constants.states import ImageStatus, ServerStates
+from common.models.wireguard import WireGuardEndpointModel
+
+
+UnitTypeValue = Literal[
+    BuildConstants.UnitType.SOLO.value,
+    BuildConstants.UnitType.COMMUNITY.value,
+]
 
 
 class CloudEnvModel(BaseModel):
@@ -23,6 +32,82 @@ class CloudEnvModel(BaseModel):
     spec_bucket: Optional[str] = Field(default=None, description="Storage bucket for build specifications")
     student_workout_firewall: Optional[bool] = Field(default=False,
                                                      description="Whether student workout firewall is enabled")
+    wireguard_dns_prefix: Optional[str] = Field(
+        default="wg",
+        description="DNS label prefix for public WireGuard gateway endpoints"
+    )
+    wireguard_dns_suffix: Optional[str] = Field(
+        default=None,
+        description="Public DNS suffix for WireGuard endpoints; defaults to parent_dns_suffix"
+    )
+    wireguard_port: Optional[int] = Field(
+        default=51820,
+        ge=1,
+        le=65535,
+        description="Public UDP port used by WireGuard gateways"
+    )
+
+    @field_validator('wireguard_port', mode='before')
+    @classmethod
+    def validate_wireguard_port(cls, value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            raise ValueError('wireguard_port must be an integer from 1 through 65535')
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and re.fullmatch(r'[0-9]+', value.strip()):
+            return int(value.strip())
+        raise ValueError('wireguard_port must be an integer from 1 through 65535')
+
+    @field_validator('wireguard_dns_prefix')
+    @classmethod
+    def validate_wireguard_dns_prefix(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip().lower().strip('-.')
+        # The generated label is ``<prefix>-<five-digit-id>`` and DNS labels
+        # cannot exceed 63 octets, leaving at most 57 for the prefix.
+        if len(value) > 57 or not re.fullmatch(
+            r'[a-z0-9](?:[a-z0-9-]{0,55}[a-z0-9])?', value
+        ):
+            raise ValueError('wireguard_dns_prefix must be a valid DNS label of at most 57 characters')
+        return value
+
+    @field_validator('wireguard_dns_suffix')
+    @classmethod
+    def validate_wireguard_dns_suffix(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        hostname = value.strip().lower().strip('.')
+        if len(hostname) > 253:
+            raise ValueError('wireguard_dns_suffix must be a valid DNS suffix')
+        if any(
+            not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label)
+            for label in hostname.split('.')
+        ):
+            raise ValueError('wireguard_dns_suffix must be a valid DNS suffix')
+        return f'.{hostname}'
+
+    @model_validator(mode='before')
+    @classmethod
+    def validate_wireguard_zone(cls, values: Any) -> Any:
+        """Keep generated records inside the one configured public DNS zone."""
+        if not isinstance(values, dict):
+            return values
+        wireguard_suffix = values.get('wireguard_dns_suffix')
+        parent_suffix = values.get('parent_dns_suffix')
+        if wireguard_suffix and parent_suffix:
+            wireguard_suffix = str(wireguard_suffix).strip('.').lower()
+            parent_suffix = str(parent_suffix).strip('.').lower()
+            if not (
+                wireguard_suffix == parent_suffix
+                or wireguard_suffix.endswith(f'.{parent_suffix}')
+            ):
+                raise ValueError(
+                    'wireguard_dns_suffix must equal or be a subdomain of parent_dns_suffix'
+                )
+        return values
 
     @model_validator(mode='before')
     @classmethod
@@ -56,7 +141,15 @@ class SubNetworkModel(BaseModel):
 class NetworkModel(BaseModel):
     name: str = Field(..., description="Name of the network")
     subnets: Optional[List[SubNetworkModel]] = Field(default=None)
-    reservations: Optional[List[str]] = Field(default=None)
+    reservations: List[str] = Field(
+        default_factory=list,
+        description="Unit-scoped IP addresses reserved from dynamic allocation"
+    )
+
+    @field_validator('reservations', mode='before')
+    @classmethod
+    def normalize_null_reservations(cls, value):
+        return value or []
 
 
 class NicModel(BaseModel):
@@ -64,6 +157,10 @@ class NicModel(BaseModel):
     internal_ip: Optional[str] = Field(default=None, description="Internal IP of the NIC")
     subnet_name: Optional[str] = Field(default="default", description="Subnet name of the NIC")
     external_nat: Optional[bool] = Field(default=False, description="Must be true if servers on network are intended to communicate outside of network.")
+    external_ip_name: Optional[str] = Field(
+        default=None,
+        description="Optional reserved Google Compute Engine external address resource name"
+    )
     ip_aliases: Optional[List[str]] = Field(default=None, description='Assign multiple IP values to NIC.')
     direct_connect: Optional[bool] = Field(default=False, description="Allow users to connect without using a proxy-machine.")
 
@@ -112,6 +209,35 @@ class FirewallRuleModel(BaseModel):
     priority: Optional[int] = Field(default=1000, description="Rule priority.")
 
 
+class RouteModel(BaseModel):
+    """A custom static route installed for a lab network."""
+
+    name: str = Field(..., description="Name of the route, before the build ID prefix is added")
+    network: str = Field(..., description="Specification network on which to install the route")
+    dest_range: str = Field(..., description="Destination IPv4 or IPv6 range in CIDR notation")
+    next_hop_instance: str = Field(..., description="Specification server name used as the route next hop")
+    priority: int = Field(default=1000, ge=0, le=65535, description="Google Cloud route priority")
+    tags: List[str] = Field(
+        default_factory=list,
+        description="Optional instance network tags that select which VMs use this route"
+    )
+    description: Optional[str] = Field(default=None, description="Optional route description")
+
+    @field_validator('dest_range')
+    @classmethod
+    def validate_dest_range(cls, value: str) -> str:
+        """Require a network address rather than silently masking host bits."""
+        try:
+            return str(ip_network(value, strict=True))
+        except ValueError as error:
+            raise ValueError('dest_range must be a valid CIDR network') from error
+
+    @field_validator('tags', mode='before')
+    @classmethod
+    def normalize_null_tags(cls, value):
+        return value or []
+
+
 class ProxyConnectionModel(BaseModel):
     idx: Optional[int] = Field(default=None, description="Sorted index of connection")
     url: Optional[str] = Field(default=None, description="Full URL path to server connection")
@@ -130,6 +256,15 @@ class ServerModel(BaseModel):
     build_type: Optional[str] = Field(default=None, description="Build type of the server")
     can_ip_forward: Optional[bool] = Field(default=False, description="Whether IP forwarding is enabled")
     community_server: Optional[bool] = Field(default=False, description="Whether this server should be a shared server in a community build unit.")
+    wireguard_gateway: Optional[bool] = Field(
+        default=False,
+        description="Whether this shared server is the WireGuard gateway for a community unit"
+    )
+    wireguard_endpoint_id: Optional[str] = Field(
+        default=None,
+        pattern=r'^[1-9][0-9]{4}$',
+        description="Runtime-assigned five-digit public WireGuard endpoint identifier"
+    )
     details: Optional[ServerDetailsModel] = Field(default=None)
     firewall_rules: Optional[List[FirewallRuleModel]] = Field(default=None, description="List of firewall rules associated with server.")
     hidden: Optional[bool] = Field(default=False, description="Whether to display this server to students or not.")
@@ -139,17 +274,46 @@ class ServerModel(BaseModel):
     machine_type: Optional[str] = Field(default="e1-standard1", description="Machine type of the server")
     metadata: Optional[str] = Field(default=None, description="Metadata of the server")
     guacamole_startup_script: Optional[str] = Field(default=None, description="Optional startup script for Guacamole service")
-    startup_scripts: Optional[List[str]] = Field(default=None, description="Optional startup scripts to pass into server")  # TODO: Consider using this replace guacamole_startup_script
+    startup_script: Optional[str] = Field(default=None, description="Optional startup script to pass into server")
     min_cpu_platform: Optional[str] = Field(default="", description="Minimum CPU platform of the server")
     name: str = Field(..., description="Name of server.")
     nics: Optional[List[NicModel]] = Field(default=None)
+    routes: Optional[List[RouteModel]] = Field(
+        default=None,
+        description="Static routes to create after this next-hop server is available"
+    )
     parent_build_type: Optional[str] = Field(default=None, description="Build type of parent object (i.e. workout, unit, etc.).")
     parent_id: Optional[str] = Field(default=None, description="ID of parent object to associate with server.")
     shutoff_timestamp: Optional[float] = Field(default=None, description="Timestamp of when server will shut down.")
     sshkey: Optional[str] = Field(default=None, description="SSH key of the server")
-    tags: Optional[List[str]] = Field(default=None, description="Optional field used for attaching specific firewall rules to machine")
+    tags: List[str] = Field(
+        default_factory=list,
+        description="Optional field used for attaching specific firewall rules to machine"
+    )
     state: Optional[int] = Field(default=None, description="Current build state of server")
     state_timestamp: Optional[str] = Field(default=None, description="Timestamp of the server state")
+
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_legacy_fields(cls, values: Any) -> Any:
+        """Normalize nullable tags and the old plural startup-script field."""
+        if not isinstance(values, dict):
+            return values
+
+        if values.get('tags') is None:
+            values['tags'] = []
+
+        if values.get('startup_script'):
+            return values
+
+        legacy_scripts = values.get('startup_scripts')
+        if isinstance(legacy_scripts, str):
+            values['startup_script'] = legacy_scripts
+        elif isinstance(legacy_scripts, list):
+            values['startup_script'] = '\n'.join(
+                script for script in legacy_scripts if isinstance(script, str) and script
+            ) or None
+        return values
 
 
 class AgogeSummaryModel(BaseModel):
@@ -290,9 +454,17 @@ class UnitModel(BaseModel):
     instructor_id: Union[str, List[str]] = Field(..., description="List of instructor IDs")
     workspace_settings: Optional[WorkspaceSettingsModel] = Field(default=None)
     build_type: str = Field(..., description="Build type of the unit")
-    unit_type: Optional[str] = Field(default=BuildConstants.UnitType.SOLO, description="Defines the type of unit setup.")
+    unit_type: UnitTypeValue = Field(
+        default=BuildConstants.UnitType.SOLO.value,
+        description="Defines the type of unit setup."
+    )
     summary: AgogeSummaryModel = Field(..., description="Summary of the Agoge unit")
     networks: Optional[List[NetworkModel]] = Field(default=None)
+    wireguard_endpoint: Optional[WireGuardEndpointModel] = Field(
+        default=None,
+        description="Runtime public endpoint allocated for this community Unit's WireGuard gateway"
+    )
+    routes: Optional[List[RouteModel]] = Field(default=None, description="Custom static routes for the unit")
     servers: Optional[List[ServerModel]] = Field(default=None)
     web_applications: Optional[List[WebApplicationModel]] = Field(default=None, description="Used for cloud container labs")
     firewalls: Optional[List[FirewallModel]] = Field(default=None)
@@ -330,12 +502,17 @@ class RubricModel(BaseModel):
 class CatalogModel(BaseModel):
     discriminator: str = Field(..., description="Discriminator field")
     networks: Optional[List[NetworkModel]] = None
+    routes: Optional[List[RouteModel]] = None
     servers: Optional[List[ServerModel]] = None
     summary: AgogeSummaryModel = Field(...)
     firewall_rules: Optional[List[FirewallRuleModel]] = None
     instructor_id: Union[str, List[str]] = Field(..., description="List of instructor IDs")
     creation_timestamp: Optional[float] = None
     build_type: str = Field(..., description="Build type of the unit")
+    unit_type: UnitTypeValue = Field(
+        default=BuildConstants.UnitType.SOLO.value,
+        description="Defines the type of unit setup."
+    )
     version: str = Field(..., description="Version of the unit")
     id: str = Field(..., description="ID of the unit")
     assessment: Optional[AssessmentModel] = Field(default=None, description="Use Agoge to provide grading support")
@@ -357,12 +534,16 @@ class CatalogEditModel(BaseModel):
     instructor_id: Union[str, List[str]] = Field(..., description="List of instructor IDs")
     lms_quiz: Optional[LMSIntegrationModel] = Field(default=None, description="Use connected LMS to provide grading support and distribution functionality")
     networks: Optional[List[NetworkModel]] = Field(default=None)
+    routes: Optional[List[RouteModel]] = Field(default=None)
     parent_id: Optional[str] = Field(default=None, description="ID of Catalog object used for copy or edits")
     promiscuous_mode: bool = Field(default=False, description="Enable network mirroring")
     servers: Optional[List[ServerModel]] = Field(default=None)
     status: Optional[str] = Field(default=None, description="Current status identifier")
     summary: Optional[AgogeSummaryModel] = Field(..., description="Summary of the Agoge unit")
-    unit_type: Optional[str] = Field(default=BuildConstants.UnitType.SOLO, description="Defines the type of unit setup.")
+    unit_type: UnitTypeValue = Field(
+        default=BuildConstants.UnitType.SOLO.value,
+        description="Defines the type of unit setup."
+    )
     version: str = Field(..., description="Version of the unit")
     web_applications: Optional[List[WebApplicationModel]] = Field(default=None, description="Used for cloud container labs")
     workout_duration_days: Optional[int] = Field(default=None, description='For asynchronous workout builds, specify to add an expiration timestamp for the workout.')
