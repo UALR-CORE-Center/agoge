@@ -77,6 +77,17 @@ class DisplayProxy:
             return UnitModel
 
     def build(self):
+        self.prepare_server_record()
+        self.compute_manager.load(self.server_id)
+        self.compute_manager.build()
+
+    def prepare_server_record(self) -> dict:
+        """Create the proxy configuration and persist its server record.
+
+        Keeping record preparation separate from the compute insert lets a
+        maintenance rebuild recover a missing Guacamole child document and
+        then run the server through the normal idempotent delete/build cycle.
+        """
         build_record = self.db.get(collection_name=self.collection, doc_id=self.build_id)
         build_record = self.model(**build_record)
         proxy_configs = []
@@ -140,13 +151,13 @@ class DisplayProxy:
             hostname=f"{self.build_id}-display{self.env.parent_dns_suffix}",
             guacamole_startup_script=guac_startup_script
         )
+        server_record = server_model.model_dump()
         self.db.update(
             collection_name=DbCollections.SERVER,
             doc_id=self.server_id,
-            data=server_model.model_dump()
+            data=server_record
         )
-        self.compute_manager.load(self.server_id)
-        self.compute_manager.build()
+        return server_record
 
     def _create_network_settings(self) -> None:
         if self.firewalls or self.build_type not in [

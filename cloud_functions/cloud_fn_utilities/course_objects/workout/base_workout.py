@@ -192,10 +192,6 @@ class BaseWorkout(ABC):
             )
             return False
 
-        server_names = [
-            f'{server["parent_id"]}-{server["name"]}'
-            for server in servers_to_nuke
-        ]
         claimed = False
         try:
             claimed = self.db.transaction(
@@ -209,6 +205,13 @@ class BaseWorkout(ABC):
                 return False
 
             self._prepare_rebuild_infrastructure()
+            servers_to_nuke = self._recover_auxiliary_server_records(
+                servers_to_nuke
+            )
+            server_names = [
+                f'{server["parent_id"]}-{server["name"]}'
+                for server in servers_to_nuke
+            ]
 
             reset_timestamp = datetime.now(timezone.utc).isoformat()
             for server_name in server_names:
@@ -279,6 +282,13 @@ class BaseWorkout(ABC):
 
     def _prepare_rebuild_infrastructure(self) -> None:
         """Ensure subclass-specific prerequisites exist before rebuilding servers."""
+
+    def _recover_auxiliary_server_records(
+        self,
+        server_records: list[dict],
+    ) -> list[dict]:
+        """Reconcile derived server records required by a Workout subtype."""
+        return server_records
 
     def _claim_workout_rebuild_transaction(self, transaction) -> bool:
         """Atomically validate the Unit and claim the Workout."""

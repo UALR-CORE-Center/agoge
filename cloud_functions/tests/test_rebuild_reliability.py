@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call
 
 import pytest
@@ -99,3 +100,32 @@ def test_lab_server_nuke_builds_when_compute_instance_is_already_absent():
         "continuing with the rebuild."
     )
     manager.build.assert_called_once_with()
+
+
+def test_start_waits_for_guacamole_when_server_has_its_startup_script():
+    manager = object.__new__(LabServerManager)
+    manager.server_name = "workout-a-display-guacamole-server"
+    manager.parent_build_id = "workout-a"
+    manager.class_name = "LabServerManager"
+    manager.s = ServerStates
+    manager.server_spec = SimpleNamespace(
+        delayed_start=False,
+        guacamole_startup_script="#!/bin/bash",
+    )
+    manager.state_manager = MagicMock()
+    manager.logger = MagicMock()
+    manager.compute_instance = MagicMock()
+    manager.compute_instance.start.return_value = True
+    manager.dns_manager = MagicMock()
+    manager._dns_record = MagicMock(return_value="workout-a-display.example.")
+    manager._wait_for_guacamole = MagicMock(return_value=True)
+
+    manager._start_server()
+
+    manager._wait_for_guacamole.assert_called_once_with(
+        "workout-a-display.example"
+    )
+    assert manager.state_manager.state_transition.call_args_list == [
+        call(ServerStates.STARTING),
+        call(ServerStates.RUNNING),
+    ]

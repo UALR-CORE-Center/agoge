@@ -333,17 +333,21 @@ def test_false_rebuild_result_is_reported_as_a_failure(capsys):
     assert "No Workouts were rebuilt" in output
 
 
-def test_rebuild_uses_the_workout_factory_in_direct_debug_mode():
+def test_rebuild_ready_workout_directly_then_stops_it():
     factory = MagicMock()
     workout = MagicMock()
+    workout.workout = SimpleNamespace(state=WorkoutStates.READY.value)
     workout.nuke.return_value = True
+    workout.state_manager.get_state.return_value = WorkoutStates.READY.value
     factory.create_workout_object.return_value = workout
+    sleep = MagicMock()
     operation = RebuildWorkouts(
         project=PROJECT,
         db=MagicMock(),
         db_queries=MagicMock(),
         cloud_env=CLOUD_ENV,
         workout_factory=factory,
+        sleep_func=sleep,
     )
 
     rebuilt = operation._rebuild_workout("workout-a")
@@ -355,6 +359,54 @@ def test_rebuild_uses_the_workout_factory_in_direct_debug_mode():
         env_dict={"project": PROJECT},
     )
     workout.nuke.assert_called_once_with()
+    sleep.assert_called_once_with(operation.REBUILD_STOP_GRACE_SECONDS)
+    workout.stop.assert_called_once_with()
+
+
+def test_rebuild_running_workout_keeps_it_running():
+    factory = MagicMock()
+    workout = MagicMock()
+    workout.workout = SimpleNamespace(state=WorkoutStates.RUNNING.value)
+    workout.nuke.return_value = True
+    workout.state_manager.get_state.return_value = WorkoutStates.RUNNING.value
+    factory.create_workout_object.return_value = workout
+    sleep = MagicMock()
+    operation = RebuildWorkouts(
+        project=PROJECT,
+        db=MagicMock(),
+        db_queries=MagicMock(),
+        cloud_env=CLOUD_ENV,
+        workout_factory=factory,
+        sleep_func=sleep,
+    )
+
+    rebuilt = operation._rebuild_workout("workout-a")
+
+    assert rebuilt is True
+    sleep.assert_not_called()
+    workout.stop.assert_not_called()
+
+
+def test_rebuild_broken_workout_fails_if_it_cannot_finish_stopped():
+    factory = MagicMock()
+    workout = MagicMock()
+    workout.workout = SimpleNamespace(state=WorkoutStates.BROKEN.value)
+    workout.nuke.return_value = True
+    workout.state_manager.get_state.return_value = WorkoutStates.BROKEN.value
+    factory.create_workout_object.return_value = workout
+    operation = RebuildWorkouts(
+        project=PROJECT,
+        db=MagicMock(),
+        db_queries=MagicMock(),
+        cloud_env=CLOUD_ENV,
+        workout_factory=factory,
+        sleep_func=MagicMock(),
+    )
+
+    rebuilt = operation._rebuild_workout("workout-a")
+
+    assert rebuilt is False
+    workout.stop.assert_called_once_with()
 
 
 def test_constructor_rejects_an_environment_for_a_different_project():

@@ -300,6 +300,35 @@ class SoloWorkout(BaseWorkout):
         if firewall_rules:
             self.firewall_manager.build(self.workout_id, firewall_rules)
 
+    def _recover_auxiliary_server_records(
+        self,
+        server_records: list[dict],
+    ) -> list[dict]:
+        """Restore a missing Guacamole child record from the Workout spec."""
+        if not self.workout.networks:
+            return server_records
+
+        display_server_name = f"{self.workout_id}-display-guacamole-server"
+        existing_server_names = {
+            f'{server["parent_id"]}-{server["name"]}'
+            for server in server_records
+        }
+        if display_server_name in existing_server_names:
+            return server_records
+
+        self.logger.warning(
+            f"{self.class_name}:{self.workout_id} - Guacamole server record "
+            "is missing; recovering it from the Workout specification."
+        )
+        display_proxy = DisplayProxy(
+            build_id=self.workout_id,
+            build_spec=self.workout,
+            collection=DbCollections.WORKOUT,
+            env_dict=self.env_dict,
+        )
+        display_server_record = display_proxy.prepare_server_record()
+        return [*server_records, display_server_record]
+
     def _recover_server_records(self) -> list[dict]:
         """Recreate missing child records from the stored Solo Workout spec.
 

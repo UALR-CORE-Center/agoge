@@ -1,7 +1,8 @@
 from types import SimpleNamespace
-from unittest.mock import ANY, MagicMock, call
+from unittest.mock import ANY, MagicMock, call, patch
 
 from cloud_fn_utilities.course_objects.workout.solo_workout import SoloWorkout
+from cloud_fn_utilities.server_specific.guacamole.display_proxy import DisplayProxy
 
 from common.constants.database import DbCollections
 from common.constants.states import ServerStates, UnitStates, WorkoutStates
@@ -24,6 +25,7 @@ def _solo_workout(*, servers: list[ServerModel], networks: list = None) -> SoloW
         unit_type="solo",
     )
     workout.env = SimpleNamespace(parent_dns_suffix=".labs.example")
+    workout.env_dict = {"project": "test-project"}
     workout.s = WorkoutStates
     workout.duration_seconds = 7200
     workout.debug = True
@@ -34,6 +36,9 @@ def _solo_workout(*, servers: list[ServerModel], networks: list = None) -> SoloW
     workout.compute_manager = MagicMock()
     workout.vpc_manager = MagicMock()
     workout.firewall_manager = MagicMock()
+    workout._recover_auxiliary_server_records = MagicMock(
+        side_effect=lambda records: records
+    )
     workout.state_manager = MagicMock()
     workout.state_manager.get_state.return_value = WorkoutStates.READY.value
     workout.state_manager.are_server_builds_finished.return_value = True
@@ -129,3 +134,95 @@ def test_direct_nuke_repairs_solo_network_before_rebuilding_server():
     assert rebuilt is True
     workout.vpc_manager.build.assert_called_once_with(network=network)
     assert operation_order == ["network", "server"]
+
+
+def test_direct_nuke_recovers_and_rebuilds_a_missing_guacamole_server():
+    embedded_server = ServerModel(
+        name="kali",
+        image="image-kali",
+        nics=[{"network": "external", "subnet_name": "default"}],
+    )
+    main_server_record = {
+        "parent_id": "workout-a",
+        "name": "kali",
+    }
+    display_server_record = {
+        "parent_id": "workout-a",
+        "name": "display-guacamole-server",
+    }
+    workout = _solo_workout(
+        servers=[embedded_server],
+        networks=[SimpleNamespace(name="external")],
+    )
+    workout.db_queries.get_servers.return_value = [main_server_record]
+    del workout._recover_auxiliary_server_records
+
+    with patch(
+        "cloud_fn_utilities.course_objects.workout.solo_workout.DisplayProxy"
+    ) as display_proxy_cls:
+        display_proxy = display_proxy_cls.return_value
+        display_proxy.prepare_server_record.return_value = display_server_record
+
+        rebuilt = workout.nuke()
+
+    assert rebuilt is True
+    display_proxy_cls.assert_called_once_with(
+        build_id="workout-a",
+        build_spec=workout.workout,
+        collection=DbCollections.WORKOUT,
+        env_dict={"project": "test-project"},
+    )
+    display_proxy.prepare_server_record.assert_called_once_with()
+    assert workout.compute_manager.load.call_args_list == [
+        call(server_name="workout-a-kali", network_prefix=None),
+        call(
+            server_name="workout-a-display-guacamole-server",
+            network_prefix=None,
+        ),
+    ]
+    assert workout.compute_manager.nuke.call_count == 2
+
+
+def test_direct_nuke_does_not_recreate_an_existing_guacamole_record():
+    embedded_server = ServerModel(
+        name="kali",
+        image="image-kali",
+        nics=[{"network": "external", "subnet_name": "default"}],
+    )
+    workout = _solo_workout(
+        servers=[embedded_server],
+        networks=[SimpleNamespace(name="external")],
+    )
+    workout.db_queries.get_servers.return_value = [
+        {"parent_id": "workout-a", "name": "kali"},
+        {
+            "parent_id": "workout-a",
+            "name": "display-guacamole-server",
+        },
+    ]
+    del workout._recover_auxiliary_server_records
+
+    with patch(
+        "cloud_fn_utilities.course_objects.workout.solo_workout.DisplayProxy"
+    ) as display_proxy_cls:
+        rebuilt = workout.nuke()
+
+    assert rebuilt is True
+    display_proxy_cls.assert_not_called()
+    assert workout.compute_manager.nuke.call_count == 2
+
+
+def test_display_proxy_build_prepares_its_record_before_compute_creation():
+    display_proxy = object.__new__(DisplayProxy)
+    lifecycle = MagicMock()
+    display_proxy.server_id = "workout-a-display-guacamole-server"
+    display_proxy.prepare_server_record = lifecycle.prepare_server_record
+    display_proxy.compute_manager = lifecycle.compute_manager
+
+    display_proxy.build()
+
+    assert lifecycle.mock_calls == [
+        call.prepare_server_record(),
+        call.compute_manager.load("workout-a-display-guacamole-server"),
+        call.compute_manager.build(),
+    ]

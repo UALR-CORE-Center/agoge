@@ -1,3 +1,4 @@
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -14,6 +15,7 @@ class RebuildWorkouts:
     """Synchronously rebuild all or selected Workouts in a Unit."""
 
     REQUIRES_PROJECT = True
+    REBUILD_STOP_GRACE_SECONDS = 30
     REBUILDABLE_STATES = frozenset(
         {
             WorkoutStates.READY.value,
@@ -38,6 +40,7 @@ class RebuildWorkouts:
         input_func: Callable[[str], str] | None = None,
         workout_factory=WorkoutFactory,
         rebuild_func: Callable[[str], bool] | None = None,
+        sleep_func: Callable[[float], None] | None = None,
     ) -> None:
         if not project:
             raise ValueError("A GCP project is required for Workout maintenance.")
@@ -60,6 +63,7 @@ class RebuildWorkouts:
         self.env_dict = env.get_env()
         self.workout_factory = workout_factory
         self.rebuild = rebuild_func or self._rebuild_workout
+        self.sleep = sleep_func or time.sleep
 
     def run(self) -> None:
         units = self._get_units()
@@ -277,7 +281,10 @@ class RebuildWorkouts:
             "a shared gateway) will be preserved."
         )
         print("This runs directly; keep this terminal open until processing completes.")
-        print("Successfully rebuilt Workouts will finish in the RUNNING state.")
+        print(
+            "RUNNING Workouts remain running. READY or BROKEN Workouts finish "
+            "in READY with their servers stopped."
+        )
         print(f"GCP project: {self.project}")
         print(f"Unit: {unit_id}")
         print(
@@ -349,7 +356,18 @@ class RebuildWorkouts:
             debug=True,
             env_dict=self.env_dict,
         )
-        return bool(workout.nuke())
+        initial_state = self._state_value(workout.workout.state)
+        if not workout.nuke():
+            return False
+
+        if initial_state == WorkoutStates.RUNNING.value:
+            return workout.state_manager.get_state() == WorkoutStates.RUNNING.value
+
+        # Give newly created guests, especially Guacamole, time to persist
+        # first-boot configuration before issuing a stop operation.
+        self.sleep(self.REBUILD_STOP_GRACE_SECONDS)
+        workout.stop()
+        return workout.state_manager.get_state() == WorkoutStates.READY.value
 
     @classmethod
     def _unit_is_rebuildable(cls, unit: dict | None) -> bool:
