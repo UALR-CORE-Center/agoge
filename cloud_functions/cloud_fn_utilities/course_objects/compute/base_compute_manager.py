@@ -362,7 +362,7 @@ class BaseComputeManager:
             # If the server is an external proxy, then register its DNS name
             if dns_record := self._dns_record():
                 self.dns_manager.add_dns_record(dns_record, self.server_name)
-                if self.server_name == f'{self.parent_build_id}-display':
+                if self.server_spec.guacamole_startup_script:
                     self._wait_for_guacamole(dns_record[:-1])
 
             self.state_manager.state_transition(self.s.RUNNING)

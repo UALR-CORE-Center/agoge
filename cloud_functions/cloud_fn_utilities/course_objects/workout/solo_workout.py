@@ -1,7 +1,7 @@
 from common.constants.database import DbCollections
 from common.constants.pub_sub import PubSub
 from common.utilities.timestamps import Timestamps
-from common.models.agoge import WorkoutModel, UnitModel
+from common.models.agoge import ServerModel, UnitModel, WorkoutModel
 
 from cloud_fn_utilities.server_specific.guacamole.display_proxy import DisplayProxy
 from ...server_specific.firewall_server import FirewallServer
@@ -94,15 +94,8 @@ class SoloWorkout(BaseWorkout):
                 server.parent_build_type = self.workout.build_type
                 server.firewall_rules = self.workout.firewall_rules or []
 
-                # If direct connect is true, create the hostname that will be used to access this machine
-                # direct_connect = False
-                direct_connect = any(bool(nic.direct_connect) for nic in server.nics)
-                if direct_connect:
-                    server.hostname = f'{server_name}{self.env.parent_dns_suffix}'
-                    if server.tags is None:
-                        server.tags = [f"{self.workout_id}-direct-connect"]
-                    else:
-                        server.tags.append(f"{self.workout_id}-direct-connect")
+                # Persist generated runtime connection settings for the web UI.
+                if self._configure_direct_connect_server(server, server_name):
                     self.update_record(doc_id=self.workout_id, data=self.workout, update_keys=['servers'])
 
                 self.db.update(
@@ -277,36 +270,181 @@ class SoloWorkout(BaseWorkout):
             self.logger.error(f"{self.class_name}:{self.workout_id} - Workout timed out waiting for server deletions "
                               f"to complete!")
 
-    def nuke(self):
+    def nuke(self) -> bool:
         """Deletes all existing servers for current workout and rebuilds
         using the specification already stored in the Datastore object
         :return:
         """
-        self._add_build_action(PubSub.Actions.NUKE.value, True)
-        servers_to_nuke = self.db_queries.get_servers(parent_id=self.workout_id)
-        for server in servers_to_nuke:
-            server_name = f'{server["parent_id"]}-{server["name"]}'
-            if self.debug:
-                try:
-                    self.compute_manager.load(server_name=server_name)
-                    self.compute_manager.nuke()
-                except LookupError:
-                    continue
-            else:
-                self.pubsub_manager.msg(
-                    handler=str(PubSub.Handlers.CONTROL.value),
-                    action=str(PubSub.Actions.NUKE.value),
-                    build_id=str(server_name),
-                    course_object=str(PubSub.CourseObjects.LAB_SERVER.value)
+        return self._nuke_servers()
+
+    def _prepare_rebuild_infrastructure(self) -> None:
+        """Idempotently restore Solo network prerequisites before VM rebuilds.
+
+        A partially provisioned Workout can have its specification and server
+        records without the corresponding VPC or subnet. ``VpcManager.build``
+        treats existing resources as conflicts and continues, so it can safely
+        repair only the missing pieces before the replacement VM is created.
+        """
+        networks = self.workout.networks or []
+        for network in networks:
+            self.vpc_manager.build(network=network)
+
+        firewall_rules = self.workout.firewall_rules or []
+        if firewall_rules:
+            self.firewall_manager.build(self.workout_id, firewall_rules)
+
+    def _recover_auxiliary_server_records(
+        self,
+        server_records: list[dict],
+    ) -> list[dict]:
+        """Restore a missing Guacamole child record from the Workout spec."""
+        server_records = self._synchronize_direct_connect_servers(server_records)
+        if not self.workout.networks:
+            return server_records
+
+        display_server_name = f"{self.workout_id}-display-guacamole-server"
+        existing_server_names = {
+            f'{server["parent_id"]}-{server["name"]}'
+            for server in server_records
+        }
+        if display_server_name in existing_server_names:
+            return server_records
+
+        self.logger.warning(
+            f"{self.class_name}:{self.workout_id} - Guacamole server record "
+            "is missing; recovering it from the Workout specification."
+        )
+        display_proxy = DisplayProxy(
+            build_id=self.workout_id,
+            build_spec=self.workout,
+            collection=DbCollections.WORKOUT,
+            env_dict=self.env_dict,
+        )
+        display_server_record = display_proxy.prepare_server_record()
+        return [*server_records, display_server_record]
+
+    def _synchronize_direct_connect_servers(
+        self,
+        server_records: list[dict],
+    ) -> list[dict]:
+        """Keep runtime hostnames consistent in child and embedded records."""
+        records_by_name = {
+            str(record.get("name")): record
+            for record in server_records
+            if record.get("name")
+        }
+        workout_updated = False
+
+        for embedded_server in self.workout.servers or []:
+            server_name = f"{self.workout_id}-{embedded_server.name}"
+            if not any(
+                bool(nic.direct_connect) for nic in embedded_server.nics or []
+            ):
+                continue
+
+            if self._configure_direct_connect_server(
+                embedded_server,
+                server_name,
+            ):
+                workout_updated = True
+
+            child_record = records_by_name.get(embedded_server.name)
+            if child_record is None:
+                continue
+
+            child_tags = list(child_record.get("tags") or [])
+            direct_connect_tag = f"{self.workout_id}-direct-connect"
+            child_updated = child_record.get("hostname") != embedded_server.hostname
+            if direct_connect_tag not in child_tags:
+                child_tags.append(direct_connect_tag)
+                child_updated = True
+
+            if child_updated:
+                child_record["hostname"] = embedded_server.hostname
+                child_record["tags"] = child_tags
+                self.db.update(
+                    collection_name=DbCollections.SERVER,
+                    doc_id=server_name,
+                    data={
+                        "hostname": embedded_server.hostname,
+                        "tags": child_tags,
+                    },
                 )
 
-        if not self.state_manager.are_server_builds_finished():
-            self.state_manager.state_transition(self.s.BROKEN)
-            self.logger.error(f"{self.class_name}:{self.workout_id} - Workout timed out waiting for server builds "
-                              f"to complete!")
-        else:
-            self.state_manager.state_transition(self.s.READY)
-            self.logger.info(f"{self.class_name}:{self.workout_id} - Finished nuking Workout!")
+        if workout_updated:
+            self.update_record(
+                doc_id=self.workout_id,
+                data=self.workout,
+                update_keys=["servers"],
+            )
+        return server_records
+
+    def _configure_direct_connect_server(
+        self,
+        server: ServerModel,
+        server_name: str,
+    ) -> bool:
+        """Set runtime metadata required by a direct-connect server."""
+        if not any(bool(nic.direct_connect) for nic in server.nics or []):
+            return False
+
+        updated = False
+        if server.parent_id != self.workout_id:
+            server.parent_id = self.workout_id
+            updated = True
+        if server.parent_build_type != self.workout.build_type:
+            server.parent_build_type = self.workout.build_type
+            updated = True
+
+        hostname = f"{server_name}{self.env.parent_dns_suffix}"
+        if server.hostname != hostname:
+            server.hostname = hostname
+            updated = True
+
+        direct_connect_tag = f"{self.workout_id}-direct-connect"
+        tags = list(server.tags or [])
+        if direct_connect_tag not in tags:
+            tags.append(direct_connect_tag)
+            server.tags = tags
+            updated = True
+        return updated
+
+    def _recover_server_records(self) -> list[dict]:
+        """Recreate missing child records from the stored Solo Workout spec.
+
+        A failed or legacy provision can leave the VM specification embedded in
+        the Workout while its ``agoge-server`` child document is absent. Direct
+        rebuilds need that child document both to delete an existing VM and to
+        build its replacement.
+        """
+        recovered_records = []
+        for stored_server in self.workout.servers or []:
+            if stored_server.community_server:
+                continue
+
+            server: ServerModel = stored_server.model_copy(deep=True)
+            server_name = f"{self.workout_id}-{server.name}"
+            server.parent_id = self.workout_id
+            server.parent_build_type = self.workout.build_type
+            server.firewall_rules = self.workout.firewall_rules or []
+
+            self._configure_direct_connect_server(server, server_name)
+
+            server_record = server.model_dump()
+            self.db.update(
+                collection_name=DbCollections.SERVER,
+                doc_id=server_name,
+                data=server_record,
+            )
+            recovered_records.append(server_record)
+
+        if recovered_records:
+            self.logger.warning(
+                f"{self.class_name}:{self.workout_id} - Recovered "
+                f"{len(recovered_records)} missing server record(s) from the "
+                "stored Workout specification."
+            )
+        return recovered_records
 
     def __set_promiscuous_mode(self, network=None):
         """Checks if promiscuous mode is enabled in network"""

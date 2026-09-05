@@ -301,9 +301,8 @@ class FirestoreDatabase(DocumentDatabase):
         transaction = self.db.transaction()
 
         try:
-            # Run the operation_func within the transaction
-            result = transaction.run(operation_func, *args, **kwargs)
-            return result
+            transactional_operation = firestore.transactional(operation_func)
+            return transactional_operation(transaction, *args, **kwargs)
         except Exception as e:
             self.logger.error(f"Transaction failed: {e}")
             raise

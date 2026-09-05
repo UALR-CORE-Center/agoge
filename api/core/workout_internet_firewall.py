@@ -3,6 +3,7 @@ from ipaddress import IPv4Address
 from typing import Union, Tuple, Any, List
 
 from common.constants.database import DbCollections, DATABASE_NAME, DatabaseTypes
+from common.constants.build_constants import BuildConstants
 from common.constants.states import WorkoutStates
 from common.constants.google import AddressTypes, FirewallDirection, FirewallRuleAction
 from common.document_database import DatabaseMask
@@ -59,6 +60,17 @@ class WorkoutInternetFirewall:
         self.collection = DbCollections.WORKOUT
         workout = self.db.get(collection_name=self.collection, doc_id=self.workout_id)
         unit_id = workout.get('parent_id', None)
+        unit = {}
+        if unit_id:
+            unit = self.db.get(
+                collection_name=DbCollections.UNIT,
+                doc_id=unit_id,
+            ) or {}
+        self.network_prefix = (
+            unit_id
+            if unit.get('unit_type') == BuildConstants.UnitType.COMMUNITY.value
+            else self.workout_id
+        )
         self.firewalls_client = ComputeFirewallsAPI(
             project=self.env.project,
             region=self.env.region,
@@ -259,8 +271,13 @@ class WorkoutInternetFirewall:
         servers = self.workout.get('servers', [])
         for server in servers:
             for nic in server.get('nics', []):
-                network = f"{server.get('parent_id')}-{nic.get('network')}"
-                if nic.get('direct_connect') and network and network not in direct_connect_networks:
+                network_name = nic.get('network')
+                network = f"{self.network_prefix}-{network_name}"
+                if (
+                    nic.get('direct_connect')
+                    and network_name
+                    and network not in direct_connect_networks
+                ):
                     direct_connect_networks.append(network)
         self.logger.debug(f"{self.class_name} - Direct connect networks found: {direct_connect_networks}")
         return direct_connect_networks
@@ -394,7 +411,7 @@ class WorkoutInternetFirewall:
             name=firewall_rule_name,
             direction=FirewallDirection.INGRESS,
             network=NetworkResource.network_path(network, self.env.project),
-            target_tags=[f"{self.workout_id}-direct-connect"],
+            target_tags=[f"{self.workout_id}-student-entry"],
             priority=990,
             action=FirewallRuleAction.ALLOW,
             rules=allowed,

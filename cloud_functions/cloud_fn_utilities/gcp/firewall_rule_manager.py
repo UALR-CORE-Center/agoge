@@ -53,7 +53,8 @@ class FirewallManager:
                 ip_ranges=rule.ip_ranges,
                 action=rule_action,
                 rules=rules,
-                priority=rule.priority
+                priority=rule.priority,
+                target_tags=target_tags,
             )
 
             try:
@@ -62,7 +63,13 @@ class FirewallManager:
                    firewall_resource=firewall_body
                 )
             except Conflict:
-                pass
+                # Rebuilds must reconcile rules created by older versions of
+                # Agoge. In particular, legacy rules omitted target tags and
+                # could expose the wrong VMs or fail to target Guacamole.
+                self.firewalls_client.patch(
+                    resource_name=firewall_rule_name,
+                    firewall_body=firewall_body,
+                )
 
     def delete(
         self,

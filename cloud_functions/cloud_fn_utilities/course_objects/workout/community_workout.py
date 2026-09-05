@@ -164,9 +164,9 @@ class CommunityWorkout(BaseWorkout):
         """Community workout deletion takes place at the Unit level"""
         pass
 
-    def nuke(self):
-        """Community workout nuking takes place at the Unit level"""
-        pass
+    def nuke(self) -> bool:
+        """Rebuild only the servers owned by this student workout."""
+        return self._nuke_servers(network_prefix=self.unit_id)
 
     def __send_server_build_msg(self, server: ServerModel):
         """

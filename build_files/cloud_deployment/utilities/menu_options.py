@@ -47,7 +47,7 @@ class SetupOptions(bytes, Enum):
     INCREASE_QUOTAS = (13, "Increase Quotas (EXPERIMENTAL)")
 
     # Projects
-    PROJECT_CREATION = (14, "Create a New GCP Production Project")
+    PROJECT_CREATION = (14, "Create a New GCP Project")
     PROJECT_EDIT = (15, "Edit Settings for an Existing GCP Production Project")
     PROJECT_DELETE = (16, "Delete a GCP Production Project")
     PROJECT_MAINTENANCE = (17, "Perform Maintenance Operations on a GCP Production Project")
@@ -74,6 +74,7 @@ class ProjectMaintenanceOptions(bytes, Enum):
 
     REIMAGE_GUACAMOLE = (1, "Reimage Guacamole Server (Refresh TLS Certificate)")
     EXTEND_PROJECT_EXPIRATION = (2, "Extend Project Expiration Date")
+    REBUILD_WORKOUTS = (3, "Rebuild All or Selected Workouts in a Unit")
     BACK = (99, "Back")
 
 
@@ -116,7 +117,7 @@ category_menu = {
         ],
     },
     SetupCategories.PROJECTS: {
-        "label": "GCP Project Management",
+        "label": "GCP Project Management & Maintenance",
         "options": [
             (SetupOptions.PROJECT_CREATION, SetupOptions.PROJECT_CREATION.description),
             (SetupOptions.PROJECT_EDIT, SetupOptions.PROJECT_EDIT.description),
@@ -203,6 +204,7 @@ def get_user_selection(max_choice: int) -> int:
 
 from cloud_deployment.operations.project_maintenance.rebuild_guacamole_for_unit import RebuildGuacamoleForUnit
 from cloud_deployment.operations.project_maintenance.extend_project_expiration import ExtendWorkoutExpirations
+from cloud_deployment.operations.project_maintenance.rebuild_workouts import RebuildWorkouts
 
 
 PROJECT_MAINTENANCE_REGISTRY = [
@@ -215,6 +217,11 @@ PROJECT_MAINTENANCE_REGISTRY = [
         "option": ProjectMaintenanceOptions.EXTEND_PROJECT_EXPIRATION,
         "description": ProjectMaintenanceOptions.EXTEND_PROJECT_EXPIRATION.description,
         "operation_class": ExtendWorkoutExpirations,
+    },
+    {
+        "option": ProjectMaintenanceOptions.REBUILD_WORKOUTS,
+        "description": ProjectMaintenanceOptions.REBUILD_WORKOUTS.description,
+        "operation_class": RebuildWorkouts,
     },
     {
         "option": ProjectMaintenanceOptions.BACK,

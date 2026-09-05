@@ -1,3 +1,5 @@
+from google.api_core.exceptions import NotFound as GoogleNotFound
+
 from cloud_fn_utilities.course_objects.compute.base_compute_manager import BaseComputeManager
 from cloud_fn_utilities.gcp.dns_manager import DnsManager
 from cloud_fn_utilities.server_specific.assessment_manager import AssessmentManager
@@ -84,14 +86,21 @@ class LabServerManager(BaseComputeManager):
 
         self.logger.info(f'{self.class_name}:{self.server_name} - Deleting server')
         try:
-            self.compute_instance.delete(resource_name=self.server_name, wait=True)
-        except NotFound as e:
+            deleted = self.compute_instance.delete(resource_name=self.server_name, wait=True)
+            if not deleted:
+                if state_transition:
+                    self.state_manager.state_transition(self.s.BROKEN)
+                self.logger.error(
+                    f'{self.class_name}:{self.server_name} - Server deletion timed out.'
+                )
+                return False
+        except (NotFound, GoogleNotFound):
             # If the resource can't be found, it was either already deleted or never created
-            self.logger.error(f'{self.class_name}:{self.server_name} - Deletion request returned status code 404. '
-                              f'Marking {self.parent_build_id} server as deleted!')
-            if state_transition:
-                self.state_manager.state_transition(self.s.DELETED)
-        except (BadRequest, BaseAgogeException) as e:
+            self.logger.info(
+                f'{self.class_name}:{self.server_name} - Server is already absent; '
+                'continuing with the rebuild.'
+            )
+        except (BadRequest, BaseAgogeException):
             if state_transition:
                 self.state_manager.state_transition(self.s.BROKEN)
             return False
@@ -112,7 +121,10 @@ class LabServerManager(BaseComputeManager):
         Deletes a server based on the specification in the database with the name server_name.
         Then rebuilds the server.
         """
-        self.delete()
+        if not self.delete():
+            raise RuntimeError(
+                f"Cannot rebuild {self.server_name}: server deletion failed."
+            )
         self.build()
 
     def _add_disks(self) -> None:

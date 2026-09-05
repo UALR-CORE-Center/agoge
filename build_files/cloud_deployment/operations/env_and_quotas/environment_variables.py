@@ -19,7 +19,7 @@ class EnvironmentVariables:
     DEFAULT_TIMEZONE = "America/Chicago"
     VARIABLES = ['dns_suffix', 'dnszone', 'main_app_url', 'admin_email', 'project_number', 'max_workspaces',
                  'default_server_image_project', 'firebase_auth_domain', 'app_sub_domain', 'parent_project',
-                 'parent_dnszone', 'parent_dns_suffix']
+                 'parent_dnszone', 'parent_dns_suffix', 'project_path']
     SECRET_VARIABLES = ['api_key', 'sendgrid_api_key', 'shodan_api_key', 'openai_api_key', 'jwt_private_key','jwt_public_key']
 
     def __init__(self, project):

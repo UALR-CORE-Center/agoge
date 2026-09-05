@@ -36,7 +36,7 @@ export interface WorkoutId extends Partial<Workout> {
 
 export interface WorkoutFull extends Partial<Workout>{
     workout: Workout;
-    server?: ListOfDictionaries;
+    servers?: ListOfDictionaries;
 }
 
 export interface WorkoutAssessment extends Partial<Workout>{
