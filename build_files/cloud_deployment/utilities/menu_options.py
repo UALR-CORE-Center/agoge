@@ -47,7 +47,7 @@ class SetupOptions(bytes, Enum):
     INCREASE_QUOTAS = (13, "Increase Quotas (EXPERIMENTAL)")
 
     # Projects
-    PROJECT_CREATION = (14, "Create a New GCP Production Project")
+    PROJECT_CREATION = (14, "Create a New GCP Project")
     PROJECT_EDIT = (15, "Edit Settings for an Existing GCP Production Project")
     PROJECT_DELETE = (16, "Delete a GCP Production Project")
     PROJECT_MAINTENANCE = (17, "Perform Maintenance Operations on a GCP Production Project")
