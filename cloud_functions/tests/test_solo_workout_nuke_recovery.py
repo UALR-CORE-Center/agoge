@@ -251,6 +251,8 @@ def test_direct_nuke_synchronizes_hostname_into_the_embedded_workout_server():
     assert rebuilt is True
     assert embedded_server.hostname == expected_hostname
     assert embedded_server.tags == ["workout-a-direct-connect"]
+    assert embedded_server.parent_id == "workout-a"
+    assert embedded_server.parent_build_type == "workout"
     workout.update_record.assert_called_once_with(
         doc_id="workout-a",
         data=workout.workout,
@@ -273,6 +275,8 @@ def test_direct_nuke_repairs_a_missing_hostname_in_the_child_server_record():
         ],
         hostname=expected_hostname,
         tags=["workout-a-direct-connect"],
+        parent_id="workout-a",
+        parent_build_type="workout",
     )
     main_server_record = {
         "parent_id": "workout-a",

@@ -384,11 +384,18 @@ class SoloWorkout(BaseWorkout):
         server: ServerModel,
         server_name: str,
     ) -> bool:
-        """Set the deterministic hostname and tag for a direct-connect server."""
+        """Set runtime metadata required by a direct-connect server."""
         if not any(bool(nic.direct_connect) for nic in server.nics or []):
             return False
 
         updated = False
+        if server.parent_id != self.workout_id:
+            server.parent_id = self.workout_id
+            updated = True
+        if server.parent_build_type != self.workout.build_type:
+            server.parent_build_type = self.workout.build_type
+            updated = True
+
         hostname = f"{server_name}{self.env.parent_dns_suffix}"
         if server.hostname != hostname:
             server.hostname = hostname
