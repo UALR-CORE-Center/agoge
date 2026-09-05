@@ -55,8 +55,9 @@ def _server_rebuild_call(server_name: str):
 def test_nuke_rebuilds_only_servers_parented_to_the_community_workout():
     workout = _community_workout(builds_finished=True)
 
-    workout.nuke()
+    rebuilt = workout.nuke()
 
+    assert rebuilt is True
     workout.db_queries.get_servers.assert_called_once_with(parent_id="workout-a")
     assert workout.db.update.call_args_list == [
         call(
@@ -127,8 +128,9 @@ def test_nuke_refuses_to_run_while_the_unit_is_being_deleted():
     workout = _community_workout(builds_finished=True)
     workout.unit_model.state = UnitStates.DELETING_SERVERS.value
 
-    workout.nuke()
+    rebuilt = workout.nuke()
 
+    assert rebuilt is False
     workout.db_queries.get_servers.assert_not_called()
     workout.pubsub_manager.msg.assert_not_called()
     workout.state_manager.state_transition.assert_not_called()
@@ -140,8 +142,9 @@ def test_nuke_refuses_to_run_while_a_community_unit_is_starting():
     workout.unit_model.state = UnitStates.START.value
     workout.unit_model.unit_type = "community"
 
-    workout.nuke()
+    rebuilt = workout.nuke()
 
+    assert rebuilt is False
     workout.db_queries.get_servers.assert_not_called()
     workout.pubsub_manager.msg.assert_not_called()
     workout.state_manager.state_transition.assert_not_called()
@@ -152,12 +155,29 @@ def test_nuke_does_not_overlap_an_already_claimed_workout():
     workout = _community_workout(builds_finished=True)
     workout.db.transaction.return_value = False
 
-    workout.nuke()
+    rebuilt = workout.nuke()
 
+    assert rebuilt is False
     workout.db.update.assert_not_called()
     workout.pubsub_manager.msg.assert_not_called()
     workout.state_manager.are_server_builds_finished.assert_not_called()
     workout.logger.warning.assert_called_once()
+
+
+def test_debug_nuke_rebuilds_servers_directly_without_pubsub():
+    workout = _community_workout(builds_finished=True)
+    workout.debug = True
+    workout.compute_manager = MagicMock()
+
+    rebuilt = workout.nuke()
+
+    assert rebuilt is True
+    assert workout.compute_manager.load.call_args_list == [
+        call(server_name="workout-a-kali", network_prefix="unit-1"),
+        call(server_name="workout-a-router", network_prefix="unit-1"),
+    ]
+    assert workout.compute_manager.nuke.call_count == 2
+    workout.pubsub_manager.msg.assert_not_called()
 
 
 def test_rebuild_claim_atomically_moves_the_workout_into_a_building_state():

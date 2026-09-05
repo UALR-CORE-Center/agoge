@@ -102,7 +102,7 @@ class BaseWorkout(ABC):
         pass
 
     @abstractmethod
-    def nuke(self):
+    def nuke(self) -> bool:
         pass
 
     def get_record(self) -> WorkoutModel:
@@ -157,12 +157,12 @@ class BaseWorkout(ABC):
             self._add_build_action(PubSub.Actions.BUILD.value)
             self.update_record(doc_id=self.workout_id, data=self.workout, update_keys=["expires", "action"])
 
-    def _nuke_servers(self, network_prefix: str = None) -> None:
+    def _nuke_servers(self, network_prefix: str = None) -> bool:
         """Rebuild this Workout's servers and wait for the rebuild cycle.
 
-        Server records are moved to RESETTING before child Pub/Sub messages are
-        published. This prevents the completion check from accepting their old
-        RUNNING state before a rebuild has actually started.
+        Server records are moved to RESETTING before child rebuilds start. This
+        prevents the completion check from accepting their old RUNNING state
+        before a rebuild has actually started.
         """
         unit_state = getattr(self.unit_model, "state", None)
         unit_type = getattr(self.unit_model, "unit_type", None)
@@ -171,7 +171,7 @@ class BaseWorkout(ABC):
                 f"{self.class_name}:{self.workout_id} - Refusing to rebuild while "
                 f"Unit {self.unit_model.id} is in state {unit_state}."
             )
-            return
+            return False
 
         workout_state = self.state_manager.get_state()
         if workout_state not in self.REBUILDABLE_STATES:
@@ -179,7 +179,7 @@ class BaseWorkout(ABC):
                 f"{self.class_name}:{self.workout_id} - A rebuild cannot start "
                 f"from Workout state {workout_state}."
             )
-            return
+            return False
 
         servers_to_nuke = self.db_queries.get_servers(parent_id=self.workout_id)
         if not servers_to_nuke:
@@ -187,7 +187,7 @@ class BaseWorkout(ABC):
                 f"{self.class_name}:{self.workout_id} - No server records were "
                 "found; there is nothing to rebuild."
             )
-            return
+            return False
 
         server_names = [
             f'{server["parent_id"]}-{server["name"]}'
@@ -203,7 +203,7 @@ class BaseWorkout(ABC):
                     f"{self.class_name}:{self.workout_id} - Another action "
                     "claimed the Workout before the rebuild could start."
                 )
-                return
+                return False
 
             reset_timestamp = datetime.now(timezone.utc).isoformat()
             for server_name in server_names:
@@ -265,6 +265,7 @@ class BaseWorkout(ABC):
             f"{self.class_name}:{self.workout_id} - Finished rebuilding "
             f"{len(server_names)} server(s)."
         )
+        return True
 
     def _claim_workout_rebuild_transaction(self, transaction) -> bool:
         """Atomically validate the Unit and claim the Workout."""

@@ -277,12 +277,12 @@ class SoloWorkout(BaseWorkout):
             self.logger.error(f"{self.class_name}:{self.workout_id} - Workout timed out waiting for server deletions "
                               f"to complete!")
 
-    def nuke(self):
+    def nuke(self) -> bool:
         """Deletes all existing servers for current workout and rebuilds
         using the specification already stored in the Datastore object
         :return:
         """
-        self._nuke_servers()
+        return self._nuke_servers()
 
     def __set_promiscuous_mode(self, network=None):
         """Checks if promiscuous mode is enabled in network"""

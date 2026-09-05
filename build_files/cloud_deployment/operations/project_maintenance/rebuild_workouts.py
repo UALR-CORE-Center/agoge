@@ -1,20 +1,19 @@
 from collections.abc import Callable
 from typing import Any
 
+from cloud_fn_utilities.course_objects.workout.factory_workout import WorkoutFactory
+
 from common.constants.build_constants import BuildConstants
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections
-from common.constants.pub_sub import PubSub
 from common.constants.states import UnitStates, WorkoutStates
 from common.document_database import DatabaseQueries, DocumentDatabaseFactory
 from common.utilities.gcp.cloud_env import CloudEnv
-from common.utilities.gcp.pubsub_manager import PubSubManager
 
 
 class RebuildWorkouts:
-    """Queue safe rebuilds for all or selected Workouts in a Unit."""
+    """Synchronously rebuild all or selected Workouts in a Unit."""
 
     REQUIRES_PROJECT = True
-    PUBLISH_TIMEOUT_SECONDS = 30
     REBUILDABLE_STATES = frozenset(
         {
             WorkoutStates.READY.value,
@@ -35,9 +34,10 @@ class RebuildWorkouts:
         project: str,
         db=None,
         db_queries: DatabaseQueries | None = None,
-        pubsub_manager: PubSubManager | None = None,
         cloud_env: CloudEnv | None = None,
         input_func: Callable[[str], str] | None = None,
+        workout_factory=WorkoutFactory,
+        rebuild_func: Callable[[str], bool] | None = None,
     ) -> None:
         if not project:
             raise ValueError("A GCP project is required for Workout maintenance.")
@@ -51,19 +51,15 @@ class RebuildWorkouts:
         )
         self.db_queries = db_queries or DatabaseQueries(db=self.db)
 
-        if pubsub_manager is not None:
-            self.pubsub_manager = pubsub_manager
-        else:
-            env = cloud_env or CloudEnv(project=project)
-            if env.project != project:
-                raise ValueError(
-                    "The selected GCP project does not match the project stored "
-                    f"in its Agoge environment: selected={project}, stored={env.project}."
-                )
-            self.pubsub_manager = PubSubManager(
-                topic=PubSub.Topics.AGOGE,
-                env_dict=env.get_env(),
+        env = cloud_env or CloudEnv(project=project)
+        if env.project != project:
+            raise ValueError(
+                "The selected GCP project does not match the project stored "
+                f"in its Agoge environment: selected={project}, stored={env.project}."
             )
+        self.env_dict = env.get_env()
+        self.workout_factory = workout_factory
+        self.rebuild = rebuild_func or self._rebuild_workout
 
     def run(self) -> None:
         units = self._get_units()
@@ -109,25 +105,25 @@ class RebuildWorkouts:
             return
 
         self._display_rebuild_warning(unit_id, rebuildable)
-        if self.input("Type REBUILD to queue these rebuilds: ").strip() != "REBUILD":
+        if self.input("Type REBUILD to start these rebuilds: ").strip() != "REBUILD":
             print("[INFO] Confirmation did not match; rebuild cancelled.")
             return
 
-        queued, failed, changed_state = self._queue_rebuilds(unit_id, rebuildable)
+        rebuilt, failed, changed_state = self._rebuild_workouts(unit_id, rebuildable)
         skipped.extend(changed_state)
         print("\n[SUMMARY]")
         print(f"  Unit: {unit_id}")
-        print(f"  Rebuild requests queued: {len(queued)}")
+        print(f"  Workouts rebuilt: {len(rebuilt)}")
         print(f"  Workouts skipped: {len(skipped)}")
-        print(f"  Queue failures: {len(failed)}")
-        if queued:
-            print(f"  Queued Workout IDs: {', '.join(queued)}")
+        print(f"  Rebuild failures: {len(failed)}")
+        if rebuilt:
+            print(f"  Rebuilt Workout IDs: {', '.join(rebuilt)}")
         if failed:
             print(f"  Failed Workout IDs: {', '.join(failed)}")
-        if queued:
-            print("[END] Rebuild requests have been queued for cloud processing.")
+        if rebuilt:
+            print("[END] Direct Workout rebuild processing is complete.")
         else:
-            print("[END] No rebuild requests were queued.")
+            print("[END] No Workouts were rebuilt.")
 
     def _get_units(self) -> list[dict]:
         units = self.db_queries.get_active(collection_name=DbCollections.UNIT)
@@ -280,19 +276,21 @@ class RebuildWorkouts:
             "The Unit, its networks, and shared Community servers (including "
             "a shared gateway) will be preserved."
         )
+        print("This runs directly; keep this terminal open until processing completes.")
         print("Successfully rebuilt Workouts will finish in the RUNNING state.")
+        print(f"GCP project: {self.project}")
         print(f"Unit: {unit_id}")
         print(
             "Workouts to rebuild: "
             + ", ".join(str(workout["id"]) for workout in workouts)
         )
 
-    def _queue_rebuilds(
+    def _rebuild_workouts(
         self,
         unit_id: str,
         workouts: list[dict],
     ) -> tuple[list[str], list[str], list[dict]]:
-        queued = []
+        rebuilt = []
         failed = []
         changed_state = []
         for index, workout in enumerate(workouts):
@@ -309,7 +307,7 @@ class RebuildWorkouts:
                 )
                 print(
                     f"[SKIP] Unit {unit_id} is no longer eligible "
-                    f"(state={state}); remaining requests were not queued."
+                    f"(state={state}); remaining Workouts were not rebuilt."
                 )
                 break
             current_workout = self.db.get(
@@ -329,26 +327,29 @@ class RebuildWorkouts:
                 )
                 print(
                     f"[SKIP] Workout {workout_id} changed or is no longer "
-                    f"eligible (state={state}); no request was queued."
+                    f"eligible (state={state}); it was not rebuilt."
                 )
                 continue
             try:
-                publish_future = self.pubsub_manager.msg(
-                    handler=str(PubSub.Handlers.CONTROL.value),
-                    action=str(PubSub.Actions.NUKE.value),
-                    course_object=str(PubSub.CourseObjects.WORKOUT.value),
-                    build_id=workout_id,
-                )
-                if publish_future is not None:
-                    publish_future.result(timeout=self.PUBLISH_TIMEOUT_SECONDS)
-                queued.append(workout_id)
-                print(f"[QUEUED] Workout {workout_id}")
-            # A failure for one Workout must not prevent independent requests
+                print(f"[REBUILDING] Workout {workout_id}")
+                if not self.rebuild(workout_id):
+                    raise RuntimeError("the Workout rebuild did not complete")
+                rebuilt.append(workout_id)
+                print(f"[REBUILT] Workout {workout_id}")
+            # A failure for one Workout must not prevent independent rebuilds
             # for the remaining selected Workouts.
             except Exception as error:  # noqa: BLE001
                 failed.append(workout_id)
-                print(f"[ERROR] Failed to queue Workout {workout_id}: {error}")
-        return queued, failed, changed_state
+                print(f"[ERROR] Failed to rebuild Workout {workout_id}: {error}")
+        return rebuilt, failed, changed_state
+
+    def _rebuild_workout(self, workout_id: str) -> bool:
+        workout = self.workout_factory.create_workout_object(
+            workout_id=workout_id,
+            debug=True,
+            env_dict=self.env_dict,
+        )
+        return bool(workout.nuke())
 
     @classmethod
     def _unit_is_rebuildable(cls, unit: dict | None) -> bool:

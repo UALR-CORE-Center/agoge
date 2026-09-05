@@ -13,7 +13,6 @@ from cloud_deployment.utilities.menu_options import (
 )
 
 from common.constants.database import DbCollections
-from common.constants.pub_sub import PubSub
 from common.constants.states import UnitStates, WorkoutStates
 
 PROJECT = "agoge-test-project"
@@ -23,6 +22,10 @@ UNIT = {
     "unit_type": "community",
     "summary": {"name": "Routing Lab"},
 }
+CLOUD_ENV = SimpleNamespace(
+    project=PROJECT,
+    get_env=lambda: {"project": PROJECT},
+)
 
 
 def _workout(workout_id: str, state: int, **values) -> dict:
@@ -49,28 +52,24 @@ def _operation(answers: list[str], workouts: list[dict]):
     db_queries.get_active.return_value = [UNIT]
     db_queries.get_children.return_value = workouts
 
-    pubsub_manager = MagicMock()
+    rebuild_func = MagicMock(return_value=True)
     answer_iter = iter(answers)
     operation = RebuildWorkouts(
         project=PROJECT,
         db=db,
         db_queries=db_queries,
-        pubsub_manager=pubsub_manager,
+        cloud_env=CLOUD_ENV,
         input_func=lambda _: next(answer_iter),
+        rebuild_func=rebuild_func,
     )
-    return operation, db, db_queries, pubsub_manager
+    return operation, db, db_queries, rebuild_func
 
 
 def _rebuild_call(workout_id: str):
-    return call(
-        handler=str(PubSub.Handlers.CONTROL.value),
-        action=str(PubSub.Actions.NUKE.value),
-        course_object=str(PubSub.CourseObjects.WORKOUT.value),
-        build_id=workout_id,
-    )
+    return call(workout_id)
 
 
-def test_full_unit_queues_each_rebuildable_workout_and_skips_unsafe_states(
+def test_full_unit_rebuilds_each_eligible_workout_and_skips_unsafe_states(
     capsys,
 ):
     workouts = [
@@ -79,7 +78,7 @@ def test_full_unit_queues_each_rebuildable_workout_and_skips_unsafe_states(
         _workout("workout-ready", WorkoutStates.READY.value),
         _workout("workout-broken", WorkoutStates.BROKEN.value),
     ]
-    operation, _, db_queries, pubsub_manager = _operation(
+    operation, _, db_queries, rebuild_func = _operation(
         answers=["1", "1", "REBUILD"],
         workouts=workouts,
     )
@@ -91,18 +90,17 @@ def test_full_unit_queues_each_rebuildable_workout_and_skips_unsafe_states(
         parent_id=UNIT["id"],
         child_collection=DbCollections.WORKOUT,
     )
-    assert pubsub_manager.msg.call_args_list == [
+    assert rebuild_func.call_args_list == [
         _rebuild_call("workout-broken"),
         _rebuild_call("workout-ready"),
         _rebuild_call("workout-running"),
     ]
-    assert pubsub_manager.msg.call_count == 3
-    assert pubsub_manager.msg.return_value.result.call_count == 3
+    assert rebuild_func.call_count == 3
 
     output = capsys.readouterr().out
     assert "shared Community infrastructure is preserved" in output
     assert "workout-building" in output
-    assert "Rebuild requests queued: 3" in output
+    assert "Workouts rebuilt: 3" in output
     assert "Workouts skipped: 1" in output
 
 
@@ -112,14 +110,14 @@ def test_individual_selection_accepts_ids_and_numbers_and_deduplicates(capsys):
         _workout("workout-b", WorkoutStates.DELETED.value),
         _workout("workout-c", WorkoutStates.BROKEN.value),
     ]
-    operation, _, _, pubsub_manager = _operation(
+    operation, _, _, rebuild_func = _operation(
         answers=["unit-1", "2", "1, workout-c 1 2", "REBUILD"],
         workouts=workouts,
     )
 
     operation.run()
 
-    assert pubsub_manager.msg.call_args_list == [
+    assert rebuild_func.call_args_list == [
         _rebuild_call("workout-a"),
         _rebuild_call("workout-c"),
     ]
@@ -128,9 +126,9 @@ def test_individual_selection_accepts_ids_and_numbers_and_deduplicates(capsys):
     assert "Workouts skipped: 1" in output
 
 
-def test_rechecks_workout_state_immediately_before_queueing(capsys):
+def test_rechecks_workout_state_immediately_before_rebuilding(capsys):
     workouts = [_workout("workout-a", WorkoutStates.READY.value)]
-    operation, db, _, pubsub_manager = _operation(
+    operation, db, _, rebuild_func = _operation(
         answers=["1", "1", "REBUILD"],
         workouts=workouts,
     )
@@ -144,43 +142,44 @@ def test_rechecks_workout_state_immediately_before_queueing(capsys):
 
     operation.run()
 
-    pubsub_manager.msg.assert_not_called()
+    rebuild_func.assert_not_called()
     output = capsys.readouterr().out
     assert "no longer eligible" in output
-    assert "Rebuild requests queued: 0" in output
+    assert "Workouts rebuilt: 0" in output
     assert "Workouts skipped: 1" in output
 
 
 def test_confirmation_must_match_exactly(capsys):
     workouts = [_workout("workout-a", WorkoutStates.READY.value)]
-    operation, _, _, pubsub_manager = _operation(
+    operation, _, _, rebuild_func = _operation(
         answers=["1", "1", "rebuild"],
         workouts=workouts,
     )
 
     operation.run()
 
-    pubsub_manager.msg.assert_not_called()
+    rebuild_func.assert_not_called()
     assert "Confirmation did not match" in capsys.readouterr().out
 
 
-def test_no_units_returns_without_prompting_or_publishing(capsys):
+def test_no_units_returns_without_prompting_or_rebuilding(capsys):
     input_func = MagicMock()
     db_queries = MagicMock()
     db_queries.get_active.return_value = []
-    pubsub_manager = MagicMock()
+    rebuild_func = MagicMock()
     operation = RebuildWorkouts(
         project=PROJECT,
         db=MagicMock(),
         db_queries=db_queries,
-        pubsub_manager=pubsub_manager,
+        cloud_env=CLOUD_ENV,
         input_func=input_func,
+        rebuild_func=rebuild_func,
     )
 
     operation.run()
 
     input_func.assert_not_called()
-    pubsub_manager.msg.assert_not_called()
+    rebuild_func.assert_not_called()
     assert "No rebuildable Units" in capsys.readouterr().out
 
 
@@ -193,19 +192,20 @@ def test_units_in_transitional_or_teardown_states_are_not_offered(capsys):
         {**UNIT, "id": "unit-expired", "state": UnitStates.EXPIRED.value},
         {**UNIT, "id": "unit-deleting", "state": UnitStates.DELETING_SERVERS.value},
     ]
-    pubsub_manager = MagicMock()
+    rebuild_func = MagicMock()
     operation = RebuildWorkouts(
         project=PROJECT,
         db=MagicMock(),
         db_queries=db_queries,
-        pubsub_manager=pubsub_manager,
+        cloud_env=CLOUD_ENV,
         input_func=input_func,
+        rebuild_func=rebuild_func,
     )
 
     operation.run()
 
     input_func.assert_not_called()
-    pubsub_manager.msg.assert_not_called()
+    rebuild_func.assert_not_called()
     assert "No rebuildable Units" in capsys.readouterr().out
 
 
@@ -222,8 +222,9 @@ def test_solo_unit_in_start_state_is_offered(capsys):
         project=PROJECT,
         db=MagicMock(),
         db_queries=db_queries,
-        pubsub_manager=MagicMock(),
+        cloud_env=CLOUD_ENV,
         input_func=lambda _: "1",
+        rebuild_func=MagicMock(),
     )
 
     operation.run()
@@ -231,12 +232,12 @@ def test_solo_unit_in_start_state_is_offered(capsys):
     assert "has no Workouts" in capsys.readouterr().out
 
 
-def test_unit_state_is_rechecked_before_each_publish(capsys):
+def test_unit_state_is_rechecked_before_each_rebuild(capsys):
     workouts = [
         _workout("workout-a", WorkoutStates.READY.value),
         _workout("workout-b", WorkoutStates.READY.value),
     ]
-    operation, db, _, pubsub_manager = _operation(
+    operation, db, _, rebuild_func = _operation(
         answers=["1", "1", "REBUILD"],
         workouts=workouts,
     )
@@ -256,14 +257,14 @@ def test_unit_state_is_rechecked_before_each_publish(capsys):
 
     operation.run()
 
-    assert pubsub_manager.msg.call_args_list == [_rebuild_call("workout-a")]
+    assert rebuild_func.call_args_list == [_rebuild_call("workout-a")]
     output = capsys.readouterr().out
     assert "Unit unit-1 is no longer eligible" in output
     assert "Workouts skipped: 1" in output
 
 
-def test_unit_without_workouts_returns_without_publishing(capsys):
-    operation, _, db_queries, pubsub_manager = _operation(
+def test_unit_without_workouts_returns_without_rebuilding(capsys):
+    operation, _, db_queries, rebuild_func = _operation(
         answers=["1"],
         workouts=[],
     )
@@ -274,64 +275,86 @@ def test_unit_without_workouts_returns_without_publishing(capsys):
         parent_id=UNIT["id"],
         child_collection=DbCollections.WORKOUT,
     )
-    pubsub_manager.msg.assert_not_called()
+    rebuild_func.assert_not_called()
     assert "has no Workouts" in capsys.readouterr().out
 
 
 def test_invalid_unit_selection_retries_and_scope_can_cancel(capsys):
     workouts = [_workout("workout-a", WorkoutStates.READY.value)]
-    operation, _, _, pubsub_manager = _operation(
+    operation, _, _, rebuild_func = _operation(
         answers=["not-a-unit", "1", "0"],
         workouts=workouts,
     )
 
     operation.run()
 
-    pubsub_manager.msg.assert_not_called()
+    rebuild_func.assert_not_called()
     output = capsys.readouterr().out
     assert "Select a listed Unit number" in output
     assert "Workout rebuild cancelled" in output
 
 
-def test_queue_failure_does_not_prevent_later_requests(capsys):
+def test_rebuild_failure_does_not_prevent_later_workouts(capsys):
     workouts = [
         _workout("workout-a", WorkoutStates.READY.value),
         _workout("workout-b", WorkoutStates.BROKEN.value),
     ]
-    operation, _, _, pubsub_manager = _operation(
+    operation, _, _, rebuild_func = _operation(
         answers=["1", "1", "REBUILD"],
         workouts=workouts,
     )
-    pubsub_manager.msg.side_effect = [RuntimeError("publisher unavailable"), None]
+    rebuild_func.side_effect = [RuntimeError("delete failed"), True]
 
     operation.run()
 
-    assert pubsub_manager.msg.call_args_list == [
+    assert rebuild_func.call_args_list == [
         _rebuild_call("workout-a"),
         _rebuild_call("workout-b"),
     ]
     output = capsys.readouterr().out
-    assert "Rebuild requests queued: 1" in output
-    assert "Queue failures: 1" in output
+    assert "Workouts rebuilt: 1" in output
+    assert "Rebuild failures: 1" in output
     assert "Failed Workout IDs: workout-a" in output
 
 
-def test_publish_acknowledgement_failure_is_reported_as_a_queue_failure(capsys):
+def test_false_rebuild_result_is_reported_as_a_failure(capsys):
     workouts = [_workout("workout-a", WorkoutStates.READY.value)]
-    operation, _, _, pubsub_manager = _operation(
+    operation, _, _, rebuild_func = _operation(
         answers=["1", "1", "REBUILD"],
         workouts=workouts,
     )
-    pubsub_manager.msg.return_value.result.side_effect = TimeoutError(
-        "publish acknowledgement timed out"
-    )
+    rebuild_func.return_value = False
 
     operation.run()
 
     output = capsys.readouterr().out
-    assert "Rebuild requests queued: 0" in output
-    assert "Queue failures: 1" in output
-    assert "No rebuild requests were queued" in output
+    assert "Workouts rebuilt: 0" in output
+    assert "Rebuild failures: 1" in output
+    assert "No Workouts were rebuilt" in output
+
+
+def test_rebuild_uses_the_workout_factory_in_direct_debug_mode():
+    factory = MagicMock()
+    workout = MagicMock()
+    workout.nuke.return_value = True
+    factory.create_workout_object.return_value = workout
+    operation = RebuildWorkouts(
+        project=PROJECT,
+        db=MagicMock(),
+        db_queries=MagicMock(),
+        cloud_env=CLOUD_ENV,
+        workout_factory=factory,
+    )
+
+    rebuilt = operation._rebuild_workout("workout-a")
+
+    assert rebuilt is True
+    factory.create_workout_object.assert_called_once_with(
+        workout_id="workout-a",
+        debug=True,
+        env_dict={"project": PROJECT},
+    )
+    workout.nuke.assert_called_once_with()
 
 
 def test_constructor_rejects_an_environment_for_a_different_project():
