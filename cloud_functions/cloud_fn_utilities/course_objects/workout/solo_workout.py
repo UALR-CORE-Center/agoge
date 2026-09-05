@@ -1,7 +1,7 @@
 from common.constants.database import DbCollections
 from common.constants.pub_sub import PubSub
 from common.utilities.timestamps import Timestamps
-from common.models.agoge import WorkoutModel, UnitModel
+from common.models.agoge import ServerModel, UnitModel, WorkoutModel
 
 from cloud_fn_utilities.server_specific.guacamole.display_proxy import DisplayProxy
 from ...server_specific.firewall_server import FirewallServer
@@ -283,6 +283,49 @@ class SoloWorkout(BaseWorkout):
         :return:
         """
         return self._nuke_servers()
+
+    def _recover_server_records(self) -> list[dict]:
+        """Recreate missing child records from the stored Solo Workout spec.
+
+        A failed or legacy provision can leave the VM specification embedded in
+        the Workout while its ``agoge-server`` child document is absent. Direct
+        rebuilds need that child document both to delete an existing VM and to
+        build its replacement.
+        """
+        recovered_records = []
+        for stored_server in self.workout.servers or []:
+            if stored_server.community_server:
+                continue
+
+            server: ServerModel = stored_server.model_copy(deep=True)
+            server_name = f"{self.workout_id}-{server.name}"
+            server.parent_id = self.workout_id
+            server.parent_build_type = self.workout.build_type
+            server.firewall_rules = self.workout.firewall_rules or []
+
+            if any(nic.direct_connect for nic in server.nics or []):
+                if not server.hostname:
+                    server.hostname = f"{server_name}{self.env.parent_dns_suffix}"
+                direct_connect_tag = f"{self.workout_id}-direct-connect"
+                server.tags = list(server.tags or [])
+                if direct_connect_tag not in server.tags:
+                    server.tags.append(direct_connect_tag)
+
+            server_record = server.model_dump()
+            self.db.update(
+                collection_name=DbCollections.SERVER,
+                doc_id=server_name,
+                data=server_record,
+            )
+            recovered_records.append(server_record)
+
+        if recovered_records:
+            self.logger.warning(
+                f"{self.class_name}:{self.workout_id} - Recovered "
+                f"{len(recovered_records)} missing server record(s) from the "
+                "stored Workout specification."
+            )
+        return recovered_records
 
     def __set_promiscuous_mode(self, network=None):
         """Checks if promiscuous mode is enabled in network"""

@@ -79,7 +79,7 @@ def test_nuke_rebuilds_only_servers_parented_to_the_community_workout():
         call(
             collection_name=DbCollections.WORKOUT,
             doc_id="workout-a",
-            data={"shutoff_timestamp": ANY},
+            data={"active": True, "shutoff_timestamp": ANY},
         ),
     ]
     assert workout.pubsub_manager.msg.call_args_list == [

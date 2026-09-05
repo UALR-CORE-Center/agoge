@@ -183,9 +183,12 @@ class BaseWorkout(ABC):
 
         servers_to_nuke = self.db_queries.get_servers(parent_id=self.workout_id)
         if not servers_to_nuke:
+            servers_to_nuke = self._recover_server_records()
+        if not servers_to_nuke:
             self.logger.warning(
                 f"{self.class_name}:{self.workout_id} - No server records were "
-                "found; there is nothing to rebuild."
+                "found and none could be recovered from the Workout specification; "
+                "there is nothing to rebuild."
             )
             return False
 
@@ -247,6 +250,7 @@ class BaseWorkout(ABC):
                 collection_name=DbCollections.WORKOUT,
                 doc_id=self.workout_id,
                 data={
+                    "active": True,
                     "shutoff_timestamp": Timestamps.get_current_timestamp_utc(
                         add_seconds=self.duration_seconds
                     )
@@ -266,6 +270,10 @@ class BaseWorkout(ABC):
             f"{len(server_names)} server(s)."
         )
         return True
+
+    def _recover_server_records(self) -> list[dict]:
+        """Recover missing child server records when a subclass can do so safely."""
+        return []
 
     def _claim_workout_rebuild_transaction(self, transaction) -> bool:
         """Atomically validate the Unit and claim the Workout."""
