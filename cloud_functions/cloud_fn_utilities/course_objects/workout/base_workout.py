@@ -208,6 +208,8 @@ class BaseWorkout(ABC):
                 )
                 return False
 
+            self._prepare_rebuild_infrastructure()
+
             reset_timestamp = datetime.now(timezone.utc).isoformat()
             for server_name in server_names:
                 self.db.update(
@@ -274,6 +276,9 @@ class BaseWorkout(ABC):
     def _recover_server_records(self) -> list[dict]:
         """Recover missing child server records when a subclass can do so safely."""
         return []
+
+    def _prepare_rebuild_infrastructure(self) -> None:
+        """Ensure subclass-specific prerequisites exist before rebuilding servers."""
 
     def _claim_workout_rebuild_transaction(self, transaction) -> bool:
         """Atomically validate the Unit and claim the Workout."""

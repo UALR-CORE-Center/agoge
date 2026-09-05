@@ -284,6 +284,22 @@ class SoloWorkout(BaseWorkout):
         """
         return self._nuke_servers()
 
+    def _prepare_rebuild_infrastructure(self) -> None:
+        """Idempotently restore Solo network prerequisites before VM rebuilds.
+
+        A partially provisioned Workout can have its specification and server
+        records without the corresponding VPC or subnet. ``VpcManager.build``
+        treats existing resources as conflicts and continues, so it can safely
+        repair only the missing pieces before the replacement VM is created.
+        """
+        networks = self.workout.networks or []
+        for network in networks:
+            self.vpc_manager.build(network=network)
+
+        firewall_rules = self.workout.firewall_rules or []
+        if firewall_rules:
+            self.firewall_manager.build(self.workout_id, firewall_rules)
+
     def _recover_server_records(self) -> list[dict]:
         """Recreate missing child records from the stored Solo Workout spec.
 

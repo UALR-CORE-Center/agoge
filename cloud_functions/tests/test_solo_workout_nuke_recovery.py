@@ -8,13 +8,14 @@ from common.constants.states import ServerStates, UnitStates, WorkoutStates
 from common.models.agoge import ServerModel
 
 
-def _solo_workout(*, servers: list[ServerModel]) -> SoloWorkout:
+def _solo_workout(*, servers: list[ServerModel], networks: list = None) -> SoloWorkout:
     workout = object.__new__(SoloWorkout)
     workout.class_name = "SoloWorkout"
     workout.workout_id = "workout-a"
     workout.workout = SimpleNamespace(
         build_type="workout",
         firewall_rules=[],
+        networks=networks or [],
         servers=servers,
     )
     workout.unit_model = SimpleNamespace(
@@ -31,6 +32,8 @@ def _solo_workout(*, servers: list[ServerModel]) -> SoloWorkout:
     workout.db_queries = MagicMock()
     workout.db_queries.get_servers.return_value = []
     workout.compute_manager = MagicMock()
+    workout.vpc_manager = MagicMock()
+    workout.firewall_manager = MagicMock()
     workout.state_manager = MagicMock()
     workout.state_manager.get_state.return_value = WorkoutStates.READY.value
     workout.state_manager.are_server_builds_finished.return_value = True
@@ -103,3 +106,26 @@ def test_direct_nuke_still_refuses_when_no_server_spec_can_be_recovered():
     workout.db.update.assert_not_called()
     workout.compute_manager.load.assert_not_called()
     workout.logger.warning.assert_called_once()
+
+
+def test_direct_nuke_repairs_solo_network_before_rebuilding_server():
+    embedded_server = ServerModel(
+        name="kali",
+        image="image-kali",
+        nics=[{"network": "external", "subnet_name": "default"}],
+    )
+    network = SimpleNamespace(name="external")
+    workout = _solo_workout(servers=[embedded_server], networks=[network])
+    operation_order = []
+    workout.vpc_manager.build.side_effect = lambda **_: operation_order.append(
+        "network"
+    )
+    workout.compute_manager.nuke.side_effect = lambda: operation_order.append(
+        "server"
+    )
+
+    rebuilt = workout.nuke()
+
+    assert rebuilt is True
+    workout.vpc_manager.build.assert_called_once_with(network=network)
+    assert operation_order == ["network", "server"]
