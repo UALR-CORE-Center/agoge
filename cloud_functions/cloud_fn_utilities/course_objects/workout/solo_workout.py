@@ -94,15 +94,8 @@ class SoloWorkout(BaseWorkout):
                 server.parent_build_type = self.workout.build_type
                 server.firewall_rules = self.workout.firewall_rules or []
 
-                # If direct connect is true, create the hostname that will be used to access this machine
-                # direct_connect = False
-                direct_connect = any(bool(nic.direct_connect) for nic in server.nics)
-                if direct_connect:
-                    server.hostname = f'{server_name}{self.env.parent_dns_suffix}'
-                    if server.tags is None:
-                        server.tags = [f"{self.workout_id}-direct-connect"]
-                    else:
-                        server.tags.append(f"{self.workout_id}-direct-connect")
+                # Persist generated runtime connection settings for the web UI.
+                if self._configure_direct_connect_server(server, server_name):
                     self.update_record(doc_id=self.workout_id, data=self.workout, update_keys=['servers'])
 
                 self.db.update(
@@ -305,6 +298,7 @@ class SoloWorkout(BaseWorkout):
         server_records: list[dict],
     ) -> list[dict]:
         """Restore a missing Guacamole child record from the Workout spec."""
+        server_records = self._synchronize_direct_connect_servers(server_records)
         if not self.workout.networks:
             return server_records
 
@@ -329,6 +323,85 @@ class SoloWorkout(BaseWorkout):
         display_server_record = display_proxy.prepare_server_record()
         return [*server_records, display_server_record]
 
+    def _synchronize_direct_connect_servers(
+        self,
+        server_records: list[dict],
+    ) -> list[dict]:
+        """Keep runtime hostnames consistent in child and embedded records."""
+        records_by_name = {
+            str(record.get("name")): record
+            for record in server_records
+            if record.get("name")
+        }
+        workout_updated = False
+
+        for embedded_server in self.workout.servers or []:
+            server_name = f"{self.workout_id}-{embedded_server.name}"
+            if not any(
+                bool(nic.direct_connect) for nic in embedded_server.nics or []
+            ):
+                continue
+
+            if self._configure_direct_connect_server(
+                embedded_server,
+                server_name,
+            ):
+                workout_updated = True
+
+            child_record = records_by_name.get(embedded_server.name)
+            if child_record is None:
+                continue
+
+            child_tags = list(child_record.get("tags") or [])
+            direct_connect_tag = f"{self.workout_id}-direct-connect"
+            child_updated = child_record.get("hostname") != embedded_server.hostname
+            if direct_connect_tag not in child_tags:
+                child_tags.append(direct_connect_tag)
+                child_updated = True
+
+            if child_updated:
+                child_record["hostname"] = embedded_server.hostname
+                child_record["tags"] = child_tags
+                self.db.update(
+                    collection_name=DbCollections.SERVER,
+                    doc_id=server_name,
+                    data={
+                        "hostname": embedded_server.hostname,
+                        "tags": child_tags,
+                    },
+                )
+
+        if workout_updated:
+            self.update_record(
+                doc_id=self.workout_id,
+                data=self.workout,
+                update_keys=["servers"],
+            )
+        return server_records
+
+    def _configure_direct_connect_server(
+        self,
+        server: ServerModel,
+        server_name: str,
+    ) -> bool:
+        """Set the deterministic hostname and tag for a direct-connect server."""
+        if not any(bool(nic.direct_connect) for nic in server.nics or []):
+            return False
+
+        updated = False
+        hostname = f"{server_name}{self.env.parent_dns_suffix}"
+        if server.hostname != hostname:
+            server.hostname = hostname
+            updated = True
+
+        direct_connect_tag = f"{self.workout_id}-direct-connect"
+        tags = list(server.tags or [])
+        if direct_connect_tag not in tags:
+            tags.append(direct_connect_tag)
+            server.tags = tags
+            updated = True
+        return updated
+
     def _recover_server_records(self) -> list[dict]:
         """Recreate missing child records from the stored Solo Workout spec.
 
@@ -348,13 +421,7 @@ class SoloWorkout(BaseWorkout):
             server.parent_build_type = self.workout.build_type
             server.firewall_rules = self.workout.firewall_rules or []
 
-            if any(nic.direct_connect for nic in server.nics or []):
-                if not server.hostname:
-                    server.hostname = f"{server_name}{self.env.parent_dns_suffix}"
-                direct_connect_tag = f"{self.workout_id}-direct-connect"
-                server.tags = list(server.tags or [])
-                if direct_connect_tag not in server.tags:
-                    server.tags.append(direct_connect_tag)
+            self._configure_direct_connect_server(server, server_name)
 
             server_record = server.model_dump()
             self.db.update(

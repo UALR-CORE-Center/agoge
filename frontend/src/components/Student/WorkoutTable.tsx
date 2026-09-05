@@ -14,11 +14,11 @@ interface WorkoutTableProps {
 
 const WorkoutTable: React.FC<WorkoutTableProps> = ({ workoutFull }) => {
     const servers =
-        workoutFull?.workout?.servers
+        (workoutFull?.servers ?? workoutFull?.workout?.servers)
             ?.filter(server => !server.hidden)
             ?.filter(server => !server.dns_hostname)
         || [];
-    const sortedServers = servers.sort((a, b) => {
+    const sortedServers = [...servers].sort((a, b) => {
         const nameA = a.name?.toString() || '';
         const nameB = b.name?.toString() || '';
         return nameA.localeCompare(nameB);

@@ -36,6 +36,7 @@ def _solo_workout(*, servers: list[ServerModel], networks: list = None) -> SoloW
     workout.compute_manager = MagicMock()
     workout.vpc_manager = MagicMock()
     workout.firewall_manager = MagicMock()
+    workout.update_record = MagicMock(return_value=workout.workout)
     workout._recover_auxiliary_server_records = MagicMock(
         side_effect=lambda records: records
     )
@@ -210,6 +211,102 @@ def test_direct_nuke_does_not_recreate_an_existing_guacamole_record():
     assert rebuilt is True
     display_proxy_cls.assert_not_called()
     assert workout.compute_manager.nuke.call_count == 2
+
+
+def test_direct_nuke_synchronizes_hostname_into_the_embedded_workout_server():
+    embedded_server = ServerModel(
+        name="kali",
+        image="image-kali",
+        nics=[
+            {
+                "network": "external",
+                "subnet_name": "default",
+                "direct_connect": True,
+                "external_nat": True,
+            }
+        ],
+        tags=[],
+    )
+    expected_hostname = "workout-a-kali.labs.example"
+    workout = _solo_workout(
+        servers=[embedded_server],
+        networks=[SimpleNamespace(name="external")],
+    )
+    workout.db_queries.get_servers.return_value = [
+        {
+            "parent_id": "workout-a",
+            "name": "kali",
+            "hostname": expected_hostname,
+            "tags": ["workout-a-direct-connect"],
+        },
+        {
+            "parent_id": "workout-a",
+            "name": "display-guacamole-server",
+        },
+    ]
+    del workout._recover_auxiliary_server_records
+
+    rebuilt = workout.nuke()
+
+    assert rebuilt is True
+    assert embedded_server.hostname == expected_hostname
+    assert embedded_server.tags == ["workout-a-direct-connect"]
+    workout.update_record.assert_called_once_with(
+        doc_id="workout-a",
+        data=workout.workout,
+        update_keys=["servers"],
+    )
+
+
+def test_direct_nuke_repairs_a_missing_hostname_in_the_child_server_record():
+    expected_hostname = "workout-a-kali.labs.example"
+    embedded_server = ServerModel(
+        name="kali",
+        image="image-kali",
+        nics=[
+            {
+                "network": "external",
+                "subnet_name": "default",
+                "direct_connect": True,
+                "external_nat": True,
+            }
+        ],
+        hostname=expected_hostname,
+        tags=["workout-a-direct-connect"],
+    )
+    main_server_record = {
+        "parent_id": "workout-a",
+        "name": "kali",
+        "hostname": None,
+        "tags": [],
+    }
+    workout = _solo_workout(
+        servers=[embedded_server],
+        networks=[SimpleNamespace(name="external")],
+    )
+    workout.db_queries.get_servers.return_value = [
+        main_server_record,
+        {
+            "parent_id": "workout-a",
+            "name": "display-guacamole-server",
+        },
+    ]
+    del workout._recover_auxiliary_server_records
+
+    rebuilt = workout.nuke()
+
+    assert rebuilt is True
+    assert main_server_record["hostname"] == expected_hostname
+    assert main_server_record["tags"] == ["workout-a-direct-connect"]
+    workout.update_record.assert_not_called()
+    workout.db.update.assert_any_call(
+        collection_name=DbCollections.SERVER,
+        doc_id="workout-a-kali",
+        data={
+            "hostname": expected_hostname,
+            "tags": ["workout-a-direct-connect"],
+        },
+    )
 
 
 def test_display_proxy_build_prepares_its_record_before_compute_creation():
