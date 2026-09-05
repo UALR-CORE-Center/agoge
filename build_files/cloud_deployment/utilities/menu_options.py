@@ -117,7 +117,7 @@ category_menu = {
         ],
     },
     SetupCategories.PROJECTS: {
-        "label": "GCP Project Management",
+        "label": "GCP Project Management & Maintenance",
         "options": [
             (SetupOptions.PROJECT_CREATION, SetupOptions.PROJECT_CREATION.description),
             (SetupOptions.PROJECT_EDIT, SetupOptions.PROJECT_EDIT.description),
