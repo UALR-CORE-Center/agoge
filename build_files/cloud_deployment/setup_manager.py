@@ -102,7 +102,9 @@ class SetupManager:
 
             operation_class = get_project_maintenance_operation(choice)
             if operation_class:
-                operation_class().run()
+                operation_kwargs = {}
+                if getattr(operation_class, "REQUIRES_PROJECT", False):
+                    operation_kwargs["project"] = self.project
+                operation_class(**operation_kwargs).run()
             else:
                 print(f"Unsupported maintenance selection: {selection}")
-

@@ -165,8 +165,8 @@ class CommunityWorkout(BaseWorkout):
         pass
 
     def nuke(self):
-        """Community workout nuking takes place at the Unit level"""
-        pass
+        """Rebuild only the servers owned by this student workout."""
+        self._nuke_servers(network_prefix=self.unit_id)
 
     def __send_server_build_msg(self, server: ServerModel):
         """

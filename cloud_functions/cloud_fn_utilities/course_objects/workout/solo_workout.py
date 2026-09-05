@@ -282,31 +282,7 @@ class SoloWorkout(BaseWorkout):
         using the specification already stored in the Datastore object
         :return:
         """
-        self._add_build_action(PubSub.Actions.NUKE.value, True)
-        servers_to_nuke = self.db_queries.get_servers(parent_id=self.workout_id)
-        for server in servers_to_nuke:
-            server_name = f'{server["parent_id"]}-{server["name"]}'
-            if self.debug:
-                try:
-                    self.compute_manager.load(server_name=server_name)
-                    self.compute_manager.nuke()
-                except LookupError:
-                    continue
-            else:
-                self.pubsub_manager.msg(
-                    handler=str(PubSub.Handlers.CONTROL.value),
-                    action=str(PubSub.Actions.NUKE.value),
-                    build_id=str(server_name),
-                    course_object=str(PubSub.CourseObjects.LAB_SERVER.value)
-                )
-
-        if not self.state_manager.are_server_builds_finished():
-            self.state_manager.state_transition(self.s.BROKEN)
-            self.logger.error(f"{self.class_name}:{self.workout_id} - Workout timed out waiting for server builds "
-                              f"to complete!")
-        else:
-            self.state_manager.state_transition(self.s.READY)
-            self.logger.info(f"{self.class_name}:{self.workout_id} - Finished nuking Workout!")
+        self._nuke_servers()
 
     def __set_promiscuous_mode(self, network=None):
         """Checks if promiscuous mode is enabled in network"""

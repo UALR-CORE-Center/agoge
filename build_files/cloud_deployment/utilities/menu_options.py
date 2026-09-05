@@ -74,6 +74,7 @@ class ProjectMaintenanceOptions(bytes, Enum):
 
     REIMAGE_GUACAMOLE = (1, "Reimage Guacamole Server (Refresh TLS Certificate)")
     EXTEND_PROJECT_EXPIRATION = (2, "Extend Project Expiration Date")
+    REBUILD_WORKOUTS = (3, "Rebuild All or Selected Workouts in a Unit")
     BACK = (99, "Back")
 
 
@@ -203,6 +204,7 @@ def get_user_selection(max_choice: int) -> int:
 
 from cloud_deployment.operations.project_maintenance.rebuild_guacamole_for_unit import RebuildGuacamoleForUnit
 from cloud_deployment.operations.project_maintenance.extend_project_expiration import ExtendWorkoutExpirations
+from cloud_deployment.operations.project_maintenance.rebuild_workouts import RebuildWorkouts
 
 
 PROJECT_MAINTENANCE_REGISTRY = [
@@ -215,6 +217,11 @@ PROJECT_MAINTENANCE_REGISTRY = [
         "option": ProjectMaintenanceOptions.EXTEND_PROJECT_EXPIRATION,
         "description": ProjectMaintenanceOptions.EXTEND_PROJECT_EXPIRATION.description,
         "operation_class": ExtendWorkoutExpirations,
+    },
+    {
+        "option": ProjectMaintenanceOptions.REBUILD_WORKOUTS,
+        "description": ProjectMaintenanceOptions.REBUILD_WORKOUTS.description,
+        "operation_class": RebuildWorkouts,
     },
     {
         "option": ProjectMaintenanceOptions.BACK,
