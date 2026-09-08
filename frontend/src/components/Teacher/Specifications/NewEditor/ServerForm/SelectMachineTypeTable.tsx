@@ -11,13 +11,13 @@ import {
     Typography,
     useTheme
 } from '@mui/material';
-import {GridRowSelectionModel} from "@mui/x-data-grid";
 import {
     GridColDef,
     GridFilterListIcon,
     GridFilterModel,
+    GridRowSelectionModel,
     useGridApiRef
-} from '@mui/x-data-grid-pro';
+} from '@mui/x-data-grid';
 import {ClearIcon} from "@mui/x-date-pickers";
 import React, {useEffect, useState} from "react";
 import {ServerMachineTypes} from "../../../../../services/Specification/specificationEdit.model";

@@ -13,16 +13,16 @@ import {TypographyProps} from "@mui/material";
 import {useTheme} from "@mui/material/styles";
 import { SxProps } from "@mui/system";
 import {
-    DataGridPro,
+    DataGrid,
     GridRowHeightReturnValue,
     GridToolbar,
-    DataGridProProps,
-} from "@mui/x-data-grid-pro";
+    DataGridProps as MuiDataGridProps,
+} from "@mui/x-data-grid";
 import React, {useState, useEffect, useId} from "react";
 import {CustomPagination} from "./CustomPagination";
 
 
-interface DataGridProps extends DataGridProProps {
+interface DataGridProps extends MuiDataGridProps {
     data: any[];
     loading?: boolean;
     labelProps?: {
@@ -164,7 +164,7 @@ const StyledDataGrid: React.FC<DataGridProps> = ({
             );
         } else {
             return (
-                <DataGridPro
+                <DataGrid
                     aria-labelledby={props.labelProps?.text ? headingId : undefined}
                     {...props}
                     {...autoHeightProps()}
