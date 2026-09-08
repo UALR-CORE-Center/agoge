@@ -1,12 +1,12 @@
 import {TablePaginationProps} from "@mui/material";
 import MuiPagination from "@mui/material/Pagination";
 import {
-    GridApiPro,
+    GridApi,
     gridPageCountSelector,
     GridPagination,
     useGridApiContext,
     useGridSelector
-} from "@mui/x-data-grid-pro";
+} from "@mui/x-data-grid";
 import React from "react";
 
 function Pagination(
@@ -15,7 +15,7 @@ function Pagination(
     onPageChange,
     className,
 }: Pick<TablePaginationProps, 'page' | 'onPageChange' | 'className'>) {
-    const apiRef = useGridApiContext<GridApiPro>();
+    const apiRef = useGridApiContext<GridApi>();
     const pageCount = useGridSelector(apiRef, gridPageCountSelector) as number;
 
     return (
