@@ -105,7 +105,9 @@ const UnitRubricEditor: React.FC<UnitRubricEditorProps> = (props) => {
         [navigate]
     );
 
-    // Generates Rubric only if none exists
+    // Generate a rubric only after the instructor explicitly opens the editor.
+    // Mounting the unit page must not spend OpenAI credits or make the unit build
+    // appear to fail when rubric generation is unavailable.
     const generateRubric = useCallback(async () => {
         // Helps against multiple generation attempts or if user isn't authed or no build_id is available
         if (!firebaseUser.user || !build_id || hasGenerated || isGenerating) return;
@@ -139,7 +141,7 @@ const UnitRubricEditor: React.FC<UnitRubricEditorProps> = (props) => {
         } finally {
             setIsGenerating(false);
         }
-    }, [firebaseUser.user, build_id, handleError]);
+    }, [firebaseUser.user, build_id, hasGenerated, isGenerating, props.buildId, handleError]);
 
     const fetchData = useCallback(async () => {
         setIsLoading(true);
@@ -154,14 +156,10 @@ const UnitRubricEditor: React.FC<UnitRubricEditorProps> = (props) => {
     }, [build_id, handleError]);
 
     useEffect(() => {
-        generateRubric();
-    }, [generateRubric]);
-
-    useEffect(() => {
         if (!isGenerating && open) {
             fetchData();
         }
-    }, [isGenerating, open]);
+    }, [isGenerating, open, fetchData]);
 
     const StyledTableCell = styled(TableCell)(({ theme }) => ({
         // This is for the Blue Header on the edit rubric
