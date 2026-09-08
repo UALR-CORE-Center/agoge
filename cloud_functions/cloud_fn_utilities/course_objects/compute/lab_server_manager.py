@@ -1,3 +1,5 @@
+from google.api_core.exceptions import NotFound as GoogleNotFound
+
 from cloud_fn_utilities.course_objects.compute.base_compute_manager import BaseComputeManager
 from cloud_fn_utilities.gcp.address_manager import AddressManager
 from cloud_fn_utilities.gcp.dns_manager import DnsManager
@@ -134,7 +136,7 @@ class LabServerManager(BaseComputeManager):
         if current_state != self.s.RUNNING.value:
             self._start_server()
         if (
-            self.server_spec.wireguard_endpoint_id
+            self._wireguard_endpoint_id()
             and self.state_manager.get_state() == self.s.RUNNING.value
         ):
             try:
@@ -151,11 +153,11 @@ class LabServerManager(BaseComputeManager):
     def stop(self) -> None:
         self._stop_server()
         if (
-            self.server_spec.wireguard_endpoint_id
+            self._wireguard_endpoint_id()
             and self.state_manager.get_state() == self.s.STOPPED.value
         ):
             self.wireguard_registry.mark_reserved(
-                self.server_spec.wireguard_endpoint_id,
+                self._wireguard_endpoint_id(),
                 unit_id=self.parent_build_id,
             )
 
@@ -192,7 +194,7 @@ class LabServerManager(BaseComputeManager):
         if dns_record := self._dns_record():
             self.logger.info(f'{self.class_name}:{self.server_name} - Deleting DNS record for server, '
                              f'{self.parent_build_id}')
-            if self.server_spec.wireguard_endpoint_id:
+            if self._wireguard_endpoint_id():
                 # A delayed delete can arrive after the five-digit ID has been
                 # purged and assigned to another Unit. Only delete the RRset
                 # when this Unit still owns the endpoint and the A record still
@@ -220,10 +222,12 @@ class LabServerManager(BaseComputeManager):
                     self.state_manager.state_transition(self.s.BROKEN)
                 self._mark_wireguard_endpoint_error()
                 return False
-        except NotFound:
+        except (NotFound, GoogleNotFound):
             # If the resource can't be found, it was either already deleted or never created
-            self.logger.error(f'{self.class_name}:{self.server_name} - Deletion request returned status code 404. '
-                              f'Marking {self.parent_build_id} server as deleted!')
+            self.logger.info(
+                f'{self.class_name}:{self.server_name} - Server is already absent; '
+                'continuing with the rebuild.'
+            )
         except (BadRequest, BaseAgogeException):
             if state_transition:
                 self.state_manager.state_transition(self.s.BROKEN)
@@ -260,8 +264,8 @@ class LabServerManager(BaseComputeManager):
         Then rebuilds the server.
         """
         if not self.delete():
-            raise BaseAgogeException(
-                f'Unable to rebuild {self.server_name}: teardown did not complete'
+            raise RuntimeError(
+                f"Cannot rebuild {self.server_name}: server deletion failed."
             )
         self.build()
 
@@ -393,6 +397,8 @@ class LabServerManager(BaseComputeManager):
         return requested_name if requested_name.startswith(f'{prefix}-') else f'{prefix}-{requested_name}'
 
     def _reserved_external_address_names(self) -> list[str]:
+        if not hasattr(self, 'server_spec'):
+            return []
         return [
             self._external_address_name(nic['external_ip_name'])
             for nic in (self.server_spec.nics or [])
@@ -408,9 +414,9 @@ class LabServerManager(BaseComputeManager):
         return self.address_manager.get(address_names[0]) if address_names else None
 
     def _build_routes(self) -> None:
-        if self.server_spec.routes:
+        if routes := getattr(getattr(self, 'server_spec', None), 'routes', None):
             RouteManager(self.server_spec.network_prefix or self.parent_build_id, env_dict=self.env_dict).build(
-                self.server_spec.routes
+                routes
             )
 
     def _ensure_dns_record(self) -> None:
@@ -420,17 +426,17 @@ class LabServerManager(BaseComputeManager):
                 self.server_name,
                 ip_address=self.primary_external_ip,
             )
-            if self.server_spec.wireguard_endpoint_id and not success:
+            if self._wireguard_endpoint_id() and not success:
                 raise BaseAgogeException(f'Unable to publish DNS record {dns_record}')
 
     def _delete_routes(self) -> None:
-        if self.server_spec.routes:
+        if routes := getattr(getattr(self, 'server_spec', None), 'routes', None):
             RouteManager(self.server_spec.network_prefix or self.parent_build_id, env_dict=self.env_dict).delete(
-                self.server_spec.routes
+                routes
             )
 
     def _activate_wireguard_endpoint(self) -> None:
-        if endpoint_id := self.server_spec.wireguard_endpoint_id:
+        if endpoint_id := self._wireguard_endpoint_id():
             # Shared gateways are reactivated here after their VM starts. Repeat
             # the parent Unit's policy check so this path cannot bypass the
             # CommunityUnit build-time publication guard.
@@ -454,14 +460,14 @@ class LabServerManager(BaseComputeManager):
             )
 
     def _require_wireguard_provisionable(self) -> None:
-        if endpoint_id := self.server_spec.wireguard_endpoint_id:
+        if endpoint_id := self._wireguard_endpoint_id():
             self.wireguard_registry.require_provisionable(
                 endpoint_id,
                 unit_id=self.parent_build_id,
             )
 
     def _wireguard_action_is_blocked(self, action: str, current_state: int) -> bool:
-        if not self.server_spec.wireguard_endpoint_id:
+        if not self._wireguard_endpoint_id():
             return False
         blocked_states = (
             self._WIREGUARD_BUILD_BLOCKED_STATES
@@ -477,7 +483,7 @@ class LabServerManager(BaseComputeManager):
         return True
 
     def _stage_wireguard_endpoint(self) -> None:
-        if endpoint_id := self.server_spec.wireguard_endpoint_id:
+        if endpoint_id := self._wireguard_endpoint_id():
             self.wireguard_registry.stage(
                 endpoint_id,
                 unit_id=self.parent_build_id,
@@ -485,7 +491,7 @@ class LabServerManager(BaseComputeManager):
             )
 
     def _mark_wireguard_endpoint_error(self) -> None:
-        if endpoint_id := self.server_spec.wireguard_endpoint_id:
+        if endpoint_id := self._wireguard_endpoint_id():
             try:
                 self.wireguard_registry.mark_error(
                     endpoint_id,
@@ -497,7 +503,7 @@ class LabServerManager(BaseComputeManager):
                 )
 
     def _mark_wireguard_endpoint_releasing(self):
-        if endpoint_id := self.server_spec.wireguard_endpoint_id:
+        if endpoint_id := self._wireguard_endpoint_id():
             try:
                 return self.wireguard_registry.mark_releasing(
                     endpoint_id,
@@ -510,7 +516,7 @@ class LabServerManager(BaseComputeManager):
         return None
 
     def _release_wireguard_endpoint(self) -> None:
-        if endpoint_id := self.server_spec.wireguard_endpoint_id:
+        if endpoint_id := self._wireguard_endpoint_id():
             try:
                 self.wireguard_registry.release(endpoint_id, unit_id=self.parent_build_id)
             except (NotFound, BadRequest) as error:
@@ -519,4 +525,10 @@ class LabServerManager(BaseComputeManager):
                 )
 
     def _dns_record(self) -> str | bool:
+        if not hasattr(self, 'server_spec'):
+            return False
         return self._server_dns_record()
+
+    def _wireguard_endpoint_id(self) -> str | None:
+        """Return the endpoint ID without requiring legacy specs to define it."""
+        return getattr(getattr(self, 'server_spec', None), 'wireguard_endpoint_id', None)

@@ -360,7 +360,7 @@ class BaseComputeManager:
         # WireGuard DNS is published by LabServerManager only after an
         # ownership-checked endpoint stage. Publishing here would let a delayed
         # build for a recycled five-digit ID overwrite its new owner's record.
-        if not self.server_spec.wireguard_endpoint_id and (dns_record := self._dns_record()):
+        if not getattr(self.server_spec, 'wireguard_endpoint_id', None) and (dns_record := self._dns_record()):
             self.dns_manager.add_dns_record(
                 dns_record,
                 self.server_name,
@@ -527,9 +527,9 @@ class BaseComputeManager:
         if start_success:
             # WireGuard DNS is handled after an ownership-checked endpoint stage
             # in LabServerManager.start().
-            if not self.server_spec.wireguard_endpoint_id and (dns_record := self._dns_record()):
+            if not getattr(self.server_spec, 'wireguard_endpoint_id', None) and (dns_record := self._dns_record()):
                 self.dns_manager.add_dns_record(dns_record, self.server_name)
-                if self.server_name == f'{self.parent_build_id}-display':
+                if self.server_spec.guacamole_startup_script:
                     self._wait_for_guacamole(dns_record[:-1])
 
             self.state_manager.state_transition(self.s.RUNNING)

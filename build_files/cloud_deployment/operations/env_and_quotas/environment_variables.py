@@ -21,7 +21,7 @@ class EnvironmentVariables:
     VARIABLES = ['dns_suffix', 'dnszone', 'main_app_url', 'admin_email', 'project_number', 'max_workspaces',
                  'default_server_image_project', 'firebase_auth_domain', 'app_sub_domain', 'parent_project',
                  'parent_dnszone', 'parent_dns_suffix', 'wireguard_dns_prefix',
-                 'wireguard_dns_suffix', 'wireguard_port']
+                 'wireguard_dns_suffix', 'wireguard_port', 'project_path']
     SECRET_VARIABLES = ['api_key', 'sendgrid_api_key', 'shodan_api_key', 'openai_api_key', 'jwt_private_key','jwt_public_key']
     WIREGUARD_DEFAULTS = {
         'wireguard_dns_prefix': 'wg',

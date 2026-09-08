@@ -41,6 +41,10 @@ class ControlHandler:
         self.user = self.event_attributes.get(self.event_attr_keys.USER, None)
         self.snapshot_name = self.event_attributes.get(self.event_attr_keys.SNAPSHOT_NAME, None)
         self.server_name = self.event_attributes.get(self.event_attr_keys.SERVER_NAME, None)
+        self.network_prefix = self.event_attributes.get(
+            self.event_attr_keys.NETWORK_PREFIX,
+            None,
+        )
         self.expires = self.event_attributes.get(self.event_attr_keys.EXPIRES, None)
         self.snapshot_type = self.event_attributes.get(self.event_attr_keys.SNAPSHOT_TYPE, SnapshotTypes.AUTO.value)
 
@@ -217,7 +221,10 @@ class ControlHandler:
     def _nuke(self) -> None:
         if self.course_object == str(PubSub.CourseObjects.LAB_SERVER.value):
             cm = ComputeManagerFactory.create_manager_object(env_dict=self.env_dict)
-            cm.load(server_name=self.build_id)
+            cm.load(
+                server_name=self.build_id,
+                network_prefix=self.network_prefix,
+            )
             cm.nuke()
         elif self.course_object == str(PubSub.CourseObjects.WORKOUT.value):
             workout = WorkoutFactory.create_workout_object(

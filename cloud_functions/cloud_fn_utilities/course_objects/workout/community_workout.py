@@ -223,37 +223,9 @@ class CommunityWorkout(BaseWorkout):
                 f"{self.class_name}:{self.workout_id} - Timed out waiting for server deletions to complete!"
             )
 
-    def nuke(self):
+    def nuke(self) -> bool:
         """Rebuild only the servers owned by this student workout."""
-        self._add_build_action(PubSub.Actions.NUKE.value, True)
-        servers_to_nuke = self.db_queries.get_servers(parent_id=self.workout_id)
-        for server in servers_to_nuke:
-            server_name = f'{server["parent_id"]}-{server["name"]}'
-            if self.debug:
-                try:
-                    self.compute_manager.load(server_name=server_name)
-                    self.compute_manager.nuke()
-                except LookupError:
-                    self.logger.warning(
-                        f"{self.class_name}:{self.workout_id} - Could not find server record "
-                        f"for {server_name}; skipping it."
-                    )
-            else:
-                self.pubsub_manager.msg(
-                    handler=str(PubSub.Handlers.CONTROL.value),
-                    action=str(PubSub.Actions.NUKE.value),
-                    build_id=server_name,
-                    course_object=str(PubSub.CourseObjects.LAB_SERVER.value)
-                )
-
-        if not self.state_manager.are_server_builds_finished():
-            self.state_manager.state_transition(self.s.BROKEN)
-            self.logger.error(
-                f"{self.class_name}:{self.workout_id} - Timed out waiting for server builds to complete!"
-            )
-        else:
-            self.state_manager.state_transition(self.s.READY)
-            self.logger.info(f"{self.class_name}:{self.workout_id} - Finished nuking Workout!")
+        return self._nuke_servers(network_prefix=self.unit_id)
 
     def __are_servers_deleted(self, server_names):
         """Do not recycle an address while a broken or deleting VM might still use it."""

@@ -23,6 +23,7 @@ class WorkoutStatesManager(BaseStateManager):
         (WorkoutStates.START.value, WorkoutStates.BUILDING_NETWORKS.value),
         (WorkoutStates.START.value, WorkoutStates.STARTING.value),
         (WorkoutStates.STARTING.value, WorkoutStates.RUNNING.value),
+        (WorkoutStates.BUILDING_SERVERS.value, WorkoutStates.RUNNING.value),
         (WorkoutStates.COMPLETED_NETWORKS.value, WorkoutStates.BUILDING_SERVERS.value),
         (WorkoutStates.BUILDING_SERVERS.value, WorkoutStates.BUILDING_FIREWALL_RULES.value),
         (WorkoutStates.BUILDING_FIREWALL_RULES.value, WorkoutStates.COMPLETED_FIREWALL_RULES.value),

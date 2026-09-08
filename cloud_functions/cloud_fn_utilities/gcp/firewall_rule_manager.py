@@ -68,10 +68,24 @@ class FirewallManager:
                     resource_name=firewall_rule_name
                 )
                 if not self._firewalls_match(existing_rule, firewall_body):
-                    raise Conflict(
-                        f'Existing firewall rule {firewall_rule_name} does not match '
-                        f'the requested configuration'
-                    ) from error
+                    if self._is_wireguard_rule(firewall_body):
+                        raise Conflict(
+                            f'Existing firewall rule {firewall_rule_name} does not match '
+                            f'the requested configuration'
+                        ) from error
+
+                    # Reconcile older non-WireGuard rules that omitted target
+                    # tags. WireGuard listener rules stay fail-closed because
+                    # silently changing their public exposure is unsafe.
+                    patched = self.firewalls_client.patch(
+                        resource_name=firewall_rule_name,
+                        firewall_body=firewall_body,
+                    )
+                    if patched is False:
+                        raise ConnectionError(
+                            f'Timed out patching firewall rule {firewall_rule_name}'
+                        )
+                    continue
                 self.logger.info(
                     f"{self.class_name}:{firewall_rule_name} - Matching firewall rule already exists"
                 )
@@ -89,6 +103,16 @@ class FirewallManager:
         if target_tags and 'deny-outbound' in target_tags:
             return FirewallRuleAction.DENY
         return FirewallRuleAction.ALLOW
+
+    @classmethod
+    def _is_wireguard_rule(cls, firewall) -> bool:
+        """Identify listener rules that must never be silently rewritten."""
+        name = str(cls._field(firewall, 'name', '')).lower()
+        target_tags = cls._field(firewall, 'target_tags', []) or []
+        return 'wireguard' in name or any(
+            'wireguard' in str(tag).lower()
+            for tag in target_tags
+        )
 
     def delete(
         self,

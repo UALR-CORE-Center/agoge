@@ -58,6 +58,10 @@ class PubSubManager:
                 self.logger.info(f'{self.class_name}:{subscription_id} - Subscription not found!')
                 return False
 
-    def msg(self, **args) -> None:
+    def msg(self, **args) -> pubsub_v1.publisher.futures.Future:
         str_attrs = {k: str(v) for k, v in args.items() if v is not None}
-        self.publisher.publish(self.topic_path, data=b'Agoge PubSub Message', **str_attrs)
+        return self.publisher.publish(
+            self.topic_path,
+            data=b'Agoge PubSub Message',
+            **str_attrs,
+        )
