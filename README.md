@@ -97,6 +97,24 @@ Most deployments use the script to 1) create a fresh customer-specific project, 
 python setup.py
 ````
 
+If setup reports missing/expired credentials, appears to wait for an invisible
+authentication prompt, or you changed Google accounts, run a complete local
+credential refresh first:
+
+```bash
+python setup.py --reauthenticate
+```
+
+This opens the normal browser sign-in and synchronizes both credential stores
+used by setup: the active `gcloud` login and Application Default Credentials
+(ADC) used by the Python Google Cloud clients. The same action is available
+under **Environment & Quotas → Refresh gcloud and Python GCP Credentials**.
+
+Project creation also requires `roles/resourcemanager.projectCreator` on the
+configured production or development folder. The defaults can be overridden
+without editing source code by setting `AGOGE_PRODUCTION_FOLDER_ID`,
+`AGOGE_DEVELOPMENT_FOLDER_ID`, and `AGOGE_BILLING_ACCOUNT_ID`.
+
 The wizard will:
 
 1. Create / select the customer project.

@@ -45,6 +45,7 @@ class SetupOptions(bytes, Enum):
     # Environment & Quotas
     ENV = (10, "Synchronize Environment Variables")
     INCREASE_QUOTAS = (13, "Increase Quotas (EXPERIMENTAL)")
+    REFRESH_GCP_CREDENTIALS = (21, "Refresh gcloud and Python GCP Credentials")
 
     # Projects
     PROJECT_CREATION = (14, "Create a New GCP Project")
@@ -111,6 +112,10 @@ category_menu = {
     SetupCategories.ENV_AND_QUOTAS: {
         "label": "Environment & Quotas",
         "options": [
+            (
+                SetupOptions.REFRESH_GCP_CREDENTIALS,
+                SetupOptions.REFRESH_GCP_CREDENTIALS.description,
+            ),
             (SetupOptions.ENV, SetupOptions.ENV.description),
             (SetupOptions.INCREASE_QUOTAS, SetupOptions.INCREASE_QUOTAS.description),
             (SetupOptions.BACK, SetupOptions.BACK.description),

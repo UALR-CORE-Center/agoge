@@ -10,6 +10,7 @@ from common.document_database import DocumentDatabaseFactory
 from cloud_deployment.utilities.menu_options import SetupOptions, ProjectMaintenanceOptions
 from cloud_deployment.operations.app_install_updates.base_build import BaseBuild
 from cloud_deployment.operations.env_and_quotas.environment_variables import EnvironmentVariables
+from cloud_deployment.operations.env_and_quotas.gcloud_environment_manager import GcloudEnvironmentManager
 from cloud_deployment.operations.app_install_updates.agoge_app import AgogeApp
 from cloud_deployment.operations.app_install_updates.classified_app import ClassifiedApp
 from cloud_deployment._archive.build_specification import BuildSpecification
@@ -70,6 +71,7 @@ class SetupManager:
             SetupOptions.IMPORT_LOCAL_IMAGE: lambda: LocalToCloud().run(),
             SetupOptions.STARTUP_SCRIPTS_AND_INSTRUCTIONS: lambda: BuildSpecification().sync_startup_scripts_and_instructions(),
             SetupOptions.INCREASE_QUOTAS: lambda: QuotaManager(project=self.project).request_all(),
+            SetupOptions.REFRESH_GCP_CREDENTIALS: self._refresh_gcp_credentials,
             SetupOptions.PROJECT_CREATION: lambda: ProjectManager().create(),
             SetupOptions.PROJECT_DELETE: lambda: ProjectManager().delete(),
             SetupOptions.PROJECT_MAINTENANCE: lambda: self._run_project_maintenance_menu(),
@@ -90,6 +92,14 @@ class SetupManager:
             print(f"A KeyError occurred, possibly due to a missing environment variable: {e}")
             print(f"Attempting to synchronize environment variables for project '{self.project}' before retrying.")
             EnvironmentVariables(project=self.project).run()
+
+    def _refresh_gcp_credentials(self) -> None:
+        auth_manager = GcloudEnvironmentManager(load_configurations=False)
+        auth_manager.refresh_credentials(
+            account=auth_manager.get_current_account(),
+            quota_project=self.project,
+            force=True,
+        )
 
     def _run_project_maintenance_menu(self) -> None:
         while True:
