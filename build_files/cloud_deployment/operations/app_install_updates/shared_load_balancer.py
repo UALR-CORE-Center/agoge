@@ -342,9 +342,13 @@ class SharedLoadBalancer:
             raise RuntimeError(f'Compute operation failed: {operation["error"]}')
 
     def _validate(self, candidate: dict, backends: dict):
+        # These routes set only pathPrefixRewrite, without hostRewrite. The
+        # validator reports their rewritten path as actualOutputUrl. Keep the
+        # request host in `host`; adding it to the expected output causes a
+        # false failure even when the backend and rewritten path both match.
         probe_tests = [
             {'description': 'Agoge tenant routing preflight', 'host': host, 'path': self.path + suffix,
-             'service': backend, 'expectedOutputUrl': f'https://{host}{rewritten}'}
+             'service': backend, 'expectedOutputUrl': rewritten}
             for host, backend in backends.items()
             for suffix, rewritten in [('', '/'), ('/', '/'), ('/__agoge_route_probe__', '/__agoge_route_probe__')]
         ]

@@ -488,6 +488,70 @@ def test_http_success_with_failed_validation_never_updates_map(router, validatio
     router.compute.urlMaps().update.assert_not_called()
 
 
+@pytest.mark.parametrize('host,path,actual_output', [
+    # Actual output values from the reported Google URL-map validation response.
+    ('app.agoge-labs.com', '/test-dev', '/'),
+    ('app.agoge-labs.com', '/test-dev/', '/'),
+    ('app.agoge-labs.com', '/test-dev/__agoge_route_probe__', '/__agoge_route_probe__'),
+    ('api.agoge-labs.com', '/test-dev', '/'),
+    ('api.agoge-labs.com', '/test-dev/', '/'),
+    ('api.agoge-labs.com', '/test-dev/__agoge_route_probe__', '/__agoge_route_probe__'),
+])
+def test_validation_probes_match_reported_path_only_rewrite_output(router, host, path, actual_output):
+    router._publish(existing_map(), BACKENDS)
+    tests = router.compute.urlMaps().validate.call_args.kwargs['body']['resource']['tests']
+    probe = next(test for test in tests if test['host'] == host and test['path'] == path)
+    assert probe['expectedOutputUrl'] == actual_output
+    assert probe['service'] == BACKENDS[host]
+    # Keep probes temporary and preserve the real routing behavior.
+    saved = router.compute.urlMaps().update.call_args.kwargs['body']
+    assert 'tests' not in saved
+    for matcher in saved['pathMatchers']:
+        rule = next(rule for rule in matcher['pathRules'] if '/test-dev/*' in rule['paths'])
+        assert rule['routeAction'] == {'urlRewrite': {'pathPrefixRewrite': '/'}}
+
+
+def test_matching_backend_does_not_override_an_output_url_validation_failure(router):
+    backend = 'BACKEND_SERVICE/923697525648.test-dev-787001-react'
+    router.compute.urlMaps().validate.return_value = request({'result': {
+        'loadSucceeded': True,
+        'testPassed': False,
+        'testFailures': [{
+            'host': 'app.agoge-labs.com', 'path': '/test-dev',
+            'expectedService': backend, 'actualService': backend,
+            'expectedOutputUrl': '/', 'actualOutputUrl': '/wrong-rewrite/',
+        }],
+    }})
+    with pytest.raises(ValueError, match='validation failed'):
+        router._publish(existing_map(), BACKENDS)
+    router.compute.urlMaps().update.assert_not_called()
+
+
+def test_retry_reuses_resources_retained_after_validation_failure(router):
+    router.config['url_map'] = router.url_map
+
+    def backend_get(*, project, backendService):
+        assert project == TENANT
+        return request({
+            'loadBalancingScheme': 'EXTERNAL_MANAGED',
+            'backends': [{'group': COMPUTE_ROOT + f'projects/{TENANT}/regions/{REGION}/networkEndpointGroups/{backendService}-neg'}],
+        })
+
+    def neg_get(*, project, region, networkEndpointGroup):
+        assert project == TENANT
+        assert region == REGION
+        role = 'react' if networkEndpointGroup == f'{TENANT}-react-neg' else 'api'
+        return request({'networkEndpointType': 'SERVERLESS', 'cloudRun': {'service': f'agoge-{role}'}})
+
+    router.compute.backendServices().get.side_effect = backend_get
+    router.compute.regionNetworkEndpointGroups().get.side_effect = neg_get
+    assert router.run() is True
+    router.compute.backendServices().insert.assert_not_called()
+    router.compute.regionNetworkEndpointGroups().insert.assert_not_called()
+    router.compute.urlMaps().update.assert_called_once()
+    router.env.db.update.assert_called_once()
+
+
 def test_publish_preserves_fingerprint_existing_tests_and_removes_only_output_fields(router):
     current = existing_map()
     current.update({'id': '1', 'kind': 'compute#urlMaps', 'creationTimestamp': 'old', 'selfLink': 'map-url', 'region': 'unused'})
