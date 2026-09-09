@@ -47,6 +47,23 @@ The selected domain, child Firebase API key, project ID, shared API origin, and 
 
 For an existing deployment, follow [Repair an existing deployment](firebase-authentication.md#repair-an-existing-deployment): save the correct child key and rebuild through **Application Installation and Updates → Update Main Application Only → Specific → React**. Changing Cloud Run runtime variables alone does not update an existing frontend image. API-only and cloud-function-only deployments do not change the Firebase domain.
 
+## Public OS image catalog
+
+The server creation page combines custom Agoge images with a public OS catalog stored in the **selected child project's** `agoge-v1` database, collection `google-images`. **Copy Over Default Server Images** handles custom Agoge templates; public Ubuntu and other Google publisher images need their own catalog synchronization.
+
+Full installations synchronize this catalog after application deployment and shared routing. For an existing installation or a failed background sync:
+
+1. Pull the updated setup code and select the child project, such as `test-dev-787001`.
+2. Open **Server Images & Build Specs → Synchronize Public OS Images**. This runs directly with setup's Python GCP credentials and prints the destination project, publisher counts, and any errors. It reads publisher image metadata and updates the child's catalog; it does not copy image disks or rebuild applications.
+3. Reload **Machine Configuration → Server Image** on the creation page. Newly discovered Ubuntu, Debian, and Windows families are enabled by default. Previously saved enable/disable choices are preserved.
+4. For other OS families, open **Admin → Image Manager** in the same child site, select the desired rows under **Public Images**, choose **Enable**, then **Refresh**. Clear any project filter in the creation selector.
+
+The catalog contains the latest available image per supported family in the child's configured zone, rather than every historical image version or Marketplace product. Publishers include Ubuntu, Ubuntu Pro, Debian, Windows, Windows SQL, RHEL, Rocky Linux, SUSE, Fedora CoreOS, and Container-Optimized OS. A successful sync can therefore include disabled families that an administrator must enable before instructors can select them. See Google's [image-family behavior](https://docs.cloud.google.com/compute/docs/images/image-families-best-practices).
+
+If a publisher fails, setup saves the available publishers, retains the failed publisher's cached records, and reports an incomplete sync. Resolve the printed error and rerun the operation. If credentials are expired, use **Environment & Quotas → Refresh gcloud and Python GCP Credentials**. The web **Sync** button still uses the child's Pub/Sub Cloud Function; check that function's `GoogleImageSyncManager` logs if the web operation does not finish.
+
+When adopting this repair, deploy the updated **API and Cloud Function**, so the web controls and scheduled syncs use the corrected image model too. The repair stores Compute image IDs as strings: Google defines these IDs as [unsigned 64-bit values](https://docs.cloud.google.com/compute/docs/reference/rest/v1/images), while [Firestore integers are signed 64-bit](https://firebase.google.com/docs/firestore/manage-data/data-types). The old numeric model could fail a catalog write with `Value out of range`. Existing numeric records are accepted and converted during refresh; existing family selection IDs and administrator choices are retained.
+
 ## Rename or remove setup menu entries
 
 The menu reads `project-info` documents in the shared project's `agoge-v1` Firestore database. The legacy `environments.json` file does not control this menu. Use the following commands with your normal setup credentials:

@@ -12,6 +12,7 @@ from cloud_deployment.operations.app_install_updates.agoge_app import AgogeApp
 from cloud_deployment.operations.app_install_updates.shared_load_balancer import SharedLoadBalancer
 from cloud_deployment.operations.guacamole_image_management.guacamole_image_manager import GuacamoleImageManager
 from cloud_deployment.operations.lab_management.shared_lab_manager import SharedLabManager
+from cloud_deployment.operations.images_and_specs.public_image_catalog import PublicImageCatalog
 
 class InstallUpdateManager:
     def __init__(self, project_id: str):
@@ -29,6 +30,8 @@ class InstallUpdateManager:
         if not agoge_app.deploy_cloud_functions():
             return
         if not SharedLoadBalancer(project=self.project_id).run():
+            return
+        if not PublicImageCatalog(project=self.project_id).run():
             return
         GuacamoleImageManager(
             project=self.project_id

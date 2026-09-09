@@ -190,6 +190,8 @@ The **Machine Configuration → Server Image** selector combines public OS image
 
 The public catalog is synchronized into each child project's database. A shared image project setting does not populate this catalog. If **Sync** fails or the catalog stays empty, the administrator should check the child's Cloud Function logs for `GoogleImageSyncManager` and confirm that its Agoge Pub/Sub function is processing requests. Custom images also need an Agoge image record; creating an image directly in the GCP console alone does not add it to this selector.
 
+An administrator can also select the child project in `python setup.py` and run **Server Images & Build Specs → Synchronize Public OS Images**. This populates the catalog directly and prints errors in the terminal, without waiting for the background function. Full installations run it automatically. See [public OS catalog setup and recovery](../operations/shared-project-setup.md#public-os-image-catalog). New Ubuntu, Debian, and Windows families are enabled by default; other public families require **Enable** in Image Manager. The selector lists available image families, not every historical version.
+
 ## Create, restore, and delete snapshots
 
 Snapshots preserve server disk state before risky changes. They are useful recovery points, but they are not a substitute for exporting important learner work.

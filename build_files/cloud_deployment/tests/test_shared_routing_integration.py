@@ -21,6 +21,8 @@ def installation(monkeypatch):
     app.deploy_cloud_functions.side_effect = lambda: calls.append("function") or True
     routing = MagicMock()
     routing.run.side_effect = lambda: calls.append("routing") or True
+    public_images = MagicMock()
+    public_images.run.side_effect = lambda: calls.append("public-images") or True
     guacamole = MagicMock()
     guacamole.create_guac_project_image.side_effect = lambda: calls.append("guacamole")
     shared_labs = MagicMock()
@@ -29,18 +31,19 @@ def installation(monkeypatch):
     for name, instance in (
         ("BaseBuild", base), ("AgogeApp", app), ("SharedLoadBalancer", routing),
         ("GuacamoleImageManager", guacamole), ("SharedLabManager", shared_labs),
+        ("PublicImageCatalog", public_images),
     ):
         constructors[name] = MagicMock(return_value=instance)
         monkeypatch.setattr(install_module, name, constructors[name])
     manager = install_module.InstallUpdateManager("selected-tenant")
     manager._create_update_record = MagicMock(side_effect=lambda **kwargs: calls.append("record"))
     return SimpleNamespace(
-        manager=manager, calls=calls, app=app, routing=routing, constructors=constructors,
+        manager=manager, calls=calls, app=app, routing=routing, public_images=public_images, constructors=constructors,
     )
 
 
 @pytest.mark.parametrize("method, expected, action", [
-    ("run_full_install", ["base", "apps", "function", "routing", "guacamole", "labs", "record"], "initial install"),
+    ("run_full_install", ["base", "apps", "function", "routing", "public-images", "guacamole", "labs", "record"], "initial install"),
     ("run_update", ["preflight", "apps", "function", "routing", "record"], "update"),
 ])
 def test_installation_routes_after_deployments_before_recording_success(installation, method, expected, action):
@@ -50,6 +53,21 @@ def test_installation_routes_after_deployments_before_recording_success(installa
     installation.constructors["AgogeApp"].assert_called_once_with(project="selected-tenant")
     installation.constructors["SharedLoadBalancer"].assert_called_once_with(project="selected-tenant")
     installation.manager._create_update_record.assert_called_once_with(action=action)
+    if method == 'run_full_install':
+        installation.constructors['PublicImageCatalog'].assert_called_once_with(project='selected-tenant')
+    else:
+        installation.constructors['PublicImageCatalog'].assert_not_called()
+
+
+def test_full_install_does_not_report_success_with_incomplete_public_catalog(installation, capsys):
+    installation.public_images.run.side_effect = lambda: installation.calls.append('public-images') or False
+
+    installation.manager.run_full_install()
+
+    assert installation.calls == ['base', 'apps', 'function', 'routing', 'public-images']
+    installation.manager._create_update_record.assert_not_called()
+    installation.constructors['GuacamoleImageManager'].assert_not_called()
+    assert 'Setup complete' not in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("method", ["run_full_install", "run_update"])

@@ -42,6 +42,7 @@ class SetupOptions(bytes, Enum):
     IMPORT_LOCAL_IMAGE = (7, "Import Custom Image from Local Environment into App")
     STARTUP_SCRIPTS_AND_INSTRUCTIONS = (11, "Synchronize Startup Scripts and Instructions")
     REFRESH_GUACAMOLE_IMAGE_AND_CERT = (12, "Refresh/Create guacamole image and certificate.")
+    SYNC_PUBLIC_IMAGES = (23, "Synchronize Public OS Images")
 
     # Environment & Quotas
     ENV = (10, "Synchronize Environment Variables")
@@ -108,6 +109,7 @@ category_menu = {
                 SetupOptions.REFRESH_GUACAMOLE_IMAGE_AND_CERT,
                 SetupOptions.REFRESH_GUACAMOLE_IMAGE_AND_CERT.description,
             ),
+            (SetupOptions.SYNC_PUBLIC_IMAGES, SetupOptions.SYNC_PUBLIC_IMAGES.description),
             (SetupOptions.BACK, SetupOptions.BACK.description),
         ],
     },

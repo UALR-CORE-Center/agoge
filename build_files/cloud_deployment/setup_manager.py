@@ -16,6 +16,7 @@ from cloud_deployment.operations.app_install_updates.shared_load_balancer import
 from cloud_deployment.operations.app_install_updates.classified_app import ClassifiedApp
 from cloud_deployment._archive.build_specification import BuildSpecification
 from cloud_deployment.operations.images_and_specs.default_server_image import DefaultServerImage
+from cloud_deployment.operations.images_and_specs.public_image_catalog import PublicImageCatalog
 from cloud_deployment.operations.images_and_specs.local_to_cloud import LocalToCloud
 from cloud_deployment.operations.env_and_quotas.increase_quotas import QuotaManager
 from cloud_deployment.operations.project_manager import ProjectManager
@@ -67,6 +68,7 @@ class SetupManager:
             SetupOptions.MAIN_APP: lambda: self._deploy_and_configure_routing("deploy_main_app"),
             SetupOptions.SHARED_LOAD_BALANCER: lambda: SharedLoadBalancer(project=self.project).run(),
             SetupOptions.DEFAULT_SERVER_IMAGES: lambda: DefaultServerImage().run(),
+            SetupOptions.SYNC_PUBLIC_IMAGES: lambda: PublicImageCatalog(project=self.project).run(),
             SetupOptions.CLASSIFIED_APP: lambda: ClassifiedApp().deploy(),
             SetupOptions.ENV: lambda: EnvironmentVariables(project=self.project).run(),
             SetupOptions.IMPORT_CUSTOM_IMAGES: lambda: CustomImageImportManager().run(),

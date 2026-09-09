@@ -124,6 +124,7 @@ The wizard will:
 3. Copy base server images from the shared-resource project.
 4. Deploy Cloud Run services and Cloud Functions.
 5. Prompt you for an admin email used for Firebase / IAM bootstrap.
+6. Populate the child project's public OS image catalog for server creation. Existing projects can run **Server Images & Build Specs → Synchronize Public OS Images**; see [catalog setup and recovery](docs/operations/shared-project-setup.md#public-os-image-catalog).
 
 ### 3  Post-deployment tasks
 

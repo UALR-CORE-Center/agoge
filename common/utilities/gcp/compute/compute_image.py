@@ -125,6 +125,7 @@ class ComputeImageAPI(BaseComputeAPI):
         resource: str,
         project: str = None,
         zone: str = None,
+        fallback_to_shared: bool = True,
         **kwargs
     ) -> Any:
         """Retrieves a Compute Engine image from a specific project.
@@ -136,6 +137,8 @@ class ComputeImageAPI(BaseComputeAPI):
                 configuration.
             zone (str, optional): The zone ID for the image. If None, defaults to the zone
                 in the environment configuration
+            fallback_to_shared (bool): Retry missing custom images in the shared
+                project. Disable when resolving a public publisher's image family.
 
         Returns:
             Any: A dictionary representing the image resource.
@@ -166,6 +169,8 @@ class ComputeImageAPI(BaseComputeAPI):
                 request=_build_request(project),
             )
         except NotFound as primary_exc:
+            if not fallback_to_shared:
+                raise
             # Try the shared resource project
             self.logger.debug(f"Second attempt: image request for {resource} "
                               f"in project {BuildConstants.SharedResourceProjects.MAIN_SHARED_RESOURCE_PROJECT}.")
