@@ -201,7 +201,9 @@ class BaseBuild:
                  *Authorized JavaScript origins*.
 
          Firebase auth defaults to {self.project}.firebaseapp.com; tenant DNS records are not required.
-         Existing firebase_auth_domain overrides remain supported.
+         Before building React, setup saves the Firebase auth domain for this project.
+         If an old custom domain is configured, Enter selects the default above;
+         choose K only to keep a working custom Firebase authentication domain.
 
          When all required providers show Enabled, type Y and press Enter
          (or N to skip this step).

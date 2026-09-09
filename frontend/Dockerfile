@@ -7,6 +7,8 @@ RUN mkdir /frontend
 RUN mv ./node_modules ./frontend
 WORKDIR /frontend
 COPY . ./
+# Require setup's generated configuration even when upload ignore rules change.
+COPY .env.production ./.env.production
 
 # Create static React files. For more info see package.json
 RUN NODE_ENV=production npm run build

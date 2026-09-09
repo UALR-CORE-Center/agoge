@@ -5,6 +5,8 @@ import shutil
 
 
 from common.utilities.gcp.cloud_env import CloudEnv
+from common.exceptions import AgogeValidationError
+from cloud_deployment.operations.app_install_updates.firebase_build import prepare_firebase_auth
 from cloud_deployment.operations.env_and_quotas.shared_api_secrets import ensure_shared_api_secret_access
 
 
@@ -131,6 +133,11 @@ class AgogeApp:
     ) -> None:
         self.suppress = suppress
         self.env = CloudEnv(project=project)
+        if project and self.env.project != project:
+            raise AgogeValidationError(
+                f'The environment document project ({self.env.project}) does not match '
+                f'the selected project ({project}). Correct its project field before deploying.'
+            )
         self.service = discovery.build('cloudscheduler', 'v1')
         self.commands = Commands(env=self.env)
         self.job_name = (f"projects/{self.env.project}/locations/{self.env.region}/jobs/"
@@ -148,17 +155,26 @@ class AgogeApp:
 
     def deploy_main_app(self) -> bool:
         confirm_all = int(input("Deploy\n - [0] All\n - [1] Specific\nSelection: "))
+        if confirm_all not in (0, 1):
+            raise AgogeValidationError('Choose 0 for All or 1 for Specific.')
+        api_or_frontend = None
+        if confirm_all != 0:
+            api_or_frontend = int(input("Select an app to deploy:\n - [0] API\n - [1] React\nSelection: "))
+            if api_or_frontend not in (0, 1):
+                raise AgogeValidationError('Choose 0 for API or 1 for React.')
+        include_frontend = confirm_all == 0 or api_or_frontend == 1
+        if include_frontend:
+            prepare_firebase_auth(self.env)
 
         self._backup_env_files()
 
         try:
-            self._write_env_files()
+            self._write_env_files(include_frontend=include_frontend)
             if confirm_all == 0:
                 if not self._deploy_api():
                     return False
                 return self._deploy_react()
             else:
-                api_or_frontend = int(input("Select an app to deploy:\n - [0] API\n - [1] React\nSelection: "))
                 if api_or_frontend == 0:
                     return self._deploy_api()
                 else:
@@ -279,13 +295,17 @@ class AgogeApp:
                 backup_path = env_file.with_suffix(env_file.suffix + ".bak")
                 shutil.copy(env_file, backup_path)
                 self.backup_files[env_file] = backup_path
+            else:
+                self.backup_files[env_file] = None
 
     def _restore_env_files(self):
         """
         Restore the original environment files from backups.
         """
         for original, backup in self.backup_files.items():
-            if backup.exists():
+            if backup is None:
+                original.unlink(missing_ok=True)
+            elif backup.exists():
                 shutil.move(backup, original)
                 print(f"Restored original file: {original}")
 
@@ -319,7 +339,7 @@ class AgogeApp:
         process.wait()
         return process.returncode == 0
 
-    def _write_env_files(self):
+    def _write_env_files(self, *, include_frontend: bool = True):
         """
         Write variables to the environment files for FastAPI and React Vite.
         """
@@ -341,6 +361,9 @@ class AgogeApp:
             ),
             remove_variables=('DOMAIN', 'SUB_DOMAIN'),
         )
+
+        if not include_frontend:
+            return
 
         # Write to React Vite environment file
         self._update_env_file(

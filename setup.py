@@ -14,6 +14,7 @@ from cloud_deployment.setup_manager import SetupManager
 from cloud_deployment.operations.lab_management.shared_lab_manager import SharedLabManager
 from common.constants.build_constants import BuildConstants
 from common.exceptions import AgogeValidationError
+from cloud_deployment.operations.env_and_quotas.project_menu import ProjectMenu
 
 init(autoreset=True)
 
@@ -49,6 +50,19 @@ def main():
             "Application Default Credentials before setup starts."
         ),
     )
+    parser.add_argument(
+        '--hide-environment', action='append', default=[], metavar='PROJECT_OR_NAME',
+        help='Hide an entry in the shared setup menu without deleting its GCP project.',
+    )
+    parser.add_argument(
+        '--show-environment', action='append', default=[], metavar='PROJECT_OR_NAME',
+        help='Restore a hidden setup menu entry.',
+    )
+    parser.add_argument(
+        '--rename-environment', action='append', nargs=2, default=[],
+        metavar=('PROJECT_OR_NAME', 'MENU_NAME'),
+        help='Change a shared setup menu label without changing the project ID or URL path.',
+    )
     args = vars(parser.parse_args())
     suppress = args['suppress']  # Not currently used, but set up for future expansions
     use_shared_resource = args['use_shared_resource']
@@ -79,6 +93,14 @@ def main():
         # while ensuring both stores use the selected account.
         synchronize=bool(selected_account),
     )
+    if args['hide_environment'] or args['show_environment'] or args['rename_environment']:
+        ProjectMenu().update(
+            hide=args['hide_environment'], show=args['show_environment'],
+            rename=args['rename_environment'],
+        )
+        env_manager.load_configurations()
+        env_manager.display_menu()
+        return
     env_manager.load_configurations()
     env_manager.display_menu()
     selected_env = env_manager.select_environment()

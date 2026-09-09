@@ -27,9 +27,34 @@ This example shows the hosting fields; setup still collects region, zone, admin 
 | Legacy DNS suffix/zone attributes | Parent DNS suffix/zone |
 | Firebase auth domain | `<tenant-project>.firebaseapp.com` |
 
-Leading/trailing dots in DNS suffixes and slashes in `project_path` are normalized. Firebase's API key and project ID remain tenant-specific. Authorize the shared app hostname in the tenant's Firebase Authentication settings. Projects with existing custom Firebase hosting retain their explicit `firebase_auth_domain`; the default does not provision a custom authentication domain. See [Firebase's authentication domain guidance](https://firebase.google.com/docs/auth/web/redirect-best-practices) for applications using redirect sign-in.
+Leading/trailing dots in DNS suffixes and slashes in `project_path` are normalized. Firebase's API key and project ID remain tenant-specific. Authorize the shared app hostname in the tenant's Firebase Authentication settings. The default Firebase domain needs no tenant DNS records. Agoge uses popup sign-in, one of [Firebase's supported options for apps hosted outside Firebase Hosting](https://firebase.google.com/docs/auth/web/redirect-best-practices).
 
-Existing legacy overrides are preserved and remain editable through **Specific**. Remove an obsolete override from the tenant's `admin-info` environment document when you want the derived default to take effect. Do this after deploying the updated API and cloud functions, because older code requires those fields. Routine upgrades do not delete settings or change secret sources.
+Existing legacy DNS and app URL overrides are preserved and remain editable through **Specific**. Remove an obsolete override from the tenant's `admin-info` environment document when you want the derived default to take effect. Do this after deploying the updated API and cloud functions, because older code requires those fields. Routine upgrades do not delete settings or change secret sources. Firebase domain selection is handled before React builds as described below.
+
+## Firebase configuration during deployment
+
+Full installations and every main-application deployment that includes React resolve Firebase settings before submitting the build. With no override, setup saves `<tenant-project>.firebaseapp.com` in the tenant's `admin-info/project` document. If an older custom domain is present, setup displays it and offers:
+
+- **Enter:** Save and use the child's default Firebase domain.
+- **K:** Keep a working custom Firebase authentication domain.
+- **C:** Cancel before building applications.
+
+The selected domain, child Firebase API key, project ID, shared API origin, and project path are written into `frontend/.env.production` before Cloud Build uploads the frontend. Cloud upload and Docker ignore rules exclude local environment overrides and backups while including this generated file. The Docker build requires the file. Setup restores existing local files afterward and removes generated files that did not exist before deployment, including when a build fails. It also stops if the selected project differs from the environment document's project, preventing a copied configuration from deploying to another tenant.
+
+For an existing deployment, choose **Application Installation and Updates → Update Main Application Only → Specific → React**. Accept the default Firebase domain when prompted. This rebuild is required because [Vite embeds environment values in the generated JavaScript](https://vite.dev/guide/env-and-mode); changing Cloud Run runtime variables does not update an existing frontend image. API-only and cloud-function-only deployments do not change the Firebase domain.
+
+Setup prints the effective project, authentication domain, app hostname, and OAuth callback without displaying the API key. In that child's Firebase console, enable Google sign-in and add the shared app hostname, without a path, to **Authentication → Settings → Authorized domains**. The Google OAuth client used by Firebase must allow `https://<auth-domain>/__/auth/handler`. These console settings are still manual. See [Firebase's Google sign-in configuration](https://firebase.google.com/docs/auth/web/google-signin).
+
+## Rename or remove setup menu entries
+
+The menu reads `project-info` documents in the shared project's `agoge-v1` Firestore database. The legacy `environments.json` file does not control this menu. Use the following commands with your normal setup credentials:
+
+```shell
+python setup.py --hide-environment "Old Test" --rename-environment tenant-project test-dev
+python setup.py --show-environment old-test-project
+```
+
+Selectors can be exact project IDs or unique names. Prefer project IDs when names are duplicated. These commands authenticate, update the menu, display the resulting entries, and exit without deploying anything. Changes are saved as `setup_menu_name` and `setup_menu_hidden` on the shared registry records. They apply to everyone using this setup branch. Hiding is reversible and does not delete the GCP project, tenant records, resources, or routing. Renaming changes only the menu label; the project ID, tenant name, and `project_path` remain unchanged. Repeating the same command is safe. Duplicate visible names include their project IDs so both entries remain selectable.
 
 ## Configure shared load-balancer routing
 

@@ -7,10 +7,8 @@ from typing import Sequence
 
 from dotenv import load_dotenv
 
-from common.constants.build_constants import BuildConstants
-from common.constants.database import DATABASE_NAME, DbCollections, DatabaseTypes
-from common.document_database.factory import DocumentDatabaseFactory
 from common.exceptions import AgogeValidationError
+from .project_menu import ProjectMenu
 
 # ANSI Colors
 CYAN = '\033[0;36m'
@@ -43,19 +41,7 @@ class GcloudEnvironmentManager:
 
     def load_configurations(self) -> dict:
         """Load environment configurations"""
-        db = DocumentDatabaseFactory.create_db_object(
-            db_type=DatabaseTypes.firestore,
-            database_name=DATABASE_NAME,
-            project_id=BuildConstants.SharedResourceProjects.MAIN_SHARED_RESOURCE_PROJECT,
-        )
-
-        environments = db.query(collection_name=DbCollections.PROJECT_INFO)
-        projects = {}
-        for environment in environments:
-            projects[environment["tenant_name"]] = {
-                "impersonation_account": environment["impersonation_account"],
-                "project_id": environment["project_name"]
-            }
+        projects = ProjectMenu().configurations()
         self.configurations = projects
         return projects
 
@@ -284,6 +270,8 @@ class GcloudEnvironmentManager:
         if not self.configurations:
             self.load_configurations()
         keys = list(self.configurations.keys())
+        if not keys:
+            raise AgogeValidationError('No visible environments. Use --show-environment PROJECT_ID to restore one.')
         while True:
             try:
                 choice = int(
