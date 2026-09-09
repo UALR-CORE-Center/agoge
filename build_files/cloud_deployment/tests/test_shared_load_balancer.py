@@ -146,6 +146,89 @@ def test_cloud_run_readiness_accepts_observed_generation_and_full_latest_traffic
     assert SharedLoadBalancer._run_service_ready(None) is False
 
 
+@pytest.mark.parametrize('targets', [
+    [{'type': 'TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST', 'percent': 100}],
+    [
+        {'type': 'TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST', 'percent': 100},
+        {'type': 'TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION', 'revision': 'app-00001', 'tag': 'old'},
+    ],
+    [
+        {'type': 'TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST', 'percent': 60},
+        {'type': 'TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION', 'revision': 'app-00002', 'percent': 40},
+    ],
+])
+def test_cloud_run_readiness_accepts_observed_latest_allocation_without_revision(targets):
+    service = ready_service()
+    service['trafficStatuses'] = targets
+    assert SharedLoadBalancer._run_service_ready(service) is True
+
+
+@pytest.mark.parametrize('short_field', ['latestReadyRevision', 'latestCreatedRevision'])
+def test_cloud_run_readiness_matches_short_and_full_revision_names(short_field):
+    service = ready_service()
+    service[short_field] = 'app-00002'
+    assert SharedLoadBalancer._run_service_ready(service) is True
+
+
+@pytest.mark.parametrize('targets', [
+    [{'type': 'TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION', 'percent': 100}],
+    [{'type': 'TRAFFIC_TARGET_ALLOCATION_TYPE_UNSPECIFIED', 'percent': 100}],
+    [{'percent': 100}],
+    [{'type': 'TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST', 'revision': 'app-00001', 'percent': 100}],
+    [
+        {'type': 'TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST', 'percent': 80},
+        {'revision': 'app-00001', 'percent': 20},
+    ],
+    [],
+])
+def test_latest_desired_traffic_does_not_override_missing_or_conflicting_observed_traffic(targets):
+    service = ready_service()
+    service['traffic'] = [{'type': 'TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST', 'percent': 100}]
+    service['trafficStatuses'] = targets
+    assert SharedLoadBalancer._run_service_ready(service) is False
+
+
+@pytest.mark.parametrize('changes', [
+    {'reconciling': True},
+    {'terminalCondition': {'state': 'CONDITION_FAILED'}},
+    {'observedGeneration': '1'},
+    {'latestCreatedRevision': 'app-00003'},
+])
+def test_latest_allocation_does_not_bypass_deployment_readiness(changes):
+    service = ready_service()
+    service.update(changes)
+    service['trafficStatuses'] = [{'type': 'TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST', 'percent': 100}]
+    assert SharedLoadBalancer._run_service_ready(service) is False
+
+
+def test_ready_accepts_latest_allocations_for_both_apps_without_prompting(router):
+    service = ready_service()
+    service['trafficStatuses'] = [{'type': 'TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST', 'percent': 100}]
+    router.cloud_run.projects().locations().services().get.return_value = request(service)
+    assert router._ready() is True
+
+
+@pytest.mark.parametrize('changes,expected', [
+    ({'reconciling': True}, 'reconciling'),
+    ({'terminalCondition': {'state': 'CONDITION_FAILED', 'reason': 'REVISION_FAILED'}}, 'CONDITION_FAILED (REVISION_FAILED)'),
+    ({'observedGeneration': '1'}, 'observedGeneration=1, generation=2'),
+    ({'latestCreatedRevision': 'app-00003'}, 'latestReadyRevision=app-00002, latestCreatedRevision=app-00003'),
+    ({'trafficStatuses': []}, 'no observed traffic targets'),
+    ({'trafficStatuses': [{'revision': 'app-00001', 'percent': 100}]}, 'app-00002 is 0%'),
+])
+def test_readiness_output_identifies_the_failing_check_without_dumping_service(router, monkeypatch, capsys, changes, expected):
+    service = ready_service()
+    service.update(changes)
+    service['template'] = {'containers': [{'env': [{'name': 'SECRET', 'value': 'sensitive-env-value'}]}]}
+    router.cloud_run.projects().locations().services().get.return_value = request(service)
+    monkeypatch.setattr('builtins.input', lambda _: '')
+    assert router._ready() is False
+    output = capsys.readouterr().out
+    assert expected in output
+    assert 'sensitive-env-value' not in output
+    assert f'gcloud run services describe agoge-react --project={TENANT} --region={REGION}' in output
+
+
 def test_ready_checks_explicit_tenant_run_services_and_background_function(router):
     assert router._ready() is True
     assert [call.kwargs['name'] for call in router.cloud_run.projects().locations().services().get.call_args_list] == [

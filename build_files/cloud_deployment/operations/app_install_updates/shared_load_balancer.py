@@ -106,23 +106,54 @@ class SharedLoadBalancer:
                 return None
             raise
 
+    @classmethod
+    def _run_service_ready(cls, service: dict | None) -> bool:
+        return cls._run_service_pending_reason(service) is None
+
     @staticmethod
-    def _run_service_ready(service: dict | None) -> bool:
-        if not service or service.get('reconciling'):
-            return False
-        if service.get('terminalCondition', {}).get('state') != 'CONDITION_SUCCEEDED':
-            return False
-        if service.get('generation') is None or str(service.get('generation')) != str(service.get('observedGeneration')):
-            return False
-        latest = service.get('latestReadyRevision')
-        if not latest or latest != service.get('latestCreatedRevision'):
-            return False
-        # An old revision can still serve while a newer deployment has failed.
-        traffic = sum(
-            target.get('percent', 0) for target in service.get('trafficStatuses', [])
-            if target.get('revision', '').rsplit('/', 1)[-1] == latest.rsplit('/', 1)[-1]
-        )
-        return traffic == 100
+    def _run_service_pending_reason(service: dict | None) -> str | None:
+        """Explain a failed v2 readiness check without logging the service spec."""
+        if not service:
+            return 'service not found in the selected project and region'
+        if service.get('reconciling'):
+            return 'Cloud Run is still reconciling the deployment'
+        condition = service.get('terminalCondition') or {}
+        if condition.get('state') != 'CONDITION_SUCCEEDED':
+            reason = condition.get('reason') or condition.get('revisionReason') or condition.get('executionReason')
+            detail = f' ({reason})' if reason else ''
+            return f'Cloud Run reports {condition.get("state", "no terminal readiness condition")}{detail}'
+        generation = service.get('generation')
+        observed = service.get('observedGeneration')
+        if generation is None or str(generation) != str(observed):
+            return f'deployment generation is not observed yet: observedGeneration={observed}, generation={generation}'
+        latest = (service.get('latestReadyRevision') or '').rsplit('/', 1)[-1]
+        created = (service.get('latestCreatedRevision') or '').rsplit('/', 1)[-1]
+        if not latest or latest != created:
+            return f'latest revision is not ready: latestReadyRevision={latest or "missing"}, latestCreatedRevision={created or "missing"}'
+        targets = service.get('trafficStatuses') or []
+        if not targets:
+            return 'Cloud Run returned no observed traffic targets (trafficStatuses)'
+
+        # Evaluate observed traffic only, after successful reconciliation. LATEST
+        # means the latest ready revision even when no revision name is returned:
+        # https://cloud.google.com/run/docs/reference/rest/v2/projects.locations.services#TrafficTargetAllocationType
+        # If an explicit revision is returned, do not hide a stale target by
+        # treating its allocation type as proof that the new revision is serving.
+        traffic = 0
+        allocations = []
+        for target in targets:
+            revision = (target.get('revision') or '').rsplit('/', 1)[-1]
+            is_latest = target.get('type') == 'TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST'
+            percent = target.get('percent', 0)
+            if revision == latest or (not revision and is_latest):
+                traffic += percent
+            allocations.append(f'{revision or ("LATEST" if is_latest else "unknown")}: {percent}%')
+        if traffic != 100:
+            return (
+                f'observed traffic to latest ready revision {latest} is {traffic}% '
+                f'(expected 100%; allocations: {", ".join(allocations)})'
+            )
+        return None
 
     def _ready(self) -> bool:
         location = f'projects/{self.project}/locations/{self.region}'
@@ -134,8 +165,9 @@ class SharedLoadBalancer:
                 service = self._get_or_none(self.cloud_run.projects().locations().services().get(
                     name=f'{location}/services/{name}',
                 ))
-                if not self._run_service_ready(service):
-                    pending.append(f'{role} Cloud Run service {name} (latest revision must be ready with 100% traffic)')
+                reason = self._run_service_pending_reason(service)
+                if reason:
+                    pending.append(f'{role} Cloud Run service {name}: {reason}')
             if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,62}', self.function):
                 raise ValueError(f'Invalid Cloud Function name: {self.function!r}')
             function = self._get_or_none(self.functions.projects().locations().functions().get(
@@ -150,8 +182,13 @@ class SharedLoadBalancer:
             print('Routing is waiting for deployed applications in ' + location + ':')
             for item in pending:
                 print(f'  - {item}')
+            for name in self.services.values():
+                print(
+                    f'Inspect Cloud Run: gcloud run services describe {name} '
+                    f'--project={self.project} --region={self.region} '
+                    '--format="yaml(metadata.generation,status)"'
+                )
             print(
-                f'Inspect Cloud Run: gcloud run services list --project={self.project} --region={self.region}\n'
                 f'Inspect function: gcloud functions describe {self.function} --gen2 '
                 f'--project={self.project} --region={self.region}\n'
                 'Deploy/fix these resources in another terminal, or provide their actual service names. '
