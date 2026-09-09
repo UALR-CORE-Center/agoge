@@ -6,6 +6,9 @@ import sys
 import time
 from datetime import datetime, UTC
 
+from google.api_core.exceptions import Forbidden, NotFound
+from google.cloud import compute_v1
+
 from cloud_fn_utilities.globals import BuildConstants
 from cloud_fn_utilities.course_objects.compute.factory import ComputeManagerFactory
 
@@ -39,7 +42,6 @@ class GuacamoleImageManager:
         "human_interaction": [],
         "status": 0,
         "services": ["guacamole", "certbot", "docker"],
-        "self_link": "https://www.googleapis.com/compute/v1/projects/{project}/global/images/image-guac-base",
         'metadata': {},
         "dns_record": None,
         "in_use_by": None,
@@ -66,12 +68,13 @@ class GuacamoleImageManager:
         export GUAC_ADMIN_PASSWORD="{guac_admin_password}"
         
         mkdir -p /secrets
-        cat <<EOF > /secrets/dns-google.json
+        install -m 600 /dev/null /secrets/dns-google.json
+        cat <<'EOF' > /secrets/dns-google.json
         {google_dns_service_key}
         EOF
         
         # Set strict permissions so only root can read (avoid prying eyes)
-        chmod 644 /secrets/dns-google.json
+        chmod 600 /secrets/dns-google.json
         echo "✅ Created /secrets/dns-google.json with restricted permissions."
         
         {cert_section}
@@ -152,10 +155,14 @@ class GuacamoleImageManager:
             bool: True if the image creation process completes successfully, False otherwise.
         """
         server_name = f"guac-{self.env.project}"
+        # Resolve the source before reading startup secrets or replacing the
+        # Firestore record. A record in Firestore does not create a GCE image.
+        source_image = self._resolve_base_image()
 
         # 1. Replace placeholders and store the updated image record in the DB
         print(f"📥 Importing server image '{server_name}' into Firestore...")
         server_record = self._replace_project_variable(self.GUAC_PROJECT_SERVER)
+        server_record['self_link'] = source_image
         server_record['startup_script'] = self._get_guac_startup_script()
         validated = AgogeImageModel(**server_record)
         self.db.insert(collection_name=DbCollections.IMAGE, data=validated.model_dump(), id_field="name")
@@ -175,6 +182,32 @@ class GuacamoleImageManager:
         print("🎉 Guacamole project image setup completed successfully.")
 
         return True
+
+    def _resolve_base_image(self) -> str:
+        source_project = (
+            self.env.default_server_image_project
+            or self.env.parent_project
+            or self.env.project
+        )
+        image_name = self.GUAC_PROJECT_SERVER['image']
+        resource = f'projects/{source_project}/global/images/{image_name}'
+        try:
+            image = compute_v1.ImagesClient().get(project=source_project, image=image_name)
+        except NotFound as error:
+            raise RuntimeError(
+                f'Guacamole base image {resource} was not found. '
+                'Create the base image in the configured image project or correct '
+                'default_server_image_project before retrying.'
+            ) from error
+        except Forbidden as error:
+            raise RuntimeError(
+                f'Cannot access Guacamole base image {resource}. '
+                'The account running setup needs access to this image.'
+            ) from error
+        if image.status != 'READY' or not image.self_link:
+            raise RuntimeError(f'Guacamole base image {resource} is not ready (status: {image.status}).')
+        print(f'Using Guacamole base image: {image.self_link}')
+        return image.self_link
 
     def _verify_certificate_operation(self):
         dns_entry = self.image_manager.dns_record

@@ -98,7 +98,9 @@ class FirestoreDatabase(DocumentDatabase):
                 doc = doc_ref.get()
                 if doc.exists:
                     data = doc.to_dict()
-                    self.logger.debug(f"Retrieved document data: {data}", custom_id=doc_id)
+                    # Image documents can contain startup scripts with embedded
+                    # credentials. Log identifiers, never document payloads.
+                    self.logger.debug(f"Retrieved document with ID: {doc_id}", custom_id=doc_id)
                     return data
                 else:
                     self.logger.error(f"Document with ID {doc_id} does not exist.")
@@ -338,7 +340,7 @@ class FirestoreDatabase(DocumentDatabase):
                 if doc.exists:
                     data = doc.to_dict()
                     self.logger.debug(
-                        f"Retrieved document data within transaction: {data}",
+                        f"Retrieved document within transaction: {doc_ref.id}",
                         custom_id=doc_ref.id
                     )
                     return data
