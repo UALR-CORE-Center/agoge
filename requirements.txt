@@ -40,7 +40,7 @@ python-dotenv>=1.0,<2
 python-multipart>=0.0.22,<1
 PyYAML>=6.0,<7
 sendgrid>=6.11,<7
-starlette>=0.37,<1
+starlette==0.41.3
 tzdata>=2025.1,<2026
 uvicorn>=0.32,<1
 validators>=0.22,<1

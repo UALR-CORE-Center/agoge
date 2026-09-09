@@ -34,9 +34,9 @@ class Environment(str, Enum):
 
 class ProjectManager:  # pylint: disable=too-many-public-methods
     """Handles GCP project creation/deletion and metadata storage."""
-    _PRODUCTION_FOLDER_ID = "267924026470"
-    _DEVELOPMENT_FOLDER_ID = "997842458280"
-    _BILLING_ACCOUNT_ID = "01DA03-A4053E-869DE5"
+    _PRODUCTION_FOLDER_ID = "506220203180"
+    _DEVELOPMENT_FOLDER_ID = "507606816058"
+    _BILLING_ACCOUNT_ID = "01364F-67A93E-94E45E"
 
     # ---------------------------------------------------------------------
     # Construction helpers
