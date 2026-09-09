@@ -16,7 +16,7 @@ import {
     GridRenderCellParams,
     GridRowSelectionModel,
     useGridApiRef,
-} from '@mui/x-data-grid-pro';
+} from '@mui/x-data-grid';
 import React, {useEffect, useState} from "react";
 import {AgogeImage} from "../../../../../services/Server/image.model";
 import {ImageStates} from "../../../../../types/AgogeStates";

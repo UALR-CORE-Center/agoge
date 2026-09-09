@@ -1,6 +1,6 @@
 import {AddAPhoto, Restore} from "@mui/icons-material";
 import {Box} from "@mui/material";
-import {GridColDef} from "@mui/x-data-grid-pro";
+import {GridColDef} from "@mui/x-data-grid";
 import {useModal} from "mui-modal-provider";
 import React, {useState} from "react";
 import {SnapshotsModel} from "../../../../services/Server/snapshots.model";
