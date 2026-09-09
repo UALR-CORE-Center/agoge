@@ -134,26 +134,16 @@ The wizard will:
 
 ---
 
-### 4  Firebase & SSO (Configuration steps directed during the setup script)
+### 4  Firebase & SSO
 
-1. **Shared hosting**
-   * Use the parent's app/API DNS records and gateway routes for the tenant's `project_path`.
-   * Firebase authentication defaults to `<tenant-project>.firebaseapp.com`; a tenant-specific DNS zone or custom auth hostname is not required.
+Follow the [Firebase authentication setup guide](docs/operations/firebase-authentication.md) during initial installation or when repairing an existing login. It includes console links, a complete `test-dev` example, and troubleshooting for incorrect projects and redirect errors.
 
-2. **Firebase console → Build ▸ Authentication**
+1. **Select the child project in Firebase.** Add Firebase to that existing GCP project if needed, register a Web app, and copy its SDK configuration's `apiKey`. Save it as `api_key` through **Environment & Quotas → Synchronize Environment Variables → Specific**. Each tenant uses its own Firebase key, even when other API secrets come from the parent.
+2. **Configure Authentication in that child.** Enable Google with a support email and any other providers used by the UI. Add the shared app hostname, such as `app.agoge-labs.com`, to **Authentication → Settings → Authorized domains**. Enter a hostname without `https://` or `/test-dev`.
+3. **Check the OAuth client used by Firebase's Google provider.** In the child's **Google Auth Platform → Clients**, open that existing Web client. Its callback is `https://<child-project>.firebaseapp.com/__/auth/handler`; the app's `/test-dev/login` address is the return page. See the guide for exact origins and callback values.
+4. **Build React with the child's settings.** Setup verifies the key's project and defaults to `<child-project>.firebaseapp.com`, which needs no tenant DNS zone. For an existing app, use **Application Installation and Updates → Update Main Application Only → Specific → React**. Vite embeds these settings during the build; changing Cloud Run runtime variables alone cannot update the deployed JavaScript.
 
-   * Enable the required sign-in providers in the tenant project.
-   * *Settings* → **Authorized domains** → add `app.<parent-dns-suffix>` and any local development hostnames you use.
-
-3. **Google Cloud console → APIs & Services ▸ OAuth 2.0**
-
-   * Create / edit a **Web application** client.
-   * **Authorized JavaScript origins** → `https://app.<parent-dns-suffix>` and `https://<tenant-project>.firebaseapp.com`.
-   * **Authorized redirect URIs** →
-
-     * `https://<tenant-project>.firebaseapp.com/__/auth/handler`
-
-Existing custom `firebase_auth_domain` settings remain supported. Keep the corresponding Firebase Hosting and OAuth configuration if you use an override.
+Setup prints project-specific console links and required values. Provider, authorized-domain, and OAuth-client changes remain manual. Keep a custom `firebase_auth_domain` only when its Firebase Hosting and OAuth configuration belongs to the same child project, as covered in the guide.
 
 ### 5  Automating quota changes (optional)
 

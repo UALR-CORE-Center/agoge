@@ -47,7 +47,9 @@ class EnvironmentVariables:
         reply = str(input(f"Do you want to update a specific environment variable or ALL environmental variables "
                           f"for {self.project}? [s]pecific/[A]ll ")).upper()
         if reply in ["S", "SPECIFIC"]:
-            print('Use shared_api_secrets to choose parent, copied, or local API keys. '
+            print('Use shared_api_secrets to configure SendGrid, OpenAI, and Shodan key sources.\n'
+                  f'Use api_key to replace the Firebase Web API key for {self.project}; it must belong to this child.\n'
+                  'Firebase checklist: docs/operations/firebase-authentication.md\n'
                   'Legacy domain overrides remain editable here for existing deployments.')
             while True:
                 var = str(input(f"Which variable do you want to update? "))
@@ -61,9 +63,11 @@ class EnvironmentVariables:
             print(
                 "Configure parent_project, parent_dnszone, parent_dns_suffix, and project_path for shared hosting.\n"
                 "App URLs and DNS settings are derived from the parent; Firebase defaults to this project's firebaseapp.com domain.\n"
-                f"🔑  For `api_key`, open Firebase Project Settings → General for {self.project}.\n"
-                "    Copy apiKey from that project's Web app SDK configuration.\n"
-                "    A Firebase key selects exactly one project. Do not copy it from the parent or another tenant."
+                f"For api_key, use the Firebase Web app registered in {self.project}:\n"
+                f"  https://console.firebase.google.com/project/{self.project}/settings/general\n"
+                "Copy apiKey from Your apps → Web app → SDK setup and configuration → Config.\n"
+                "A Firebase key selects exactly one project; it cannot be shared with other tenants.\n"
+                "Provider, authorized-domain, and OAuth steps: docs/operations/firebase-authentication.md"
             )
             self.set_variable("project", self.project)
             self._set_region()
@@ -152,9 +156,17 @@ class EnvironmentVariables:
                     if not new_value:
                         if var == 'api_key':
                             print(
-                                f'Use the Firebase Web API key from {self.project}: '
+                                f'Firebase api_key for child project {self.project}:\n'
                                 f'https://console.firebase.google.com/project/{self.project}/settings/general\n'
-                                'After saving, rebuild React to update the key embedded in the frontend.'
+                                'Verify the Project ID, then open Your apps → Web app → '
+                                'SDK setup and configuration → Config.\n'
+                                'If no Web app exists, register one with Add app → Web.\n'
+                                'Paste only apiKey, without quotes; use this child\'s key, not an OAuth client ID '
+                                'or a parent/other-tenant key.\n'
+                                'After saving an existing deployment, choose Application Installation and Updates → '
+                                'Update Main Application Only → Specific → React.\n'
+                                'Cloud Run runtime edits cannot replace the key compiled into JavaScript.\n'
+                                'Guide: docs/operations/firebase-authentication.md'
                             )
                         new_value = getpass(f"What value would you like to set for {var}? ")
                 if not new_value.strip():

@@ -179,40 +179,51 @@ class BaseBuild:
         # 5. Firebase Authentication manual step ------------------------------------------
         firebase_prompt = f"""
         ──────────────────────────────────────────────────────────────────────────────
-         Firebase Authentication setup for {self.project}
+         Firebase Authentication: manual checklist for child project {self.project}
         ──────────────────────────────────────────────────────────────────────────────
-         1️   Open your browser to:
+         1   Open Project settings → General and verify the Project ID:
+               https://console.firebase.google.com/project/{self.project}/settings/general
+             If needed, add Firebase to this existing GCP project, then register a Web app.
+             Under Your apps → Web app → SDK setup and configuration → Config,
+             copy apiKey. Environment setup will ask you to save it as api_key.
+             Use this child's key; a parent or another tenant's key selects that other project.
+
+         2   In Authentication → Sign-in method, enable Google, select a support email,
+             and save. Enable Email/Password if using Agoge's email sign-in option:
                https://console.firebase.google.com/project/{self.project}/authentication/providers
-        
-         2️   If the project hasn’t been “upgraded” to Firebase yet:
-               • Click **Add Firebase to an existing Google Cloud project**  
-               • Follow the wizard to finish the upgrade.
-        
-         3   In Build ▸ Authentication ▸ Sign-in method  
-               Enable every provider your app needs  
-               (e.g. Email/Password, Google, OIDC, …).
-        
-         4   In Build ▸ Authentication ▸ Settings ▸ Authorized domains  
-               Add the shared app hostname (app.<parent-dns-suffix>).
-        
-         5   In APIs & Services ▸ Credentials ▸ OAuth2 Client ID  
-               • Add https://{self.project}.firebaseapp.com/__/auth/handler to *Authorized redirect URIs*
-               • Add https://{self.project}.firebaseapp.com and https://app.<parent-dns-suffix> to
-                 *Authorized JavaScript origins*.
 
-         Firebase auth defaults to {self.project}.firebaseapp.com; tenant DNS records are not required.
-         Before building React, setup saves the Firebase auth domain for this project.
-         If an old custom domain is configured, Enter selects the default above;
-         choose K only to keep a working custom Firebase authentication domain.
+         3   In Authentication → Settings → Authorized domains, add the shared app hostname:
+               https://console.firebase.google.com/project/{self.project}/authentication/settings
+             Example: app.agoge-labs.com (hostname only; no https:// or tenant path).
+             Setup prints the exact hostname before React builds, after shared settings are entered.
 
-         When all required providers show Enabled, type Y and press Enter
-         (or N to skip this step).
+         4   Open the existing Web OAuth client identified by Firebase's Google provider:
+               https://console.cloud.google.com/auth/clients?project={self.project}
+             Match the provider's Web client ID; editing an unrelated client has no effect.
+             Authorized redirect URI: https://{self.project}.firebaseapp.com/__/auth/handler
+             Authorized JavaScript origins: https://{self.project}.firebaseapp.com and
+             your shared app origin (for example, https://app.agoge-labs.com), without paths.
+             The tenant's /login page is the app return page, not the OAuth callback.
+
+         Default auth domain: {self.project}.firebaseapp.com; no tenant DNS zone is needed.
+         Before React builds, setup checks the key's project and saves the selected auth domain.
+         If an old custom domain is found, Enter uses the default; K keeps a working domain
+         configured in this child; C cancels deployment.
+         Changing api_key or firebase_auth_domain requires rebuilding React.
+         Cloud Run runtime environment edits cannot update an existing JavaScript bundle.
+
+         Guide and troubleshooting: docs/operations/firebase-authentication.md
+         These console changes are manual. Type Y when complete, or N to defer them.
         ──────────────────────────────────────────────────────────────────────────────
         """.rstrip()
 
         confirmation = input(firebase_prompt).strip().upper() if not self.suppress else "Y"
         if confirmation != "N":
-            print("✔ Firebase authentication configuration confirmed.")
+            print("Continuing setup. This prompt does not verify Firebase provider, domain, or OAuth settings. "
+                  "Checklist: docs/operations/firebase-authentication.md")
+        else:
+            print("Firebase console setup deferred. Complete docs/operations/firebase-authentication.md "
+                  "before testing sign-in.")
 
         # 6. Pub/Sub topics ---------------------------------------------------------------
         confirmation = (

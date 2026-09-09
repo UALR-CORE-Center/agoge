@@ -33,6 +33,8 @@ Existing legacy DNS and app URL overrides are preserved and remain editable thro
 
 ## Firebase configuration during deployment
 
+Use the [Firebase authentication setup guide](firebase-authentication.md) for the console checklist, where to obtain the child project's `api_key`, exact `test-dev` URLs, and login troubleshooting. Firebase settings belong to the child project even though the parent serves the shared app hostname. Provider, authorized-domain, and OAuth-client configuration remains manual.
+
 Full installations and every main-application deployment that includes React resolve Firebase settings before submitting the build. With no override, setup saves `<tenant-project>.firebaseapp.com` in the tenant's `admin-info/project` document. If an older custom domain is present, setup displays it and offers:
 
 - **Enter:** Save and use the child's default Firebase domain.
@@ -41,13 +43,9 @@ Full installations and every main-application deployment that includes React res
 
 Before saving the domain or building, setup verifies that the Firebase API key selects the same project as the deployment target. It reads the target's actual project number through Resource Manager using setup's Application Default Credentials, then reads the public Firebase project configuration with the selected `api_key`. It does not trust the stored `project_number`, which might also have been copied from another tenant. Missing keys, mismatched projects, unavailable metadata, and failed Firebase requests stop the build. The account running setup needs `resourcemanager.projects.get` on the child project. The key is sent in an HTTP header and is not printed in the validation output.
 
-If the login page reports another tenant's Firebase project or authorized domains, replace **`api_key`** through **Synchronize Environment Variables → Specific**. Get the replacement from the selected child's **Firebase Project Settings → General → Your apps → Web app SDK configuration → apiKey**, or its Firebase-generated browser key under **Google Cloud → APIs & Services → Credentials**. Then rebuild React. Setting `projectId` or `authDomain` does not change the project associated with a key. Each Firebase key belongs to exactly one project, as explained in [Firebase's API key documentation](https://firebase.google.com/docs/projects/api-keys). Firebase keys remain local to each tenant even when SendGrid, OpenAI, and Shodan keys are shared.
-
 The selected domain, child Firebase API key, project ID, shared API origin, and project path are written into `frontend/.env.production` before Cloud Build uploads the frontend. Cloud upload and Docker ignore rules exclude local environment overrides and backups while including this generated file. The Docker build requires the file. Setup restores existing local files afterward and removes generated files that did not exist before deployment, including when a build fails. It also stops if the selected project differs from the environment document's project, preventing a copied configuration from deploying to another tenant.
 
-For an existing deployment, choose **Application Installation and Updates → Update Main Application Only → Specific → React**. Accept the default Firebase domain when prompted. This rebuild is required because [Vite embeds environment values in the generated JavaScript](https://vite.dev/guide/env-and-mode); changing Cloud Run runtime variables does not update an existing frontend image. API-only and cloud-function-only deployments do not change the Firebase domain.
-
-Setup prints the effective project, authentication domain, app hostname, and OAuth callback without displaying the API key. In that child's Firebase console, enable Google sign-in and add the shared app hostname, without a path, to **Authentication → Settings → Authorized domains**. The Google OAuth client used by Firebase must allow `https://<auth-domain>/__/auth/handler`. These console settings are still manual. See [Firebase's Google sign-in configuration](https://firebase.google.com/docs/auth/web/google-signin).
+For an existing deployment, follow [Repair an existing deployment](firebase-authentication.md#repair-an-existing-deployment): save the correct child key and rebuild through **Application Installation and Updates → Update Main Application Only → Specific → React**. Changing Cloud Run runtime variables alone does not update an existing frontend image. API-only and cloud-function-only deployments do not change the Firebase domain.
 
 ## Rename or remove setup menu entries
 

@@ -127,10 +127,21 @@ def prepare_firebase_auth(env) -> None:
     env.firebase_auth_domain = domain
     env._auth_config = None
 
-    app_host = urlsplit(_app_origin(env)).hostname
+    app_origin = _app_origin(env)
+    app_host = urlsplit(app_origin).hostname
     print(
         f'Building React with Firebase project {env.project} and auth domain {domain}.\n'
-        f'In Firebase Authentication for {env.project}, enable Google and authorize {app_host}.\n'
-        f'Google OAuth callback: https://{domain}/__/auth/handler\n'
-        'These settings are compiled into React. Rebuild React after changing them.'
+        'Complete this console checklist in the same child project; the key check does not verify these settings:\n'
+        f'  1. Enable Google with a support email: '
+        f'https://console.firebase.google.com/project/{env.project}/authentication/providers\n'
+        f'  2. Add {app_host} to Authentication → Settings → Authorized domains (hostname only, no scheme/path):\n'
+        f'     https://console.firebase.google.com/project/{env.project}/authentication/settings\n'
+        f'  3. Open the existing Web OAuth client used by Firebase\'s Google provider:\n'
+        f'     https://console.cloud.google.com/auth/clients?project={env.project}\n'
+        f'     Authorized JavaScript origins: {app_origin} and https://{domain} (no paths).\n'
+        f'     Google OAuth callback / authorized redirect URI: https://{domain}/__/auth/handler\n'
+        '     The tenant login page is the app return page; keep the Firebase handler as the OAuth callback.\n'
+        'The Firebase key, auth domain, project ID, app path, and API origin are compiled into React.\n'
+        'Rebuild React after changing them; Cloud Run runtime environment edits cannot update an existing bundle.\n'
+        'Guide and troubleshooting: docs/operations/firebase-authentication.md'
     )
