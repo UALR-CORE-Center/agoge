@@ -55,6 +55,8 @@ Agoge runs entirely in Google Cloud and uses several managed services:
 
 The platform supports multi-tenant deployments where multiple training environments share a central resource project.
 
+For current hosting settings and parent-project SendGrid, OpenAI, and Shodan keys, see [Shared project setup and API secrets](docs/operations/shared-project-setup.md).
+
 ## Project Status
 Agoge is actively developed and maintained by the UALR CORE Center.
 
@@ -127,31 +129,31 @@ The wizard will:
 
 | Task                | Where to do it         | Details                                                                                                                                                                                                                                                                                 |
 | ------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Domain mappings** | Cloud Run → *Domains*  | Map `api.<your-domain>` → API service, `app.<your-domain>` → React front-end.                                                                                                                                                                                                           |
+| **Shared routing** | Parent project's load balancer / gateway | Route this tenant's `project_path` on the shared app and API hostnames to its Cloud Run services. See [shared project setup](docs/operations/shared-project-setup.md). |
 | **Quota boosts**    | IAM & Admin → *Quotas* | Set limits using the table below (MCB = Max Concurrent Builds).<br><br> <ul><li>Subnetworks = MCB × 2</li><li>Networks = MCB × 1</li><li>Firewall Rules = MCB × 3</li><li>Routes = MCB × 2</li><li>In-Use IPs = MCB × 1</li><li>CPUs = MCB × 3</li><li>Concurrent Builds = 50</li></ul> |
 
 ---
 
 ### 4  Firebase & SSO (Configuration steps directed during the setup script)
 
-1. **DNS records**
-   * `api.<your-domain>` → Cloud Run default CNAME-record.
-   * `app.<your-domain>` → Cloud Run default CNAME-record.
-   * `auth.<your-domain>` → CNAME to `<project>.web.app.`
+1. **Shared hosting**
+   * Use the parent's app/API DNS records and gateway routes for the tenant's `project_path`.
+   * Firebase authentication defaults to `<tenant-project>.firebaseapp.com`; a tenant-specific DNS zone or custom auth hostname is not required.
 
 2. **Firebase console → Build ▸ Authentication**
 
-   * *Settings* → **Authorized domains** → add `app.<your-domain>`, `auth.<your-domain>`, `127.0.0.1`.
-   * *Hosting* → “Add custom domain” → `auth.<your-domain>` (choose *serve traffic*).
+   * Enable the required sign-in providers in the tenant project.
+   * *Settings* → **Authorized domains** → add `app.<parent-dns-suffix>` and any local development hostnames you use.
 
 3. **Google Cloud console → APIs & Services ▸ OAuth 2.0**
 
    * Create / edit a **Web application** client.
-   * **Authorized JavaScript origins** → same list as Firebase.
+   * **Authorized JavaScript origins** → `https://app.<parent-dns-suffix>` and `https://<tenant-project>.firebaseapp.com`.
    * **Authorized redirect URIs** →
 
-     * `https://<project>.firebaseapp.com/__/auth/handler`
-     * `https://auth.<your-domain>/__/auth/handler`
+     * `https://<tenant-project>.firebaseapp.com/__/auth/handler`
+
+Existing custom `firebase_auth_domain` settings remain supported. Keep the corresponding Firebase Hosting and OAuth configuration if you use an override.
 
 ### 5  Automating quota changes (optional)
 

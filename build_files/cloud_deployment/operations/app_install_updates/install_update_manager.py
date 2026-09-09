@@ -32,7 +32,7 @@ class InstallUpdateManager:
 
         print(
             "🎉 Setup complete! Your new Agoge project is ready.\n"
-            "👉 Next step: create Cloud DNS records that map your domain to the Cloud Run app and API."
+            "👉 Verify that the shared app/API gateway routes this project's project_path to its Cloud Run services."
         )
         if app_deployed and function_deployed:
             self._create_update_record(action="initial install")

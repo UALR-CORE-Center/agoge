@@ -17,6 +17,7 @@ from common.constants.buckets import Buckets
 from common.constants.enumerators import SnapshotTypes
 from common.constants.states import ImageStatus, ServerStates
 from common.models.wireguard import WireGuardEndpointModel
+from common.utilities.gcp.shared_secrets import shared_api_secret_names
 
 
 UnitTypeValue = Literal[
@@ -26,6 +27,13 @@ UnitTypeValue = Literal[
 
 
 class CloudEnvModel(BaseModel):
+    @model_validator(mode='before')
+    @classmethod
+    def validate_shared_api_secrets(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            shared_api_secret_names(values)
+        return values
+
     classroom_user: Optional[str] = Field(default=None, description="Email account of user to associate "
                                                                     "with Google Classroom")
     max_workspaces: Optional[int] = Field(default=300, le=1000, description="Max number of workspaces to allow")

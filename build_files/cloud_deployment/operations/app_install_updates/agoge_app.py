@@ -5,6 +5,7 @@ import shutil
 
 
 from common.utilities.gcp.cloud_env import CloudEnv
+from cloud_deployment.operations.env_and_quotas.shared_api_secrets import ensure_shared_api_secret_access
 
 
 class Commands:
@@ -160,6 +161,7 @@ class AgogeApp:
             self._restore_env_files()
 
     def _deploy_api(self):
+        ensure_shared_api_secret_access(self.env)
         self._stage_build(app_type=Commands.AppType.API)
 
         return self._deploy_cloud_run(
@@ -232,6 +234,7 @@ class AgogeApp:
         return True
 
     def deploy_cloud_functions(self) -> bool:
+        ensure_shared_api_secret_access(self.env)
         # This does not need to be run everytime, but this is here temporarily to make sure it gets set up correctly.
         print(f"Setting the default cloud function service account permissions to the editor role.")
         command = self.commands.ADD_DEFAULT_COMPUTE_EDITOR_ROLE.format(project=self.env.project,
@@ -318,10 +321,13 @@ class AgogeApp:
                 {
                     "DEVELOPMENT": "false",
                     "PARENT_DOMAIN": self.env.parent_dns_suffix.lstrip('.'),
-                    "DOMAIN": self.env.dns_suffix.lstrip('.'),
-                    "SUB_DOMAIN": self.env.app_sub_domain,
+                    # Existing standalone deployments may retain explicit
+                    # overrides. Shared projects need only PARENT_DOMAIN.
+                    "DOMAIN": (self.env.env_dict.get('dns_suffix') or '').strip('.') or None,
+                    "SUB_DOMAIN": self.env.env_dict.get('app_sub_domain'),
                 }
             ),
+            remove_variables=('DOMAIN', 'SUB_DOMAIN'),
         )
 
         # Write to React Vite environment file
@@ -342,18 +348,20 @@ class AgogeApp:
                     "VITE_FIREBASE_KEY": self.env.api_key,
                     "VITE_FIREBASE_AUTH_DOMAIN": self.env.firebase_auth_domain,
                     "VITE_PROJECT_ID": self.env.project,
-                    "VITE_PROJECT_PATH": f"/{self.env.project_path}/",
+                    "VITE_PROJECT_PATH": f"/{self.env.project_path}/" if self.env.project_path else '/',
                 }
             ),
         )
 
-    def _update_env_file(self, env_file: Path, new_variables: dict):
+    def _update_env_file(self, env_file: Path, new_variables: dict, remove_variables=()):
         """
         Update or create an environment file with the given variables.
         Preserves existing variables not explicitly updated.
         """
         try:
             env_variables = self._read_env_file(env_file)
+            for key in remove_variables:
+                env_variables.pop(key, None)
             env_variables.update(new_variables)  # Update or add new variables
             with open(env_file, "w") as file:
                 for key, value in env_variables.items():

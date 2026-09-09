@@ -42,25 +42,22 @@ class AppConfig:
                 "http://127.0.0.1"
             ]
         else:
-            return [
-                f'https://{domain}',
-                f'https://app.{domain}',
-                f'https://auth.{domain}',
-                f'https://{sub}.{domain}',
-                f'https://{parent}',
-                f'https://app.{parent}',
-                f'https://auth.{parent}',
-                f'https://{sub}.{parent}'
-            ]
+            origins = []
+            for suffix in dict.fromkeys((domain, parent)):
+                if suffix:
+                    origins.extend([
+                        f'https://{suffix}',
+                        f'https://app.{suffix}',
+                        f'https://auth.{suffix}',
+                    ])
+                    if sub:
+                        origins.append(f'https://{sub}.{suffix}')
+            return list(dict.fromkeys(origins))
 
     @staticmethod
     def _hosts(domain: str = None, parent: str = None) -> List:
-        if domain:
-            return [
-                domain,
-                f"*.{domain}",
-                parent,
-                f"*.{parent}"
-            ]
-        else:
-            return ['localhost', '127.0.0.1']
+        hosts = []
+        for suffix in dict.fromkeys((domain, parent)):
+            if suffix:
+                hosts.extend([suffix, f'*.{suffix}'])
+        return hosts or ['localhost', '127.0.0.1']

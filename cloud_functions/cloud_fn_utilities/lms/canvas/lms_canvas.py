@@ -118,7 +118,7 @@ class LMSCanvas(LMS):
 
     def _get_description(self):
         description = f"Your lab is available at " \
-                      f"<a href=https://{self.env.main_app_url}/join target=_blank>Agoge</a>. " \
+                      f"<a href={self.env.main_app_url}/join target=_blank>Agoge</a>. " \
                       f"Use the join code {self.build.get('join_code', None)} and the email address used to login " \
                       f"to this site. "
         if student_instructions_url := self.build['summary'].get('student_instructions_url', None):

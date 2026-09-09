@@ -5,6 +5,7 @@ from ...constants.buckets import Buckets
 from ...constants.database import DbCollections, DatabaseTypes, DATABASE_NAME, ADMIN_INFO_DOCUMENT
 from ...document_database import DocumentDatabaseFactory
 from .cloud_logger import Logger, LoggerNames
+from .shared_secrets import shared_api_secret_names
 
 
 class CloudEnv:
@@ -60,11 +61,10 @@ class CloudEnv:
     def auth_config(self):
         if self._auth_config is None:
             """Generate authentication configuration."""
-            dns_suffix = self.dns_suffix.rstrip('.')
             api_key = self.api_key
             self._auth_config = {
                 'api_key': api_key,
-                'auth_domain': f'auth{dns_suffix}',
+                'auth_domain': self.firebase_auth_domain,
                 'project_id': self.project
             }
         return self._auth_config
@@ -135,22 +135,37 @@ class CloudEnv:
 
         # GCP Project Variables
         self.project = get('project')
-        self.project_path = env['project_path']
+        self.project_path = (get('project_path') or '').strip('/')
         self.project_number = get('project_number')
         self.region = env['region']
         self.zone = env['zone']
         self.custom_dnszone = get('custom_dnszone')
-        self.dnszone = env['dnszone']
-        self.dns_suffix = env['dns_suffix']
-        self.parent_dns_suffix = env['parent_dns_suffix']
+        # Shared installations need only the parent DNS settings. Keep legacy
+        # overrides readable for projects that still use their own domains.
+        parent_domain = (get('parent_dns_suffix') or get('dns_suffix') or '').strip('.')
+        self.parent_dns_suffix = f'.{parent_domain}' if parent_domain else ''
+        domain = (get('dns_suffix') or self.parent_dns_suffix).strip('.')
+        self.dns_suffix = f'.{domain}' if domain else ''
+        self.dnszone = get('dnszone') or get('dns_zone') or get('parent_dnszone')
         self.wireguard_dns_prefix = get('wireguard_dns_prefix', 'wg')
         self.wireguard_dns_suffix = get('wireguard_dns_suffix') or self.parent_dns_suffix
         self.wireguard_port = int(get('wireguard_port') or 51820)
-        self.parent_project = env['parent_project']
-        self.parent_zone = env['parent_dnszone']
-        self.main_app_url = env['main_app_url']
-        self.firebase_auth_domain = env['firebase_auth_domain']
-        self.app_sub_domain = env['app_sub_domain']
+        self.parent_project = get('parent_project') or self.project
+        self.parent_zone = get('parent_dnszone') or self.dnszone
+        self.app_sub_domain = get('app_sub_domain') or 'app'
+        app_url = get('main_app_url')
+        if not app_url:
+            if not parent_domain:
+                raise ValueError('parent_dns_suffix must be configured to derive the shared app URL')
+            app_url = f'https://app.{parent_domain}'
+            if self.project_path:
+                app_url += f'/{self.project_path}'
+        self.main_app_url = (
+            app_url if app_url.startswith(('https://', 'http://')) else f'https://{app_url}'
+        ).rstrip('/')
+        # Firebase remains tenant-specific even when the app shares a hostname.
+        self.firebase_auth_domain = get('firebase_auth_domain') or f'{self.project}.firebaseapp.com'
+        self.shared_api_secrets = shared_api_secret_names(env)
         self.student_workout_firewall = get('student_workout_firewall', False)
         self.default_server_image_project = get('default_server_image_project')
 
@@ -165,10 +180,9 @@ class CloudEnv:
 
     def _get_auth_config(self) -> dict:
         """Generate authentication configuration."""
-        dns_suffix = self.dns_suffix.rstrip('.')
         return {
             'api_key': self.get_secret("api_key"),
-            'auth_domain': f'auth{dns_suffix}',
+            'auth_domain': self.firebase_auth_domain,
             'project_id': self.project
         }
 
@@ -181,14 +195,20 @@ class CloudEnv:
         Returns:
             The secret value if found, else None.
         """
+        # Parent selection is explicit and authoritative, even when an older
+        # tenant-local copy exists. Never fall back across billing accounts.
+        shared = secret_name in self.shared_api_secrets
+        project = self.parent_project if shared else self.project
         secret_version = 'latest'
         secret_path = (
-            f'projects/{self.project}/secrets/{secret_name}/versions/{secret_version}'
+            f'projects/{project}/secrets/{secret_name}/versions/{secret_version}'
         )
         try:
             response = self.secret_client.access_secret_version(name=secret_path)
             secret_value = response.payload.data.decode('UTF-8')
             return secret_value
         except Exception as e:
+            if shared:
+                raise RuntimeError(f"Cannot access shared API secret '{secret_path}'") from e
             self.logger.debug(f"Error accessing secret '{secret_name}': {e}")
             return None

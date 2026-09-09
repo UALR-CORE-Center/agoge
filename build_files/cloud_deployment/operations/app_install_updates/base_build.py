@@ -193,17 +193,15 @@ class BaseBuild:
                (e.g. Email/Password, Google, OIDC, …).
         
          4   In Build ▸ Authentication ▸ Settings ▸ Authorized domains  
-               Add the custom domain you’ll use for this project.
+               Add the shared app hostname (app.<parent-dns-suffix>).
         
          5   In APIs & Services ▸ Credentials ▸ OAuth2 Client ID  
-               • Add https://auth.<dns-suffix>/__/auth/handler to *Authorized redirect URIs*  
-               • Add https://auth.<dns-suffix>, https://app.<dns-suffix>**, and https://<project-id>.web.app to
+               • Add https://{self.project}.firebaseapp.com/__/auth/handler to *Authorized redirect URIs*
+               • Add https://{self.project}.firebaseapp.com and https://app.<parent-dns-suffix> to
                  *Authorized JavaScript origins*.
-        
-         6   Create a DNS **CNAME** record:
-               auth.<dns-suffix>  →  <project-id>.firebaseapp.com.
-               
-         7   Add the custom domain auth.<dns-suffix> to the Firebase project in Build ▸ Hosting.
+
+         Firebase auth defaults to {self.project}.firebaseapp.com; tenant DNS records are not required.
+         Existing firebase_auth_domain overrides remain supported.
 
          When all required providers show Enabled, type Y and press Enter
          (or N to skip this step).

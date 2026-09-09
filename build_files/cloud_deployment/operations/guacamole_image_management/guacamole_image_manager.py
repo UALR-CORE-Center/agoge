@@ -201,7 +201,7 @@ class GuacamoleImageManager:
         Returns:
             str: The final bash script with placeholders replaced by actual values.
         """
-        base_guac_domain = self.env.dns_suffix.lstrip(".")
+        base_guac_domain = (self.env.parent_dns_suffix or self.env.dns_suffix).strip('.')
         raw_cert_section = textwrap.dedent("""\
             # ------------------------------------------------------------------------------
             # Step 2: Obtain Wildcard SSL Certificate
