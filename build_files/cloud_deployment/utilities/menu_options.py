@@ -34,6 +34,7 @@ class SetupOptions(bytes, Enum):
     CLOUD_FUNCTION = (2, "Update Cloud Function Only")
     MAIN_APP = (3, "Update Main Application Only")
     CLASSIFIED_APP = (5, "Update Classified Application Only")
+    SHARED_LOAD_BALANCER = (22, "Configure Shared Load Balancer Routing")
 
     # Images
     DEFAULT_SERVER_IMAGES = (4, "Copy Over Default Server Images")
@@ -89,6 +90,7 @@ category_menu = {
             (SetupOptions.CLOUD_FUNCTION, SetupOptions.CLOUD_FUNCTION.description),
             (SetupOptions.MAIN_APP, SetupOptions.MAIN_APP.description),
             (SetupOptions.CLASSIFIED_APP, SetupOptions.CLASSIFIED_APP.description),
+            (SetupOptions.SHARED_LOAD_BALANCER, SetupOptions.SHARED_LOAD_BALANCER.description),
             (SetupOptions.BACK, SetupOptions.BACK.description),
         ],
     },

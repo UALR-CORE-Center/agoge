@@ -18,7 +18,7 @@ For example, these settings describe a tenant served at `https://app.example.edu
 }
 ```
 
-This example shows the hosting fields; setup still collects region, zone, admin email, and the other operational settings. The shared gateway must already route the project's path to its Cloud Run services. Setup does not create those gateway routes.
+This example shows the hosting fields; setup still collects region, zone, admin email, and the other operational settings. The shared load balancer must already exist. Setup adds the tenant's app and API routes after the applications are deployed and ready, as described below.
 
 | Runtime value | Default when the legacy override is absent |
 | --- | --- |
@@ -30,6 +30,27 @@ This example shows the hosting fields; setup still collects region, zone, admin 
 Leading/trailing dots in DNS suffixes and slashes in `project_path` are normalized. Firebase's API key and project ID remain tenant-specific. Authorize the shared app hostname in the tenant's Firebase Authentication settings. Projects with existing custom Firebase hosting retain their explicit `firebase_auth_domain`; the default does not provision a custom authentication domain. See [Firebase's authentication domain guidance](https://firebase.google.com/docs/auth/web/redirect-best-practices) for applications using redirect sign-in.
 
 Existing legacy overrides are preserved and remain editable through **Specific**. Remove an obsolete override from the tenant's `admin-info` environment document when you want the derived default to take effect. Do this after deploying the updated API and cloud functions, because older code requires those fields. Routine upgrades do not delete settings or change secret sources.
+
+## Configure shared load-balancer routing
+
+Full installation and application/function updates configure shared routing after successful deployment. Updating just the main application or cloud function also checks routing once that deployment succeeds. Setup verifies that both Cloud Run services have their latest revisions ready and receiving 100% of traffic, and that the Pub/Sub Cloud Function is active, before publishing a tenant route. The function handles Pub/Sub events and is a readiness prerequisite; it does not receive a public load-balancer route.
+
+For applications deployed manually, or to resume a deferred routing step, run `python setup.py`, select the tenant project, and choose **Application Installation and Updates → Configure Shared Load Balancer Routing**. This operation does not rebuild the applications. The default resource names are `agoge-react`, `agoge-api`, and `agoge` for the Gen 2 Pub/Sub function. If a required deployment is missing or not ready, setup prints commands to inspect the selected tenant and region. Choose **R** to retry after deploying it, **N** to enter different resource names, or **Enter** to defer. Enter service/function names, not URLs. The function must consume the tenant's `agoge` Pub/Sub topic. An incomplete deployment or routing step stops the full install/update before a successful update record is written.
+
+Setup finds the existing global URL map in `parent_project` from the exact host rules for `app.<parent_dns_suffix>` and `api.<parent_dns_suffix>`. It selects a map automatically only when one map has both exact hosts. Otherwise, it prompts for the map name; entering a name confirms that both hosts use that map, and missing exact host rules will be added. This workflow supports one shared URL map for both hosts; configure routing manually if the app and API use separate maps. The URL map's resource name is distinct from a path matcher name such as `app-matcher`; setup reads and updates the complete map instead of importing a path-matcher fragment as a replacement. After successful routing, setup remembers `url_map`, `react_service`, `api_service`, and `function` in the `shared_load_balancer` object of the tenant's Firestore `admin-info/project` document. Update that saved configuration if you later rename resources or change the shared load-balancer topology.
+
+For each Cloud Run service, setup creates or reuses a regional serverless network endpoint group (NEG) and a global `EXTERNAL_MANAGED` backend service in the tenant project. The NEG and Cloud Run service share a region. The parent URL map references these tenant backend services, following [Google Cloud's cross-project backend-service configuration](https://docs.cloud.google.com/load-balancing/docs/https/setup-cross-project-backend-service-backend-bucket) and [serverless load-balancer setup](https://docs.cloud.google.com/load-balancing/docs/https/setup-global-ext-https-serverless).
+
+For `project_path: test-dev`, the routes are:
+
+| Shared host | Paths | Tenant destination | Rewrite |
+| --- | --- | --- | --- |
+| `app.agoge-labs.com` | `/test-dev`, `/test-dev/*` | React Cloud Run backend | Strip the tenant prefix to `/` |
+| `api.agoge-labs.com` | `/test-dev`, `/test-dev/*` | API Cloud Run backend | Strip the tenant prefix to `/` |
+
+Existing tenants, custom backend names, default services, and other routing settings are preserved. Repeating setup reuses compatible resources and routes. Conflicting path ownership or unsupported routing configurations stop the change for manual review; setup does not silently redirect another tenant's traffic. The shared load balancer, HTTPS certificates, public DNS records, and Firebase authorized domains still need to be configured separately.
+
+The account running setup needs permission to read Cloud Run services and Cloud Functions in the tenant, create/read/use its serverless NEGs and backend services, and list/read/validate/update URL maps in the parent, including reading regional/global operation status. Example roles are `roles/run.viewer` and `roles/cloudfunctions.viewer` for readiness checks, `roles/compute.networkAdmin` for tenant Compute resources, and `roles/compute.loadBalancerAdmin` for parent URL-map management; equivalent narrower permissions or existing grants are sufficient. Cross-project references also require `compute.backendServices.use` on the tenant backends, which can be granted to the setup account with `roles/compute.loadBalancerServiceUser` on each backend. Setup does not grant these routing permissions automatically. See [Google Cloud's cross-project IAM requirements](https://docs.cloud.google.com/load-balancing/docs/https/setup-cross-project-backend-service-backend-bucket).
 
 ## Choose how each API key is stored
 

@@ -9,6 +9,7 @@ from common.constants.project_constants import CURRENT_VERSION
 from common.document_database import DocumentDatabaseFactory
 from cloud_deployment.operations.app_install_updates.base_build import BaseBuild
 from cloud_deployment.operations.app_install_updates.agoge_app import AgogeApp
+from cloud_deployment.operations.app_install_updates.shared_load_balancer import SharedLoadBalancer
 from cloud_deployment.operations.guacamole_image_management.guacamole_image_manager import GuacamoleImageManager
 from cloud_deployment.operations.lab_management.shared_lab_manager import SharedLabManager
 
@@ -22,20 +23,20 @@ class InstallUpdateManager:
         deploying the main app, and deploying cloud functions.
         """
         BaseBuild(project=self.project_id).run()
-        agoge_app = AgogeApp()
-        app_deployed = agoge_app.deploy_main_app()
-        function_deployed = agoge_app.deploy_cloud_functions()
+        agoge_app = AgogeApp(project=self.project_id)
+        if not agoge_app.deploy_main_app():
+            return
+        if not agoge_app.deploy_cloud_functions():
+            return
+        if not SharedLoadBalancer(project=self.project_id).run():
+            return
         GuacamoleImageManager(
             project=self.project_id
         ).create_guac_project_image()
         SharedLabManager().run()
 
-        print(
-            "🎉 Setup complete! Your new Agoge project is ready.\n"
-            "👉 Verify that the shared app/API gateway routes this project's project_path to its Cloud Run services."
-        )
-        if app_deployed and function_deployed:
-            self._create_update_record(action="initial install")
+        self._create_update_record(action="initial install")
+        print("🎉 Setup complete! Your new Agoge project is ready with shared app/API routing.")
 
     def run_update(self) -> None:
         """
@@ -45,11 +46,14 @@ class InstallUpdateManager:
         # added to full installs. Perform the same idempotent migration before
         # deploying code that depends on it.
         BaseBuild(project=self.project_id, suppress=True).ensure_wireguard_prerequisites()
-        agoge_app = AgogeApp()
-        app_deployed = agoge_app.deploy_main_app()
-        function_deployed = agoge_app.deploy_cloud_functions()
-        if app_deployed and function_deployed:
-            self._create_update_record(action="update")
+        agoge_app = AgogeApp(project=self.project_id)
+        if not agoge_app.deploy_main_app():
+            return
+        if not agoge_app.deploy_cloud_functions():
+            return
+        if not SharedLoadBalancer(project=self.project_id).run():
+            return
+        self._create_update_record(action="update")
 
     def _create_update_record(self, action: str) -> None:
         """

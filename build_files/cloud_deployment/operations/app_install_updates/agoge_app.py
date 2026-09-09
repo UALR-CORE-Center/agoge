@@ -9,14 +9,15 @@ from cloud_deployment.operations.env_and_quotas.shared_api_secrets import ensure
 
 
 class Commands:
-    BASE_BUILD_CLOUD_RUN_COMMAND = "gcloud builds submit {target_dir} --tag {image_path}"
-    BUILD_API_CLOUD_RUN_COMMAND = "gcloud builds submit . --tag {image_path}"
+    BASE_BUILD_CLOUD_RUN_COMMAND = "gcloud builds submit {target_dir} --tag {image_path} --project={project}"
+    BUILD_API_CLOUD_RUN_COMMAND = "gcloud builds submit . --tag {image_path} --project={project}"
     BASE_DEPLOY_CLOUD_RUN_COMMAND = (
         "gcloud run deploy agoge-{app_type} "
         "--image {image_path} "
         "--memory=4096Mi " 
         "--cpu 4 "
         "--platform=managed "
+        "--project={project} "
         "--region={region} "
         "--allow-unauthenticated " 
         "--service-account={service_account}"
@@ -30,6 +31,7 @@ class Commands:
     DEPLOY_CLOUD_FUNCTION_COMMAND = (
         "gcloud functions deploy --quiet agoge "
         "--gen2 "
+        "--project={project} "
         "--region={region} "
         "--memory=2048Mi "
         "--entry-point=agoge_cloud_function "
@@ -48,7 +50,8 @@ class Commands:
         f"--topic=agoge "
         f"--message-body=Hello! "
         f"--attributes=handler=MAINTENANCE "
-        f"--location=us-central1"
+        "--location={region} "
+        "--project={project}"
     )
 
     class ServiceAccounts:
@@ -81,10 +84,10 @@ class Commands:
     ) -> str:
         image_path = self.image_path(app_type)
         print(f"Submitting build for agoge-{app_type} in {self.env.project}")
-        if app_type == self.AppType.REACT:
-            return self.BASE_BUILD_CLOUD_RUN_COMMAND.format(target_dir=target_dir, image_path=image_path)
-        elif app_type == self.AppType.API:
-            return self.BASE_BUILD_CLOUD_RUN_COMMAND.format(target_dir=target_dir, image_path=image_path)
+        if app_type in (self.AppType.REACT, self.AppType.API):
+            return self.BASE_BUILD_CLOUD_RUN_COMMAND.format(
+                target_dir=target_dir, image_path=image_path, project=self.env.project
+            )
 
     def deploy_cloud_run(
         self,
@@ -102,6 +105,7 @@ class Commands:
             app_type=app_type,
             image_path=image_path,
             region=self.env.region,
+            project=self.env.project,
             service_account=service_account
         )
         if min_instance:
@@ -121,10 +125,12 @@ class Commands:
 class AgogeApp:
     def __init__(
         self,
-        suppress: bool = True
+        suppress: bool = True,
+        *,
+        project: str | None = None,
     ) -> None:
         self.suppress = suppress
-        self.env = CloudEnv()
+        self.env = CloudEnv(project=project)
         self.service = discovery.build('cloudscheduler', 'v1')
         self.commands = Commands(env=self.env)
         self.job_name = (f"projects/{self.env.project}/locations/{self.env.region}/jobs/"
@@ -255,7 +261,8 @@ class AgogeApp:
             print(f"Error deploying the cloud function! See messages above. Exiting without deploying the "
                   f"cloud function")
             return False
-        self._set_scheduler()
+        if not self._set_scheduler():
+            return False
 
         if self.staging_dir.exists():
             print('... removing temporary .staging directory ')
@@ -282,7 +289,7 @@ class AgogeApp:
                 shutil.move(backup, original)
                 print(f"Restored original file: {original}")
 
-    def _set_scheduler(self) -> None:
+    def _set_scheduler(self) -> bool:
         parent = f'projects/{self.env.project}/locations/{self.env.region}'
         response = self.service.projects().locations().jobs().list(parent=parent).execute()
         job_exists = False
@@ -290,8 +297,13 @@ class AgogeApp:
             if job.get('name', None) == self.job_name:
                 job_exists = True
         if not job_exists:
-            if not self._stream_command_output(self.commands.CLOUD_SCHEDULER_COMMAND):
+            command = self.commands.CLOUD_SCHEDULER_COMMAND.format(
+                project=self.env.project, region=self.env.region
+            )
+            if not self._stream_command_output(command):
                 print(f"Error setting up the cloud scheduler! See messages above.")
+                return False
+        return True
 
     @staticmethod
     def _stream_command_output(command: str) -> bool:
