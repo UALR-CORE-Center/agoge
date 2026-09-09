@@ -179,6 +179,17 @@ Click **Create Image**, select an existing project or global base image, and pro
 
 Checked-out or running template servers incur cloud cost. Stop them when not in use and check them in promptly after validation.
 
+### If base images are missing from the creation page
+
+The **Machine Configuration → Server Image** selector combines public OS images with custom Agoge images. Each catalog can be used independently, so a new project can create its first custom server from a public Ubuntu, Debian, or Windows image.
+
+1. Expand **Server Image** and choose **Clear Filter** to remove any project filter.
+2. If public images are still missing, ask a project administrator to open **Admin → Image Manager** in the same Agoge site. Choose **Sync**, allow a few minutes for the background task, then choose **Refresh**.
+3. Confirm that the desired public image is marked **Enabled**. Select it and choose **Enable** if needed, then **Refresh** to confirm. Disabled public images are excluded from the creation selector.
+4. Reload the server creation page and select the base image.
+
+The public catalog is synchronized into each child project's database. A shared image project setting does not populate this catalog. If **Sync** fails or the catalog stays empty, the administrator should check the child's Cloud Function logs for `GoogleImageSyncManager` and confirm that its Agoge Pub/Sub function is processing requests. Custom images also need an Agoge image record; creating an image directly in the GCP console alone does not add it to this selector.
+
 ## Create, restore, and delete snapshots
 
 Snapshots preserve server disk state before risky changes. They are useful recovery points, but they are not a substitute for exporting important learner work.

@@ -86,7 +86,7 @@ class ComputeImage:
         scope: ImageScopes = ImageScopes.PROJECT
     ) -> Union[dict, List]:
         """
-        Retrieves image data from both Compute and Datastore API
+        Retrieve independently available public and custom image catalogs.
 
         Raises:
             BadRequest: Invalid value for scope
@@ -95,12 +95,12 @@ class ComputeImage:
         if scope == ImageScopes.PROJECT:
             google_images = self.db.query(collection_name=DbCollections.GOOGLE_IMAGES)
             custom_images = self.db.query(collection_name=self.collection)
-            if google_images and custom_images:
-                custom = self.agoge_model_validator.load(custom_images)
-                global_images = self.compute_model_validator.load(google_images)
-                return {'custom': custom, 'project': global_images}
-            else:
-                return {'custom': [], 'project': []}
+            # A new project needs public images before it can create its first
+            # custom image. Neither catalog requires the other to be populated.
+            return {
+                'custom': self.agoge_model_validator.load(custom_images) if custom_images else [],
+                'project': self.compute_model_validator.load(google_images) if google_images else [],
+            }
         elif scope == ImageScopes.GLOBAL:
             if google_images := self.db.query(collection_name=DbCollections.GOOGLE_IMAGES):
                 return self.compute_model_validator.load(google_images)
