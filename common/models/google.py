@@ -30,6 +30,7 @@ class ComputeImageModel(BaseModel):
     project: Optional[str]
     global_id: Optional[str]
     description: Optional[str]
+    architecture: Optional[str] = None
 
     @field_validator('global_id', mode='before')
     @classmethod

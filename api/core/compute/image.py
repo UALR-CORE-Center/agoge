@@ -23,6 +23,8 @@ from common.constants.pub_sub import PubSub
 from common.constants.states import ImageStatus
 from common.constants.enumerators import ImageScopes, SnapshotTypes
 from common.utilities.gcp.compute.compute_image import ComputeImageAPI
+from common.utilities.gcp.compute.compute_machine_type import ComputeMachineTypesAPI
+from common.utilities.gcp.compute.image_compatibility import compatible_boot_image, normalize_architecture
 from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.document_database.factory import DocumentDatabaseFactory
 from common.exceptions import BadRequest, NotFound, AgogeValidationError, NotReady
@@ -344,6 +346,12 @@ class ComputeImage:
                                                f"following reserved names: {self.NAME_RESERVATIONS}")
 
         image_template, image_family = self._get_image(image_scope, image_id)
+        source_image = compatible_boot_image(
+            ComputeImageAPI(self.env.project, self.env.region, self.env.zone, log_name=self.log_name),
+            ComputeMachineTypesAPI(self.env.project, self.env.region, self.env.zone, log_name=self.log_name),
+            image_template, machine_type,
+        )
+        image_template = source_image.self_link
         if labels := form_data.get('labels'):
             labels = self._sanitize_labels(labels)
         else:
@@ -361,7 +369,8 @@ class ComputeImage:
             self_link=image_template,
             human_interaction=[generated_connection],
             labels=labels,
-            base_family=image_family
+            base_family=image_family,
+            architecture=normalize_architecture(source_image.architecture),
         )
         self.db.update(
             collection_name=self.collection,

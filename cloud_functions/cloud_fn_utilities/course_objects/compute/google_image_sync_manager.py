@@ -11,6 +11,7 @@ from common.models.google import ComputeImageModel
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.compute.compute_image import ComputeImageAPI
+from common.utilities.gcp.compute.image_compatibility import normalize_architecture
 
 
 class GoogleImageSyncManager:
@@ -255,6 +256,7 @@ class GoogleImageSyncManager:
             'creationTimestamp': image.creation_timestamp,
             'description': image.description,
             'disk_size': image.disk_size_gb,
+            'architecture': normalize_architecture(image.architecture),
             'os': self._get_os_from_project(project)
         }
         return ComputeImageModel(**new_image)

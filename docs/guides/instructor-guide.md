@@ -194,6 +194,22 @@ An administrator can also select the child project in `python setup.py` and run 
 
 ### If a new server reports no bootable device
 
+Check CPU architecture first. The server creation form currently offers E2
+machines, which require **AMD64 (x86-64)** images. An **ARM64** Ubuntu image
+cannot boot on an E2 machine even if its disk includes `UEFI_COMPATIBLE`.
+For example, `ubuntu-minimal-2204-jammy-arm64-v20260906` is an ARM image.
+For the WireGuard template, choose **Ubuntu 24.04 LTS AMD64**, family
+`ubuntu-2404-lts-amd64`, from `ubuntu-os-cloud`. See Google's
+[E2 machine details](https://docs.cloud.google.com/compute/docs/general-purpose-machines#e2_machine_series)
+and [Ubuntu image families](https://docs.cloud.google.com/compute/docs/images/os-details#ubuntu).
+
+The selector displays CPU architecture and disables ARM64 selections for this
+form. The API validates the actual source image and machine architecture before
+saving or queuing a new server. The Cloud Function checks again before building
+a template, including existing records and queued requests. Missing architecture
+metadata stops the build with an explanation instead of assuming compatibility.
+Public catalog synchronization fills the architecture field for older records.
+
 GCP's **RUNNING** state means the VM is powered on, not that its operating system has started. Serial messages such as `Boot failed: not a bootable disk` or `No bootable device` indicate failure before SSH or the account setup script can run. Changing the SSH key will not resolve that boot failure.
 
 Ask an administrator to inspect the attached boot disk and serial output. These PowerShell examples use the `wireguard-server` template in `test-dev-787001`:
@@ -210,10 +226,14 @@ Agoge now retains the selected base image through the first checkout and switche
 
 To recover after pulling these fixes:
 
-1. Have the administrator deploy the updated **API and Cloud Function** to the affected child project.
+1. Have the administrator deploy the updated **React application, API, and Cloud Function** to the affected child project. Run **Server Images & Build Specs → Synchronize Public OS Images** in setup to refresh architecture metadata in the public catalog.
 2. Create a replacement template with a **new server name**, such as `wireguard-server-v2`, and select the intended Ubuntu **AMD64** image for an `e2` VM. A new name avoids reusing the failed disk.
 3. Confirm Ubuntu boots and SSH works before configuring and checking in the replacement.
 4. Retain the failed VM and disk for inspection. Restarting does not recreate or repair the disk, and the new safeguard does not delete it automatically. Stop the failed VM while it is not being inspected.
+
+If the disk is ARM64 and the VM is E2, recovery requires a fresh AMD64 image
+and disk. Increasing disk size, changing SSH keys, or toggling Secure Boot
+does not convert an ARM operating system into an x86 operating system.
 
 ## Create, restore, and delete snapshots
 

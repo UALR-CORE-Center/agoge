@@ -1,10 +1,13 @@
 """Image selection regressions using local records, without GCP clients."""
 
 from copy import deepcopy
+from types import SimpleNamespace
 from unittest.mock import Mock
 
+from google.cloud.compute_v1 import Image, MachineType
 import pytest
 
+from api.core.compute import image as image_module
 from api.core.compute.image import ComputeImage
 from common.constants.database import DbCollections, DbOperators
 from common.constants.enumerators import ImageScopes
@@ -44,11 +47,21 @@ CUSTOM_IMAGE = {
 
 
 @pytest.fixture
-def catalog():
+def catalog(monkeypatch):
     service = object.__new__(ComputeImage)
     service.collection = DbCollections.IMAGE
     service.db = Mock()
     service.logger = Mock()
+    service.env = SimpleNamespace(project='test-dev-787001', region='us-central1', zone='us-central1-a')
+    service.log_name = 'api'
+    service.source_image_api = Mock()
+    service.source_image_api.get.return_value = Image(
+        name='ubuntu-test', self_link=PUBLIC_IMAGE['self_link'], architecture='X86_64',
+    )
+    service.machine_api = Mock()
+    service.machine_api.get_resource.return_value = MachineType(name='e2-standard-2', architecture='X86_64')
+    monkeypatch.setattr(image_module, 'ComputeImageAPI', Mock(return_value=service.source_image_api))
+    monkeypatch.setattr(image_module, 'ComputeMachineTypesAPI', Mock(return_value=service.machine_api), raising=False)
     service.compute_model_validator = ModelValidator(ComputeImageModel)
     service.agoge_model_validator = ModelValidator(AgogeImageModel)
     records = {
@@ -159,3 +172,33 @@ def test_creation_keeps_selected_public_source_in_saved_template(catalog):
     assert record['self_link'] == PUBLIC_IMAGE['self_link']
     assert record['base_family'] == PUBLIC_IMAGE['family']
     assert record['add_disk'] == '20'
+    assert record['architecture'] == 'X86_64'
+
+
+@pytest.mark.parametrize('scope', [ImageScopes.GLOBAL, ImageScopes.PROJECT])
+def test_arm_image_is_rejected_before_record_or_build_message(catalog, scope):
+    service, records = catalog
+    source = ('https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/'
+              'ubuntu-minimal-2204-jammy-arm64-v20260906')
+    record = records[DbCollections.GOOGLE_IMAGES if scope == ImageScopes.GLOBAL else DbCollections.IMAGE][0]
+    record['self_link'] = source
+    # A stale or tampered catalog value must not override live image metadata.
+    record['architecture'] = 'X86_64'
+    service.db.get.return_value = record
+    service.source_image_api.get.return_value = Image(
+        name='ubuntu-minimal-2204-jammy-arm64-v20260906', self_link=source, architecture='ARM64',
+    )
+    service._check_out = Mock()
+    from common.constants.pub_sub import PubSub
+
+    with pytest.raises(BadRequest, match='ARM64.*e2-standard-2.*X86_64'):
+        service.create_image_server(SimpleNamespace(email='instructor@example.edu', uid='test-user'), {
+            'action': str(PubSub.Actions.BUILD.value),
+            'server_name': 'wireguard-server', 'machine_type': 'e2-standard-2',
+            'description': 'WireGuard router', 'disk_size': '20',
+            'image_template': record['uuid'] if scope == ImageScopes.GLOBAL else record['name'],
+            'image_scope': scope.value, 'os': 'linux', 'username': 'wgadmin',
+            'ssh_key': 'ssh-ed25519 test-key wgadmin', 'password': 'test-password',
+        })
+    service.db.update.assert_not_called()
+    service._check_out.assert_not_called()

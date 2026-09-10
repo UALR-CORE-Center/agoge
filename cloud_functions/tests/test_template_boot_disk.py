@@ -3,14 +3,15 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from google.cloud.compute_v1 import AttachedDisk, Disk, Image, Instance, InsertInstanceRequest
+from google.cloud.compute_v1 import AttachedDisk, Disk, Image, Instance, InsertInstanceRequest, MachineType
 from google.protobuf.json_format import MessageToDict
 import pytest
 
 from cloud_fn_utilities.course_objects.compute import image_template_manager as template_module
 from cloud_fn_utilities.course_objects.compute.image_template_manager import ImageTemplateManager
 from common.constants.google import ImageSource
-from common.exceptions import Conflict, NotFound
+from common.constants.states import ServerStates
+from common.exceptions import BadRequest, Conflict, NotFound
 from common.utilities.gcp.compute.compute_instance import ComputeInstanceAPI
 from common.utilities.gcp.compute.resources.attached_disk_resource import AttachedDiskResource
 from common.utilities.gcp.compute.resources.instance_resource import InstanceResource
@@ -27,10 +28,14 @@ def manager(monkeypatch):
     manager.server_name = 'wireguard-server'
     manager.project = 'test-dev-787001'
     manager.env = SimpleNamespace(project=manager.project, zone='us-central1-a')
-    manager.server_spec = SimpleNamespace(self_link=UBUNTU, add_disk='20', image='image-wireguard-server')
+    manager.server_spec = SimpleNamespace(self_link=UBUNTU, add_disk='20', image='image-wireguard-server', machine_type='e2-standard-2')
     manager.compute_disk = Mock()
     manager.compute_disk.get.side_effect = NotFound('No disk')
     manager.compute_image = Mock()
+    manager.compute_image.get.return_value = Image(name='ubuntu-test', self_link=UBUNTU, architecture='X86_64')
+    manager.compute_machine_types = Mock()
+    manager.compute_machine_types.get_resource.return_value = MachineType(name='e2-standard-2', architecture='X86_64')
+    manager.state_manager = Mock()
     manager.compute_instance = Mock()
     manager.compute_instance.get.side_effect = NotFound('No VM')
     manager.logger = Mock()
@@ -163,3 +168,16 @@ def test_in_progress_disk_retries_are_bounded(manager, monkeypatch):
         manager._add_disks()
     assert sleep.call_count == 3
     manager.compute_disk.delete.assert_not_called()
+
+
+def test_queued_arm_template_is_rejected_before_disk_or_instance_creation(manager):
+    manager.server_spec.self_link = UBUNTU.replace('amd64', 'arm64')
+    manager.compute_image.get.return_value = Image(
+        name='ubuntu-minimal-2204-jammy-arm64-v20260906',
+        self_link=manager.server_spec.self_link, architecture='ARM64',
+    )
+    with pytest.raises(BadRequest, match='ARM64.*e2-standard-2.*X86_64'):
+        manager._add_disks()
+    manager.compute_instance.create.assert_not_called()
+    manager.compute_disk.get.assert_not_called()
+    manager.state_manager.state_transition.assert_called_once_with(ServerStates.BROKEN)

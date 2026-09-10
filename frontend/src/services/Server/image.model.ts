@@ -32,9 +32,11 @@ export interface AgogeImage {
     tags: string[];
     base_family?: string;
     image_exists?: boolean;
+    architecture?: string | null;
 }
 
 export interface ImageSummary {
+    architecture?: string | null;
     name: string;
     disk_size: string;
     self_link: string;
@@ -45,6 +47,7 @@ export interface ImageSummary {
 
 
 export interface GlobalComputeImage {
+    architecture?: string | null;
     uuid: string;
     name: string;
     image: string;

@@ -13,6 +13,7 @@ from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.compute.compute_image import ComputeImageAPI
+from common.utilities.gcp.compute.image_compatibility import compatible_boot_image
 from common.utilities.gcp.compute.resources.network_interface_resource import NetworkInterfaceResource
 from common.utilities.gcp.compute.resources.image_resource import ImageResource
 
@@ -400,7 +401,16 @@ class ImageTemplateManager(BaseComputeManager):
         )
 
     def _add_disks(self):
-        image_source = self.server_spec.self_link
+        try:
+            source_image = compatible_boot_image(
+                self.compute_image, self.compute_machine_types,
+                self.server_spec.self_link, self.server_spec.machine_type,
+            )
+        except BadRequest as error:
+            self.logger.error(f'{self.class_name}:{self.server_name} - {error}')
+            self.state_manager.state_transition(ServerStates.BROKEN)
+            raise
+        image_source = source_image.self_link
         if (add_disk := self.server_spec.add_disk) == 0:
             add_disk = None
         boot_disk = self._get_boot_disk(image_source=image_source, disk_size_gb=add_disk)

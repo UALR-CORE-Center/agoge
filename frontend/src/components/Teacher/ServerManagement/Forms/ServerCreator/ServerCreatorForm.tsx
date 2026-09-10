@@ -34,6 +34,7 @@ import {ImageSelectTable} from "./ImageTemplateSelector/ImageSelectTable";
 import MachineTypeSelector from "./MachineTypeSelector";
 import {validateServerName, validateDiskSize, validateSshKey} from "./ServerFormValidators";
 import {absoluteUrl} from "../../../../../utilities/appContext";
+import {serverImageArchitectureError} from "../../../../../utilities/imageArchitecture";
 
 
 
@@ -118,6 +119,13 @@ const ServerCreatorForm: React.FC = () => {
 
     const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
+
+        const architectureError = selectedImageRow && serverImageArchitectureError(selectedImageRow);
+        if (architectureError) {
+            setValidationError(architectureError);
+            setOpenDialog(true);
+            return;
+        }
 
         const serverNameValidation = validateServerName(serverName);
         const diskSizeValidation = validateDiskSize(diskSize, diskSize);

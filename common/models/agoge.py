@@ -652,6 +652,7 @@ class AgogeImageModel(BaseModel):
     state_timestamp: Optional[str] = Field(default=None, description="Timestamp of image state")
     base_family: Optional[str] = None,
     image_exists: Optional[bool] = False
+    architecture: Optional[str] = None
 
 
 class SnapshotModel(BaseModel):

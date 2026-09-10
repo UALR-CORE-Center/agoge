@@ -105,6 +105,20 @@ def test_initial_sync_can_store_unsigned_compute_image_ids(manager):
     encode_value(record)
 
 
+@pytest.mark.parametrize('architecture', ['X86_64', 'ARM64'])
+def test_sync_records_image_architecture_without_changing_admin_choices(manager, architecture):
+    previous = saved_record(manager, enabled=False)
+    previous.pop('architecture', None)
+    manager.db = ImageDatabase([previous])
+    manager.compute_images.get.return_value.image.architecture = architecture
+
+    manager.sync()
+
+    record = manager.db.records[previous['uuid']]
+    assert record['architecture'] == architecture
+    assert record['is_enabled'] is False
+
+
 @pytest.mark.parametrize('numeric', [False, True], ids=['string-id', 'legacy-numeric-id'])
 def test_resync_preserves_document_id_and_disabled_choice(manager, numeric):
     manager.db = ImageDatabase([saved_record(manager, numeric=numeric)])
