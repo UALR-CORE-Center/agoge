@@ -112,6 +112,47 @@ used by setup: the active `gcloud` login and Application Default Credentials
 (ADC) used by the Python Google Cloud clients. The same action is available
 under **Environment & Quotas → Refresh gcloud and Python GCP Credentials**.
 
+Normal startup now runs a CLI login followed by an explicit ADC login for the
+selected account. It can reuse cached user credentials, so the warning
+`Re-using locally stored credentials` is not itself a failure. Setup validates
+both stores before reading the shared project registry. `--reauthenticate`
+forces a fresh browser login when a stored login needs renewal.
+
+If an older checkout stops with `Authentication completed, but credential
+validation failed: Application Default Credentials are missing or expired`,
+pull the updated setup script and run `python setup.py --reauthenticate`.
+There is no application redeployment required for this setup correction. The
+old message also covered network, TLS, and credential-file errors, so it does
+not establish that the credentials actually expired.
+
+For manual recovery, use the same Windows account and terminal environment as
+your IDE. Replace the email below with the setup account, complete any browser
+prompts, and stop if a command reports an error:
+
+```powershell
+$setupAccount = "you@example.edu"
+gcloud auth login $setupAccount --force --project=agoge-shared-resources
+gcloud auth application-default login $setupAccount --project=agoge-shared-resources
+gcloud auth application-default set-quota-project agoge-shared-resources
+gcloud auth application-default print-access-token > $null
+```
+
+The last command discards the access token while leaving errors visible. A zero
+exit code (`$LASTEXITCODE`) means ADC can obtain a token. The quota-project step
+requires `serviceusage.services.use` on the shared project. After successful
+validation, rerun `python setup.py`.
+
+If credentials work in PowerShell but fail in PyCharm, compare the IDE run
+configuration's `GOOGLE_APPLICATION_CREDENTIALS` and `CLOUDSDK_CONFIG` settings
+with the terminal environment. An explicit credential file takes precedence
+over user ADC. Keep it if intentional; remove an obsolete override from the
+run configuration when using your browser login. Setup does not unset it or
+change the referenced file automatically.
+
+See Google's [ADC login reference](https://docs.cloud.google.com/sdk/gcloud/reference/auth/application-default/login)
+and [ADC lookup order](https://docs.cloud.google.com/docs/authentication/application-default-credentials)
+for the separate credential stores and override behavior.
+
 Project creation also requires `roles/resourcemanager.projectCreator` on the
 configured production or development folder. The defaults can be overridden
 without editing source code by setting `AGOGE_PRODUCTION_FOLDER_ID`,

@@ -188,7 +188,6 @@ class GcloudEnvironmentManager:
         args = ["auth", "login"]
         if account:
             args.append(account)
-        args.append("--update-adc")
         if force:
             args.append("--force")
         if quota_project:
@@ -198,9 +197,34 @@ class GcloudEnvironmentManager:
         # output hides authorization URLs and password/security-key prompts.
         result = self._run_gcloud(args, interactive=True)
         if result.returncode != 0:
-            raise AgogeValidationError("Google Cloud re-authentication failed.")
+            raise AgogeValidationError(
+                "gcloud login failed. Check the error above and retry "
+                "`python setup.py --reauthenticate`."
+            )
 
-        account = self.get_current_account()
+        active_account = self.get_current_account()
+        if not active_account or (account and active_account.lower() != account.lower()):
+            raise AgogeValidationError(
+                "gcloud did not activate the selected account. ADC was not changed. "
+                "Run `python setup.py --reauthenticate` and select the intended account."
+            )
+        account = active_account
+
+        # A successful cached CLI login is not sufficient evidence that ADC was
+        # written. Explicitly synchronize it even if an old ADC token is valid,
+        # since that token could belong to another account. Passing ACCOUNT lets
+        # gcloud reuse the selected user's login while writing the ADC file.
+        print(f"{CYAN}Synchronizing Application Default Credentials for {account}.{NC}")
+        adc_args = ["auth", "application-default", "login", account]
+        if quota_project:
+            adc_args.append(f"--project={quota_project}")
+        result = self._run_gcloud(adc_args, interactive=True)
+        if result.returncode != 0:
+            raise AgogeValidationError(
+                "gcloud login succeeded, but Application Default Credentials login failed. "
+                "Check the error above and retry `python setup.py --reauthenticate`."
+            )
+
         failures = self._credential_failures(account)
         if failures:
             raise AgogeValidationError(
@@ -222,15 +246,45 @@ class GcloudEnvironmentManager:
                 timeout=45,
             )
             if cli_token.returncode != 0 or not cli_token.stdout.strip():
-                failures.append("gcloud login is missing or expired")
+                failures.append(self._token_failure(
+                    "gcloud login", cli_token, "gcloud auth print-access-token"
+                ))
 
         adc_token = self._run_gcloud(
             ["auth", "application-default", "print-access-token"],
             timeout=45,
         )
         if adc_token.returncode != 0 or not adc_token.stdout.strip():
-            failures.append("Application Default Credentials are missing or expired")
+            failures.append(self._token_failure(
+                "Application Default Credentials", adc_token,
+                "gcloud auth application-default print-access-token",
+            ))
         return failures
+
+    @staticmethod
+    def _token_failure(label: str, result: subprocess.CompletedProcess, command: str) -> str:
+        """Describe known token failures without echoing tokens or raw error bodies."""
+        error = (result.stderr or "").lower()
+        if result.returncode == 0:
+            reason = "gcloud returned no access token"
+        elif any(value in error for value in ("invalid_grant", "invalid_rapt", "reauth", "expired or revoked")):
+            reason = "the stored login needs browser re-authentication; run `python setup.py --reauthenticate`"
+        elif any(value in error for value in ("default credentials were not found", "could not automatically determine credentials")):
+            reason = "the credential file was not found"
+        elif any(value in error for value in ("connection", "proxy", "ssl", "certificate", "timed out", "name resolution")):
+            reason = "a network, proxy, or TLS error prevented token validation"
+        elif any(value in error for value in ("permission_denied", "permission denied", "serviceusage.services.use", "quota project")):
+            reason = "a permission or quota-project error prevented validation"
+        elif any(value in error for value in ("jsondecodeerror", "not a valid json")):
+            reason = "the credential file could not be parsed"
+        else:
+            reason = f"gcloud exited with code {result.returncode}"
+        redirect = "> $null" if os.name == "nt" else "> /dev/null"
+        return (
+            f"{label} validation failed ({reason}). "
+            f"To see gcloud's error, run `{command} {redirect}` in "
+            + ("PowerShell" if os.name == "nt" else "a terminal")
+        )
 
     def set_adc_quota_project(self, project_id: str) -> None:
         """Set the quota project used by local Python client libraries."""
