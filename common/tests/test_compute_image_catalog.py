@@ -122,3 +122,40 @@ def test_empty_global_scope_retains_existing_not_found_response(catalog):
     records[DbCollections.GOOGLE_IMAGES] = []
     with pytest.raises(NotFound, match='No image data found'):
         service.list_project_images(ImageScopes.GLOBAL)
+
+
+@pytest.mark.parametrize('scope', [ImageScopes.GLOBAL, ImageScopes.PROJECT])
+@pytest.mark.parametrize('source', [None, '', '  \n '])
+def test_invalid_catalog_source_stops_before_build_is_queued(catalog, scope, source):
+    service, records = catalog
+    public = scope == ImageScopes.GLOBAL
+    collection = DbCollections.GOOGLE_IMAGES if public else DbCollections.IMAGE
+    record = records[collection][0]
+    record['self_link'] = source
+    service.db.get.return_value = record
+
+    with pytest.raises(BadRequest, match='no source image URL'):
+        service._create_database_object({
+            'server_name': 'wireguard-server', 'machine_type': 'e2-standard-2',
+            'description': 'WireGuard router', 'disk_size': '20',
+            'image_template': record['uuid'] if public else record['name'],
+            'image_scope': scope.value, 'os': 'linux', 'username': 'wgadmin',
+            'ssh_key': 'ssh-ed25519 test-key wgadmin',
+        })
+
+    service.db.update.assert_not_called()
+
+
+def test_creation_keeps_selected_public_source_in_saved_template(catalog):
+    service, records = catalog
+    service._create_database_object({
+        'server_name': 'wireguard-server', 'machine_type': 'e2-standard-2',
+        'description': 'WireGuard router', 'disk_size': '20',
+        'image_template': PUBLIC_IMAGE['uuid'], 'image_scope': ImageScopes.GLOBAL.value,
+        'os': 'linux', 'username': 'wgadmin', 'ssh_key': 'ssh-ed25519 test-key wgadmin',
+        'password': 'test-password',
+    })
+    record = service.db.update.call_args.kwargs['data']
+    assert record['self_link'] == PUBLIC_IMAGE['self_link']
+    assert record['base_family'] == PUBLIC_IMAGE['family']
+    assert record['add_disk'] == '20'

@@ -7,7 +7,7 @@ from common.constants.states import ImageStatus, ServerStates
 from common.constants.pub_sub import PubSub
 from common.constants.database import DbCollections, DATABASE_NAME, DatabaseTypes, DbOperators
 from common.document_database import DocumentDatabaseFactory, DatabaseQueries
-from common.exceptions import NotFound, BaseAgogeException, BadRequest
+from common.exceptions import Conflict, NotFound, BaseAgogeException, BadRequest
 from common.models.agoge import AgogeImageModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.gcp.cloud_env import CloudEnv
@@ -404,9 +404,60 @@ class ImageTemplateManager(BaseComputeManager):
         if (add_disk := self.server_spec.add_disk) == 0:
             add_disk = None
         boot_disk = self._get_boot_disk(image_source=image_source, disk_size_gb=add_disk)
+        self._validate_boot_disk_reuse(boot_disk)
         disks = [boot_disk]
 
         self.server_spec.disks = disks
+
+    def _validate_boot_disk_reuse(self, boot_disk) -> None:
+        """Reject a retained disk that would override the selected source image.
+
+        Compute attaches an existing initializeParams.diskName instead of
+        initializing it again. Only an existing matching VM's boot disk is
+        accepted, so duplicate build deliveries can still be reconciled.
+        """
+        disk_name = boot_disk.initialize_params.disk_name
+        expected_disk = f'projects/{self.env.project}/zones/{self.env.zone}/disks/{disk_name}'
+        expected_image = self._canonical_compute_resource(boot_disk.initialize_params.source_image)
+        for attempt in range(4):
+            try:
+                disk = self.compute_disk.get(resource_name=disk_name)
+            except NotFound:
+                return
+            try:
+                instance = self.compute_instance.get(resource_name=self.server_name)
+            except NotFound:
+                instance = None
+
+            attached = [item for item in instance.disks if item.boot] if instance is not None else []
+            attached_to_requested_vm = len(attached) == 1 and (
+                self._canonical_compute_resource(attached[0].source) == expected_disk
+            )
+            existing_image = self._canonical_compute_resource(disk.source_image)
+            if attached_to_requested_vm and existing_image and existing_image == expected_image:
+                return
+            # A duplicate delivery may see the disk before its creating VM.
+            if (disk.status == 'CREATING' or instance is None) and attempt < 3:
+                time.sleep(1)
+                continue
+            if disk.status == 'CREATING':
+                raise Conflict(f'Boot disk {disk_name} is still being created. Retry after the current build finishes.')
+            break
+
+        raise Conflict(
+            f'Boot disk {disk_name} already exists and cannot be verified as the selected '
+            'image on this template VM. Compute would reuse its contents instead of '
+            'initializing the selected image. The disk was retained. Inspect its source '
+            'and attachments, then create the server with a new name and fresh boot disk.'
+        )
+
+    @staticmethod
+    def _canonical_compute_resource(value: str) -> str:
+        """Compare project-qualified Compute resource paths across API URL forms."""
+        value = (value or '').strip().rstrip('/')
+        if '/projects/' in value:
+            return 'projects/' + value.split('/projects/', 1)[1]
+        return value
 
     def _add_metadata(self) -> None:
         """Generates and adds metadata for the server based on specifications."""
@@ -500,8 +551,9 @@ class ImageTemplateManager(BaseComputeManager):
             db_image['in_use_by'] = None
             db_image['dns_record'] = None
             db_image['image_exists'] = True
-
-        db_image['self_link'] = self.compute_image.self_link(self.image_name, self.env.project)
+            # The custom image exists only after check-in. Keep the selected
+            # base image available for retries while the template is checked out.
+            db_image['self_link'] = self.compute_image.self_link(self.image_name, self.env.project)
 
         if ModelValidator(AgogeImageModel, log_location=self.log_name).load(db_image):
             self.db.update(collection_name=self.collection, doc_id=self.server_name, data=db_image)

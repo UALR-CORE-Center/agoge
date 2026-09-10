@@ -483,6 +483,11 @@ class ComputeImage:
             else:
                 image_family = image.get('base_family', None)
             image_template = image.get('self_link')
+            if not isinstance(image_template, str) or not image_template.strip():
+                raise BadRequest(
+                    message='Selected image has no source image URL. Refresh the image catalog before creating a server.'
+                )
+            image_template = image_template.strip()
         else:
             self.logger.error(f"Requested image is invalid or does not exist",
                               image=image_id, image_scope=image_scope)

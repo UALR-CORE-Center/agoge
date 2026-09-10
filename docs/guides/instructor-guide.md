@@ -192,6 +192,29 @@ The public catalog is synchronized into each child project's database. A shared 
 
 An administrator can also select the child project in `python setup.py` and run **Server Images & Build Specs → Synchronize Public OS Images**. This populates the catalog directly and prints errors in the terminal, without waiting for the background function. Full installations run it automatically. See [public OS catalog setup and recovery](../operations/shared-project-setup.md#public-os-image-catalog). New Ubuntu, Debian, and Windows families are enabled by default; other public families require **Enable** in Image Manager. The selector lists available image families, not every historical version.
 
+### If a new server reports no bootable device
+
+GCP's **RUNNING** state means the VM is powered on, not that its operating system has started. Serial messages such as `Boot failed: not a bootable disk` or `No bootable device` indicate failure before SSH or the account setup script can run. Changing the SSH key will not resolve that boot failure.
+
+Ask an administrator to inspect the attached boot disk and serial output. These PowerShell examples use the `wireguard-server` template in `test-dev-787001`:
+
+```powershell
+gcloud compute instances describe wireguard-server --project=test-dev-787001 --zone=us-central1-a --format="yaml(name,status,disks)"
+gcloud compute disks describe wireguard-server-disk --project=test-dev-787001 --zone=us-central1-a --format="yaml(name,creationTimestamp,sourceImage,sourceImageId,sourceSnapshot,sourceSnapshotId,guestOsFeatures,architecture,sizeGb,users)"
+gcloud compute instances get-serial-port-output wireguard-server --project=test-dev-787001 --zone=us-central1-a --port=1 | Select-Object -Last 120
+```
+
+Use the disk name shown for `boot: true` if it differs from `wireguard-server-disk`. Compare its source with the image selected in Agoge. A missing `sourceImage` alone does not prove the disk was created empty; Google omits that field if the source image was subsequently deleted. Check the source ID and other disk metadata too. See [Google's disk resource reference](https://docs.cloud.google.com/compute/docs/reference/rest/v1/disks).
+
+Agoge now retains the selected base image through the first checkout and switches to the custom image only after check-in. Boot creation also rejects an orphaned or incompatible disk with the expected name instead of allowing it to be silently reused. Google documents that an existing disk matching `initializeParams.diskName` can be attached instead of creating a new disk; this is a possible cause to investigate, not a diagnosis from the serial message alone. See [the instance creation reference](https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/insert).
+
+To recover after pulling these fixes:
+
+1. Have the administrator deploy the updated **API and Cloud Function** to the affected child project.
+2. Create a replacement template with a **new server name**, such as `wireguard-server-v2`, and select the intended Ubuntu **AMD64** image for an `e2` VM. A new name avoids reusing the failed disk.
+3. Confirm Ubuntu boots and SSH works before configuring and checking in the replacement.
+4. Retain the failed VM and disk for inspection. Restarting does not recreate or repair the disk, and the new safeguard does not delete it automatically. Stop the failed VM while it is not being inspected.
+
 ## Create, restore, and delete snapshots
 
 Snapshots preserve server disk state before risky changes. They are useful recovery points, but they are not a substitute for exporting important learner work.
