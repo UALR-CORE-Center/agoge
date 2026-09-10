@@ -3,7 +3,7 @@ Click>=8.1,<9
 colorama>=0.4.6,<1
 cryptography>=46,<47
 email-validator>=2.1,<3
-fastapi>=0.110,<1
+fastapi==0.120.1
 firebase-admin>=6.5,<7
 functions-framework>=3.5,<4
 guacamole-api-wrapper
@@ -40,7 +40,7 @@ python-dotenv>=1.0,<2
 python-multipart>=0.0.22,<1
 PyYAML>=6.0,<7
 sendgrid>=6.11,<7
-starlette>=0.37,<1
+starlette==0.49.1
 tzdata>=2025.1,<2026
 uvicorn>=0.32,<1
 validators>=0.22,<1

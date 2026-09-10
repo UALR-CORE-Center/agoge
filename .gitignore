@@ -40,3 +40,4 @@ frontend/.env*
 /.staging/
 venv
 *.log
+api/.env.bak
