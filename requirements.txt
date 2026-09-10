@@ -3,7 +3,7 @@ Click>=8.1,<9
 colorama>=0.4.6,<1
 cryptography>=46,<47
 email-validator>=2.1,<3
-fastapi>=0.110,<1
+fastapi==0.120.1
 firebase-admin>=6.5,<7
 functions-framework>=3.5,<4
 guacamole-api-wrapper
