@@ -56,7 +56,9 @@ def retained_disk(manager, image=UBUNTU, attached=True, disk_path=DISK):
         )
 
 
-def test_selected_ubuntu_image_reaches_actual_instance_insert_request(manager):
+@pytest.mark.parametrize('machine_architecture', ['X86_64', ''])
+def test_selected_ubuntu_image_reaches_actual_instance_insert_request(manager, machine_architecture):
+    manager.compute_machine_types.get_resource.return_value.architecture = machine_architecture
     manager._add_disks()
     instance = InstanceResource(zone=manager.env.zone).new(
         name=manager.server_name, machine_type='e2-standard-2',
@@ -80,6 +82,7 @@ def test_selected_ubuntu_image_reaches_actual_instance_insert_request(manager):
     assert disk['autoDelete'] is True
     assert payload['project'] == manager.env.project
     assert payload['zone'] == manager.env.zone
+    manager.state_manager.state_transition.assert_not_called()
 
 
 @pytest.mark.parametrize('source', [None, '', '  \n '])
@@ -170,7 +173,9 @@ def test_in_progress_disk_retries_are_bounded(manager, monkeypatch):
     manager.compute_disk.delete.assert_not_called()
 
 
-def test_queued_arm_template_is_rejected_before_disk_or_instance_creation(manager):
+@pytest.mark.parametrize('machine_architecture', ['X86_64', ''])
+def test_queued_arm_template_is_rejected_before_disk_or_instance_creation(manager, machine_architecture):
+    manager.compute_machine_types.get_resource.return_value.architecture = machine_architecture
     manager.server_spec.self_link = UBUNTU.replace('amd64', 'arm64')
     manager.compute_image.get.return_value = Image(
         name='ubuntu-minimal-2204-jammy-arm64-v20260906',

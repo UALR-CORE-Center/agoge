@@ -63,12 +63,45 @@ def test_matching_architectures_are_preserved(clients, architecture):
     assert compatible_boot_image(images, machines, SOURCE, 'test-machine').architecture == architecture
 
 
-@pytest.mark.parametrize('unknown_resource', ['image', 'machine'])
-def test_missing_architecture_is_not_assumed_x86(clients, unknown_resource):
+@pytest.mark.parametrize('machine_name', [
+    'e2-standard-2', 'e2-medium', 'e2-custom-2-4096', 'n1-standard-1', 'n2-standard-2',
+])
+@pytest.mark.parametrize('architecture', ['', 'ARCHITECTURE_UNSPECIFIED', 'UNDEFINED_ARCHITECTURE'])
+def test_known_x86_machine_series_work_without_architecture_metadata(clients, machine_name, architecture):
     images, machines = clients
-    resource = images.get.return_value if unknown_resource == 'image' else machines.get_resource.return_value
-    resource.architecture = ''
+    machines.get_resource.return_value = MachineType(name=machine_name, architecture=architecture)
+    assert compatible_boot_image(images, machines, SOURCE, machine_name).architecture == 'X86_64'
+    machines.get_resource.assert_called_once_with(resource=machine_name)
+
+
+def test_missing_image_architecture_is_not_assumed_from_e2(clients):
+    images, machines = clients
+    images.get.return_value.architecture = ''
+    machines.get_resource.return_value = MachineType(name='e2-standard-2')
     with pytest.raises(BadRequest, match='Cannot determine the CPU architecture'):
+        compatible_boot_image(images, machines, SOURCE, 'e2-standard-2')
+
+
+@pytest.mark.parametrize('machine_name', ['', 'e2', 'unknown-standard-2', 'e2a-standard-2', 'n2a-standard-2', 't2a-standard-2'])
+def test_unrecognized_machine_series_are_not_assumed_x86(clients, machine_name):
+    images, machines = clients
+    machines.get_resource.return_value = MachineType(name=machine_name)
+    # Only the successfully fetched resource can establish a known series.
+    with pytest.raises(BadRequest, match='Cannot determine the CPU architecture of machine type'):
+        compatible_boot_image(images, machines, SOURCE, 'e2-standard-2')
+
+
+def test_explicit_machine_architecture_overrides_series_fallback(clients):
+    images, machines = clients
+    machines.get_resource.return_value = MachineType(name='e2-standard-2', architecture='ARM64')
+    with pytest.raises(BadRequest, match='X86_64.*ARM64'):
+        compatible_boot_image(images, machines, SOURCE, 'e2-standard-2')
+
+
+def test_unrecognized_explicit_machine_architecture_does_not_use_fallback(clients):
+    images, machines = clients
+    machines.get_resource.return_value = MachineType(name='e2-standard-2', architecture='FUTURE_ARCH')
+    with pytest.raises(BadRequest, match='Cannot determine the CPU architecture of machine type'):
         compatible_boot_image(images, machines, SOURCE, 'e2-standard-2')
 
 
@@ -98,14 +131,15 @@ def test_machine_lookup_failure_is_not_assumed_compatible(clients):
         compatible_boot_image(images, machines, SOURCE, 'e2-standard-2')
 
 
-def test_machine_resource_retains_architecture_and_existing_get_contract():
+@pytest.mark.parametrize('architecture', ['X86_64', ''])
+def test_machine_resource_retains_architecture_and_existing_get_contract(architecture):
     api = object.__new__(ComputeMachineTypesAPI)
     api.project = 'test-dev-787001'
     api.zone = 'us-central1-a'
     api.client = Mock()
-    machine = MachineType(name='e2-standard-2', architecture='X86_64', memory_mb=8192, guest_cpus=2)
+    machine = MachineType(name='e2-standard-2', architecture=architecture, memory_mb=8192, guest_cpus=2)
     api._make_request = Mock(return_value=machine)
-    assert api.get_resource('e2-standard-2').architecture == 'X86_64'
+    assert api.get_resource('e2-standard-2').architecture == architecture
     request = api._make_request.call_args.kwargs['request']
     assert isinstance(request, GetMachineTypeRequest)
     assert (request.project, request.zone, request.machine_type) == ('test-dev-787001', 'us-central1-a', 'e2-standard-2')

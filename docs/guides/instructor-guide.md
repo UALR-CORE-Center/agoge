@@ -206,9 +206,19 @@ and [Ubuntu image families](https://docs.cloud.google.com/compute/docs/images/os
 The selector displays CPU architecture and disables ARM64 selections for this
 form. The API validates the actual source image and machine architecture before
 saving or queuing a new server. The Cloud Function checks again before building
-a template, including existing records and queued requests. Missing architecture
-metadata stops the build with an explanation instead of assuming compatibility.
+a template, including existing records and queued requests. If GCP omits machine
+architecture, the check recognizes the documented x86-64 architecture of E2,
+N1, and N2 from the returned machine type. Explicit architecture metadata takes
+precedence. Other machine families still require architecture metadata, and
+missing image architecture always stops the build with an explanation.
 Public catalog synchronization fills the architecture field for older records.
+
+If an AMD64 image with `e2-standard-2` reports **Cannot determine the CPU
+architecture of machine type**, deploy the updated **API and Cloud Function**
+to the child project and retry creation with the same selections. This is a
+validation error caused by missing machine metadata; it does not require a
+different Ubuntu image or a React rebuild. The API rejects the request before
+creating the template record or queuing a VM build.
 
 GCP's **RUNNING** state means the VM is powered on, not that its operating system has started. Serial messages such as `Boot failed: not a bootable disk` or `No bootable device` indicate failure before SSH or the account setup script can run. Changing the SSH key will not resolve that boot failure.
 

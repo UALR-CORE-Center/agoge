@@ -11,6 +11,7 @@ from api.core.compute import image as image_module
 from api.core.compute.image import ComputeImage
 from common.constants.database import DbCollections, DbOperators
 from common.constants.enumerators import ImageScopes
+from common.constants.pub_sub import PubSub
 from common.exceptions import BadRequest, NotFound
 from common.models.agoge import AgogeImageModel
 from common.models.google import ComputeImageModel
@@ -159,9 +160,13 @@ def test_invalid_catalog_source_stops_before_build_is_queued(catalog, scope, sou
     service.db.update.assert_not_called()
 
 
-def test_creation_keeps_selected_public_source_in_saved_template(catalog):
+@pytest.mark.parametrize('machine_architecture', ['X86_64', ''])
+def test_creation_keeps_selected_public_source_in_saved_template(catalog, machine_architecture):
     service, records = catalog
-    service._create_database_object({
+    service.machine_api.get_resource.return_value.architecture = machine_architecture
+    service._check_out = Mock()
+    service.create_image_server(SimpleNamespace(email='instructor@example.edu', uid='test-user'), {
+        'action': str(PubSub.Actions.BUILD.value),
         'server_name': 'wireguard-server', 'machine_type': 'e2-standard-2',
         'description': 'WireGuard router', 'disk_size': '20',
         'image_template': PUBLIC_IMAGE['uuid'], 'image_scope': ImageScopes.GLOBAL.value,
@@ -173,10 +178,12 @@ def test_creation_keeps_selected_public_source_in_saved_template(catalog):
     assert record['base_family'] == PUBLIC_IMAGE['family']
     assert record['add_disk'] == '20'
     assert record['architecture'] == 'X86_64'
+    service._check_out.assert_called_once_with('wireguard-server')
 
 
 @pytest.mark.parametrize('scope', [ImageScopes.GLOBAL, ImageScopes.PROJECT])
-def test_arm_image_is_rejected_before_record_or_build_message(catalog, scope):
+@pytest.mark.parametrize('machine_architecture', ['X86_64', ''])
+def test_arm_image_is_rejected_before_record_or_build_message(catalog, scope, machine_architecture):
     service, records = catalog
     source = ('https://www.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/'
               'ubuntu-minimal-2204-jammy-arm64-v20260906')
@@ -188,8 +195,8 @@ def test_arm_image_is_rejected_before_record_or_build_message(catalog, scope):
     service.source_image_api.get.return_value = Image(
         name='ubuntu-minimal-2204-jammy-arm64-v20260906', self_link=source, architecture='ARM64',
     )
+    service.machine_api.get_resource.return_value.architecture = machine_architecture
     service._check_out = Mock()
-    from common.constants.pub_sub import PubSub
 
     with pytest.raises(BadRequest, match='ARM64.*e2-standard-2.*X86_64'):
         service.create_image_server(SimpleNamespace(email='instructor@example.edu', uid='test-user'), {

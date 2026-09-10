@@ -14,6 +14,27 @@ def normalize_architecture(value: str | None) -> str | None:
     }.get(value.strip().upper())
 
 
+def _machine_architecture(machine) -> str | None:
+    """Use explicit metadata first, then known series for an omitted field."""
+    value = getattr(machine, 'architecture', None)
+    if value is not None:
+        if not isinstance(value, str):
+            return None
+        if value.strip().upper() not in ('', 'ARCHITECTURE_UNSPECIFIED', 'UNDEFINED_ARCHITECTURE'):
+            # Do not replace an explicit architecture, including an unknown one.
+            return normalize_architecture(value)
+
+    # machineTypes.get can omit architecture. These supported series are x86:
+    # https://docs.cloud.google.com/compute/docs/general-purpose-machines
+    # Use the fetched resource's name, only after a successful machine lookup.
+    name = getattr(machine, 'name', '')
+    if isinstance(name, str):
+        series, separator, size = name.partition('-')
+        if separator and size and series in ('e2', 'n1', 'n2'):
+            return 'X86_64'
+    return None
+
+
 def compatible_boot_image(image_api, machine_api, source: str, machine_type: str):
     """Use live metadata, including for legacy catalogs and queued templates.
 
@@ -42,7 +63,7 @@ def compatible_boot_image(image_api, machine_api, source: str, machine_type: str
         raise BadRequest(f'Image {name} has no concrete source image URL. Refresh the image catalog.')
 
     machine = machine_api.get_resource(resource=machine_type)
-    machine_architecture = normalize_architecture(machine.architecture)
+    machine_architecture = _machine_architecture(machine)
     if not machine_architecture:
         raise BadRequest(f'Cannot determine the CPU architecture of machine type {machine_type}.')
     if image_architecture != machine_architecture:
