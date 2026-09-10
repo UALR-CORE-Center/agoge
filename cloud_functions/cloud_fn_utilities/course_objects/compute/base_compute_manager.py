@@ -42,6 +42,20 @@ class BaseComputeManager:
     Provides methods for taking input Agoge-specific data and delegates tasks to the appropriate cloud
     API classes and class methods
     """
+    _INSERT_IN_PROGRESS_INSTANCE_STATES = frozenset({'PROVISIONING', 'STAGING'})
+    # One initial observation plus 30 five-second polls. The follower therefore
+    # waits the complete 150-second Compute operation window, starting after the
+    # worker that owns the insert, before it can classify the build as failed.
+    _INSERT_CONFLICT_WAIT_ATTEMPTS = 31
+    _INSERT_CONFLICT_WAIT_SECONDS = 5
+    _START_IN_PROGRESS_INSTANCE_STATES = frozenset({
+        'PROVISIONING',
+        'STAGING',
+        'REPAIRING',
+        'STOPPING',
+        'SUSPENDING',
+    })
+
     @dataclass
     class Server:
         """Dataclass for holding server configuration."""
@@ -63,6 +77,7 @@ class BaseComputeManager:
         dns_hostname: Optional[str] = None
         description: Optional[str] = None
         startup_script: Optional[str] = None
+        startup_scripts: Optional[list[str]] = None
         guacamole_startup_script: Optional[str] = None
         hostname: Optional[str] = None
         human_interaction: Optional[list[dict]] = None
@@ -73,6 +88,8 @@ class BaseComputeManager:
         ssh_keys: List[str] = field(default_factory=list)
         network_prefix: Optional[str] = None
         self_link: Optional[str] = None
+        routes: Optional[list] = None
+        wireguard_endpoint_id: Optional[str] = None
 
     def __init__(
         self,
@@ -128,6 +145,7 @@ class BaseComputeManager:
         self.assessment = None
         self.ip_aliases = False
         self.collection = DbCollections.SERVER
+        self.primary_external_ip = None
 
     @property
     def dns_record(self) -> str:
@@ -190,7 +208,10 @@ class BaseComputeManager:
         self.server_spec.can_ip_forward = server_spec.get('can_ip_forward', False)
         self.server_spec.delayed_start = server_spec.get('delayed_start', False)
         self.server_spec.dns_hostname = server_spec.get('dns_hostname', None)
+        self.server_spec.startup_scripts = server_spec.get('startup_scripts') or []
         self.server_spec.startup_script = server_spec.get('startup_script', None)
+        if not self.server_spec.startup_script and self.server_spec.startup_scripts:
+            self.server_spec.startup_script = '\n'.join(self.server_spec.startup_scripts)
         self.server_spec.guacamole_startup_script = server_spec.get('guacamole_startup_script', None)
         self.server_spec.hostname = server_spec.get('hostname', None)
         self.server_spec.image = server_spec.get('image')
@@ -208,6 +229,8 @@ class BaseComputeManager:
         self.server_spec.parent_id = server_spec.get('parent_id', None)
         self.server_spec.service_accounts = server_spec.get('serviceAccounts', None)
         self.server_spec.tags = server_spec.get('tags', [])
+        self.server_spec.routes = server_spec.get('routes') or []
+        self.server_spec.wireguard_endpoint_id = server_spec.get('wireguard_endpoint_id')
 
         # Set additional class attributes
         self.parent_build_id = server_spec.get('parent_id', None)
@@ -249,10 +272,15 @@ class BaseComputeManager:
         self.server_spec.tags = server_spec.get('tags', [])
         self.server_spec.network_interfaces = None
         self.server_spec.ssh_keys = server_spec.get('ssh_keys', [])
+        self.server_spec.startup_scripts = server_spec.get('startup_scripts') or []
         self.server_spec.startup_script = server_spec.get('startup_script', None)
+        if not self.server_spec.startup_script and self.server_spec.startup_scripts:
+            self.server_spec.startup_script = '\n'.join(self.server_spec.startup_scripts)
+        self.server_spec.routes = server_spec.get('routes') or []
+        self.server_spec.wireguard_endpoint_id = server_spec.get('wireguard_endpoint_id')
 
-    def _build_server(self) -> None:
-        """Builds an individual server based on the server specifications."""
+    def _build_server(self, finalize_state: bool = True) -> None:
+        """Build a server, optionally deferring RUNNING until caller dependencies finish."""
         self.state_manager.state_transition(self.s.BUILDING)
         self._add_disks()
         self._add_metadata()
@@ -304,22 +332,121 @@ class BaseComputeManager:
                 self.compute_instance
                 .create(resource_name=self.server_spec.name, wait=True, instance_resource=instance)
             )
-        except Conflict:
+        except Conflict as error:
             self.logger.warning(f'{self.class_name}:{self.server_name} - Server already exists!')
-            return
+            # A create may have succeeded before a delivery was acknowledged.
+            # Continue only when the existing instance is the one this build
+            # requested. Concurrent Pub/Sub deliveries can observe the first
+            # insert in PROVISIONING/STAGING, so wait for that exact VM to reach
+            # RUNNING. A delayed BUILD must never relabel a stopped or
+            # differently configured VM as RUNNING.
+            existing = self.compute_instance.get(resource_name=self.server_spec.name)
+            if not self._reconcile_existing_build(existing, instance):
+                raise Conflict(
+                    f"Existing instance {self.server_spec.name} does not match the requested build"
+                ) from error
+            created = True
 
         if created:
             self.logger.info(f'{self.class_name}:{self.server_name} - Successfully built server!')
-            self.state_manager.state_transition(self.s.RUNNING)
+            if finalize_state:
+                self.state_manager.state_transition(self.s.RUNNING)
         else:
             msg = f'{self.class_name}:{self.server_name} - Timeout in trying to build server.'
             self.logger.error(msg)
             self.state_manager.state_transition(self.s.BROKEN)
             raise TimeoutError(msg)
 
-        # Register any DNS records if they exist
-        if dns_record := self._dns_record():
-            self.dns_manager.add_dns_record(dns_record, self.server_name)
+        # WireGuard DNS is published by LabServerManager only after an
+        # ownership-checked endpoint stage. Publishing here would let a delayed
+        # build for a recycled five-digit ID overwrite its new owner's record.
+        if not getattr(self.server_spec, 'wireguard_endpoint_id', None) and (dns_record := self._dns_record()):
+            self.dns_manager.add_dns_record(
+                dns_record,
+                self.server_name,
+                ip_address=self.primary_external_ip,
+            )
+
+    @classmethod
+    def _existing_instance_matches(cls, existing, desired) -> bool:
+        """Compare immutable/routing-critical fields after a create conflict."""
+        if str(cls._resource_field(existing, 'status', '')).upper() != 'RUNNING':
+            return False
+        return cls._existing_instance_configuration_matches(existing, desired)
+
+    @classmethod
+    def _existing_instance_configuration_matches(cls, existing, desired) -> bool:
+        """Compare fields that identify the intended VM independent of status."""
+        if bool(cls._resource_field(existing, 'can_ip_forward', False)) != bool(
+            cls._resource_field(desired, 'can_ip_forward', False)
+        ):
+            return False
+        if cls._resource_tail(cls._resource_field(existing, 'machine_type')) != cls._resource_tail(
+            cls._resource_field(desired, 'machine_type')
+        ):
+            return False
+
+        desired_tags = set(
+            cls._resource_field(cls._resource_field(desired, 'tags', {}), 'items', []) or []
+        )
+        existing_tags = set(
+            cls._resource_field(cls._resource_field(existing, 'tags', {}), 'items', []) or []
+        )
+        if not desired_tags.issubset(existing_tags):
+            return False
+
+        existing_nics = list(cls._resource_field(existing, 'network_interfaces', []) or [])
+        desired_nics = list(cls._resource_field(desired, 'network_interfaces', []) or [])
+        if len(existing_nics) != len(desired_nics):
+            return False
+        for current_nic, requested_nic in zip(existing_nics, desired_nics):
+            for path_field in ('network', 'subnetwork'):
+                if cls._resource_tail(cls._resource_field(current_nic, path_field)) != cls._resource_tail(
+                    cls._resource_field(requested_nic, path_field)
+                ):
+                    return False
+            requested_internal_ip = cls._resource_field(requested_nic, 'network_i_p')
+            if requested_internal_ip and (
+                requested_internal_ip != cls._resource_field(current_nic, 'network_i_p')
+            ):
+                return False
+
+            current_access = list(cls._resource_field(current_nic, 'access_configs', []) or [])
+            requested_access = list(cls._resource_field(requested_nic, 'access_configs', []) or [])
+            if len(current_access) != len(requested_access):
+                return False
+            for current_config, requested_config in zip(current_access, requested_access):
+                requested_ip = cls._resource_field(requested_config, 'nat_i_p')
+                if requested_ip and requested_ip != cls._resource_field(current_config, 'nat_i_p'):
+                    return False
+        return True
+
+    def _reconcile_existing_build(self, existing, desired) -> bool:
+        """Accept a matching retry, waiting only for an insert already in flight."""
+        for attempt in range(self._INSERT_CONFLICT_WAIT_ATTEMPTS):
+            status = str(self._resource_field(existing, 'status', '')).upper()
+            if status == 'RUNNING':
+                return self._existing_instance_configuration_matches(existing, desired)
+            if (
+                status not in self._INSERT_IN_PROGRESS_INSTANCE_STATES
+                or not self._existing_instance_configuration_matches(existing, desired)
+            ):
+                return False
+            if attempt == self._INSERT_CONFLICT_WAIT_ATTEMPTS - 1:
+                return False
+            time.sleep(self._INSERT_CONFLICT_WAIT_SECONDS)
+            existing = self.compute_instance.get(resource_name=self.server_spec.name)
+        return False
+
+    @staticmethod
+    def _resource_field(resource, name: str, default=None):
+        if isinstance(resource, dict):
+            return resource.get(name, default)
+        return getattr(resource, name, default)
+
+    @staticmethod
+    def _resource_tail(value) -> str:
+        return str(value or '').rstrip('/').rsplit('/', 1)[-1]
 
     def _start_server(self) -> None:
         """
@@ -329,22 +456,61 @@ class BaseComputeManager:
         if not self.compute_instance:
             return
 
+        existing_state = self.state_manager.get_state()
+        if existing_state == self.s.RUNNING.value:
+            return
+
         self.state_manager.state_transition(self.s.STARTING)
         i = 0
         start_success = False
+        start_in_progress = existing_state == self.s.STARTING.value
         while not start_success and i < 5:
+            if start_in_progress:
+                instance_status = self._get_instance_status()
+                if instance_status == 'RUNNING':
+                    start_success = True
+                    break
+                if instance_status in self._START_IN_PROGRESS_INSTANCE_STATES:
+                    i += 1
+                    if i < 5:
+                        time.sleep(self.state_manager.SLEEP_TIME)
+                    continue
+                # The publisher may have claimed STARTING before its server
+                # handler ran. A TERMINATED instance still needs the API call.
+                start_in_progress = False
+
             try:
                 if self.server_spec.delayed_start:
                     time.sleep(30)
 
                 if self.compute_instance.start(resource_name=self.server_name, wait=True):
                     start_success = True
-            except BadRequest:
-                self.logger.error(f'{self.class_name}:{self.server_name} - Server is still building.')
-                break
-            except Conflict:
-                self.state_manager.state_transition(self.s.BROKEN)
-                self.logger.error(f'{self.class_name}:{self.server_name} - Server does not exist! Exiting function.')
+                else:
+                    i += 1
+            except (BadRequest, Conflict) as error:
+                # Pub/Sub is at-least-once and simultaneous Community starts
+                # can overlap at this exact API boundary. Reconcile with the
+                # VM instead of treating "already starting/running" as a
+                # broken gateway.
+                instance_status = self._get_instance_status()
+                if instance_status == 'RUNNING':
+                    start_success = True
+                    break
+                if instance_status in self._START_IN_PROGRESS_INSTANCE_STATES:
+                    start_in_progress = True
+                    i += 1
+                    if i < 5:
+                        time.sleep(self.state_manager.SLEEP_TIME)
+                    continue
+                if not instance_status:
+                    # The action may have been accepted even though the
+                    # follow-up read failed. Preserve STARTING for redelivery
+                    # instead of asserting a broken state without evidence.
+                    start_in_progress = True
+                self.logger.error(
+                    f'{self.class_name}:{self.server_name} - Start request failed in '
+                    f'instance state {instance_status or "UNKNOWN"}: {error}'
+                )
                 break
             except BrokenPipeError:
                 self.logger.info(f"{self.class_name}:{self.server_name} - Broken pipe error when trying to "
@@ -359,8 +525,9 @@ class BaseComputeManager:
                 continue
 
         if start_success:
-            # If the server is an external proxy, then register its DNS name
-            if dns_record := self._dns_record():
+            # WireGuard DNS is handled after an ownership-checked endpoint stage
+            # in LabServerManager.start().
+            if not getattr(self.server_spec, 'wireguard_endpoint_id', None) and (dns_record := self._dns_record()):
                 self.dns_manager.add_dns_record(dns_record, self.server_name)
                 if self.server_spec.guacamole_startup_script:
                     self._wait_for_guacamole(dns_record[:-1])
@@ -368,8 +535,24 @@ class BaseComputeManager:
             self.state_manager.state_transition(self.s.RUNNING)
             self.logger.info(f"{self.class_name}:{self.server_name} - Finished starting server")
         else:
+            if start_in_progress:
+                # Keep the operation retryable. Another delivery owns the
+                # in-flight Compute Engine start and may still complete it.
+                raise TimeoutError(
+                    f'{self.class_name}:{self.server_name} - Timed out waiting for an in-progress start'
+                )
             self.state_manager.state_transition(self.s.BROKEN)
             self.logger.error(f"{self.class_name}:{self.server_name} - Timeout or other error trying to start server")
+
+    def _get_instance_status(self) -> str:
+        try:
+            instance = self.compute_instance.get(resource_name=self.server_name)
+        except Exception as error:
+            self.logger.warning(
+                f'{self.class_name}:{self.server_name} - Could not reconcile server state: {error}'
+            )
+            return ''
+        return str(self._resource_field(instance, 'status', '') or '').upper()
 
     def _stop_server(self) -> None:
         """
@@ -403,7 +586,15 @@ class BaseComputeManager:
                 if dns_record := self._dns_record():
                     self.logger.info(f'{self.class_name}:{self.server_name} - Deleting DNS record for server, '
                                      f'{self.parent_build_id}')
-                    self.dns_manager.delete_dns(record_name=dns_record)
+                    # LabServerManager owns the WireGuard DNS lifecycle and
+                    # performs an ownership/IP-checked deletion. Never fall
+                    # back to a name-only delete here, including for legacy
+                    # gateway records that predate reserved address names.
+                    if (
+                        not getattr(self.server_spec, 'wireguard_endpoint_id', None)
+                        and not self._uses_reserved_external_ip()
+                    ):
+                        self.dns_manager.delete_dns(record_name=dns_record)
 
                 self.state_manager.state_transition(self.s.STOPPED)
                 self.logger.info(f"{self.class_name}:{self.server_name} - Finished stopping server")
@@ -483,14 +674,23 @@ class BaseComputeManager:
         if not hostname:
             return False
 
-        # Get dns_suffix without the trailing dot
-        dns_suffix = self.env.parent_dns_suffix.rstrip('.')
+        # A dotted hostname is already externally qualified. This is required
+        # when WireGuard endpoints use a delegated suffix other than the
+        # application's parent DNS suffix.
+        if hostname.endswith('.'):
+            return hostname
+        if '.' in hostname:
+            return f'{hostname}.'
 
-        if dns_suffix in hostname:
-            # Ensure hostname ends with a dot
-            return hostname if hostname.endswith('.') else f"{hostname}."
-        else:
-            return f"{hostname}{dns_suffix}."
+        dns_suffix = self.env.parent_dns_suffix.strip('.')
+        return f"{hostname}.{dns_suffix}."
+
+    def _uses_reserved_external_ip(self) -> bool:
+        return any(
+            nic.get('external_ip_name')
+            for nic in (getattr(self.server_spec, 'nics', None) or [])
+            if isinstance(nic, dict)
+        )
 
     def _ssh_keys(self) -> str:
         if self.server_spec.ssh_keys:

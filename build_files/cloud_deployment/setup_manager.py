@@ -10,10 +10,13 @@ from common.document_database import DocumentDatabaseFactory
 from cloud_deployment.utilities.menu_options import SetupOptions, ProjectMaintenanceOptions
 from cloud_deployment.operations.app_install_updates.base_build import BaseBuild
 from cloud_deployment.operations.env_and_quotas.environment_variables import EnvironmentVariables
+from cloud_deployment.operations.env_and_quotas.gcloud_environment_manager import GcloudEnvironmentManager
 from cloud_deployment.operations.app_install_updates.agoge_app import AgogeApp
+from cloud_deployment.operations.app_install_updates.shared_load_balancer import SharedLoadBalancer
 from cloud_deployment.operations.app_install_updates.classified_app import ClassifiedApp
 from cloud_deployment._archive.build_specification import BuildSpecification
 from cloud_deployment.operations.images_and_specs.default_server_image import DefaultServerImage
+from cloud_deployment.operations.images_and_specs.public_image_catalog import PublicImageCatalog
 from cloud_deployment.operations.images_and_specs.local_to_cloud import LocalToCloud
 from cloud_deployment.operations.env_and_quotas.increase_quotas import QuotaManager
 from cloud_deployment.operations.project_manager import ProjectManager
@@ -61,15 +64,18 @@ class SetupManager:
         operation_map = {
             SetupOptions.FULL: lambda: InstallUpdateManager(self.project).run_full_install(),
             SetupOptions.UPDATE: lambda: InstallUpdateManager(self.project).run_update(),
-            SetupOptions.CLOUD_FUNCTION: lambda: AgogeApp().deploy_cloud_functions(),
-            SetupOptions.MAIN_APP: lambda: AgogeApp().deploy_main_app(),
+            SetupOptions.CLOUD_FUNCTION: lambda: self._deploy_and_configure_routing("deploy_cloud_functions"),
+            SetupOptions.MAIN_APP: lambda: self._deploy_and_configure_routing("deploy_main_app"),
+            SetupOptions.SHARED_LOAD_BALANCER: lambda: SharedLoadBalancer(project=self.project).run(),
             SetupOptions.DEFAULT_SERVER_IMAGES: lambda: DefaultServerImage().run(),
+            SetupOptions.SYNC_PUBLIC_IMAGES: lambda: PublicImageCatalog(project=self.project).run(),
             SetupOptions.CLASSIFIED_APP: lambda: ClassifiedApp().deploy(),
             SetupOptions.ENV: lambda: EnvironmentVariables(project=self.project).run(),
             SetupOptions.IMPORT_CUSTOM_IMAGES: lambda: CustomImageImportManager().run(),
             SetupOptions.IMPORT_LOCAL_IMAGE: lambda: LocalToCloud().run(),
             SetupOptions.STARTUP_SCRIPTS_AND_INSTRUCTIONS: lambda: BuildSpecification().sync_startup_scripts_and_instructions(),
             SetupOptions.INCREASE_QUOTAS: lambda: QuotaManager(project=self.project).request_all(),
+            SetupOptions.REFRESH_GCP_CREDENTIALS: self._refresh_gcp_credentials,
             SetupOptions.PROJECT_CREATION: lambda: ProjectManager().create(),
             SetupOptions.PROJECT_DELETE: lambda: ProjectManager().delete(),
             SetupOptions.PROJECT_MAINTENANCE: lambda: self._run_project_maintenance_menu(),
@@ -90,6 +96,19 @@ class SetupManager:
             print(f"A KeyError occurred, possibly due to a missing environment variable: {e}")
             print(f"Attempting to synchronize environment variables for project '{self.project}' before retrying.")
             EnvironmentVariables(project=self.project).run()
+
+    def _deploy_and_configure_routing(self, deployment: str) -> None:
+        app = AgogeApp(project=self.project)
+        if getattr(app, deployment)():
+            SharedLoadBalancer(project=self.project).run()
+
+    def _refresh_gcp_credentials(self) -> None:
+        auth_manager = GcloudEnvironmentManager(load_configurations=False)
+        auth_manager.refresh_credentials(
+            account=auth_manager.get_current_account(),
+            quota_project=self.project,
+            force=True,
+        )
 
     def _run_project_maintenance_menu(self) -> None:
         while True:

@@ -12,6 +12,9 @@ Agoge documentation is organized by audience. These pages describe the current i
 ## Project documentation
 
 - [Project overview and deployment](../README.md)
+- [Shared project setup and API secrets](operations/shared-project-setup.md)
+- [Firebase authentication setup and troubleshooting](operations/firebase-authentication.md)
+- [Community WireGuard example](examples/community-wireguard.md)
 - [Contributing](../CONTRIBUTING.md)
 - [Security policy](../SECURITY.md)
 - [Release notes](../release-notes/)

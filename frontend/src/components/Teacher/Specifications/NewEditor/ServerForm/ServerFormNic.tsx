@@ -176,6 +176,23 @@ const ServerFormNic: React.FC<Props> = ({
                         helpText={'Allows server to be accessible via ephemeral external IP.'}
                     />
 
+                    <FormGroup>
+                        <StyledFormFieldLabel>Reserved External IP Name</StyledFormFieldLabel>
+                        <FormTextField
+                            helpText={
+                                'Optional Compute Engine regional address resource name. ' +
+                                'Use this with External NAT for a stable public endpoint.'
+                            }
+                            placeholder={'wireguard-public-ip'}
+                            formKey={ServerFormKeys.serverNicExternalIpName}
+                            fieldFn={(key) => serverForm.getField(key, serverIndex, nicIndex)}
+                            disabled={disableForm}
+                            onInputChange={(field, value) => {
+                                serverForm.handleNicValueChange(field, value, serverIndex, nicIndex)
+                            }}
+                        />
+                    </FormGroup>
+
                     <FormCheckBox
                         formKey={ServerFormKeys.serverEnableDirectConnections}
                         fieldFn={(key) => serverForm.getField(key, serverIndex, nicIndex)}

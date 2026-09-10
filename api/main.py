@@ -31,6 +31,7 @@ from routers.project import project_router
 from routers.unit import unit_router
 from routers.user import user_router
 from routers.workout import workout_router
+from routers.wireguard import wireguard_router
 
 logger = Logger(log_name=LoggerNames.API)
 
@@ -84,6 +85,7 @@ app.include_router(rubric_router)
 app.include_router(project_router)
 app.include_router(puzzle_control_router)
 app.include_router(webgl_router)
+app.include_router(wireguard_router)
 
 
 @app.get("/")

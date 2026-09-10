@@ -179,6 +179,72 @@ Click **Create Image**, select an existing project or global base image, and pro
 
 Checked-out or running template servers incur cloud cost. Stop them when not in use and check them in promptly after validation.
 
+### If base images are missing from the creation page
+
+The **Machine Configuration → Server Image** selector combines public OS images with custom Agoge images. Each catalog can be used independently, so a new project can create its first custom server from a public Ubuntu, Debian, or Windows image.
+
+1. Expand **Server Image** and choose **Clear Filter** to remove any project filter.
+2. If public images are still missing, ask a project administrator to open **Admin → Image Manager** in the same Agoge site. Choose **Sync**, allow a few minutes for the background task, then choose **Refresh**.
+3. Confirm that the desired public image is marked **Enabled**. Select it and choose **Enable** if needed, then **Refresh** to confirm. Disabled public images are excluded from the creation selector.
+4. Reload the server creation page and select the base image.
+
+The public catalog is synchronized into each child project's database. A shared image project setting does not populate this catalog. If **Sync** fails or the catalog stays empty, the administrator should check the child's Cloud Function logs for `GoogleImageSyncManager` and confirm that its Agoge Pub/Sub function is processing requests. Custom images also need an Agoge image record; creating an image directly in the GCP console alone does not add it to this selector.
+
+An administrator can also select the child project in `python setup.py` and run **Server Images & Build Specs → Synchronize Public OS Images**. This populates the catalog directly and prints errors in the terminal, without waiting for the background function. Full installations run it automatically. See [public OS catalog setup and recovery](../operations/shared-project-setup.md#public-os-image-catalog). New Ubuntu, Debian, and Windows families are enabled by default; other public families require **Enable** in Image Manager. The selector lists available image families, not every historical version.
+
+### If a new server reports no bootable device
+
+Check CPU architecture first. The server creation form currently offers E2
+machines, which require **AMD64 (x86-64)** images. An **ARM64** Ubuntu image
+cannot boot on an E2 machine even if its disk includes `UEFI_COMPATIBLE`.
+For example, `ubuntu-minimal-2204-jammy-arm64-v20260906` is an ARM image.
+For the WireGuard template, choose **Ubuntu 24.04 LTS AMD64**, family
+`ubuntu-2404-lts-amd64`, from `ubuntu-os-cloud`. See Google's
+[E2 machine details](https://docs.cloud.google.com/compute/docs/general-purpose-machines#e2_machine_series)
+and [Ubuntu image families](https://docs.cloud.google.com/compute/docs/images/os-details#ubuntu).
+
+The selector displays CPU architecture and disables ARM64 selections for this
+form. The API validates the actual source image and machine architecture before
+saving or queuing a new server. The Cloud Function checks again before building
+a template, including existing records and queued requests. If GCP omits machine
+architecture, the check recognizes the documented x86-64 architecture of E2,
+N1, and N2 from the returned machine type. Explicit architecture metadata takes
+precedence. Other machine families still require architecture metadata, and
+missing image architecture always stops the build with an explanation.
+Public catalog synchronization fills the architecture field for older records.
+
+If an AMD64 image with `e2-standard-2` reports **Cannot determine the CPU
+architecture of machine type**, deploy the updated **API and Cloud Function**
+to the child project and retry creation with the same selections. This is a
+validation error caused by missing machine metadata; it does not require a
+different Ubuntu image or a React rebuild. The API rejects the request before
+creating the template record or queuing a VM build.
+
+GCP's **RUNNING** state means the VM is powered on, not that its operating system has started. Serial messages such as `Boot failed: not a bootable disk` or `No bootable device` indicate failure before SSH or the account setup script can run. Changing the SSH key will not resolve that boot failure.
+
+Ask an administrator to inspect the attached boot disk and serial output. These PowerShell examples use the `wireguard-server` template in `test-dev-787001`:
+
+```powershell
+gcloud compute instances describe wireguard-server --project=test-dev-787001 --zone=us-central1-a --format="yaml(name,status,disks)"
+gcloud compute disks describe wireguard-server-disk --project=test-dev-787001 --zone=us-central1-a --format="yaml(name,creationTimestamp,sourceImage,sourceImageId,sourceSnapshot,sourceSnapshotId,guestOsFeatures,architecture,sizeGb,users)"
+gcloud compute instances get-serial-port-output wireguard-server --project=test-dev-787001 --zone=us-central1-a --port=1 | Select-Object -Last 120
+```
+
+Use the disk name shown for `boot: true` if it differs from `wireguard-server-disk`. Compare its source with the image selected in Agoge. A missing `sourceImage` alone does not prove the disk was created empty; Google omits that field if the source image was subsequently deleted. Check the source ID and other disk metadata too. See [Google's disk resource reference](https://docs.cloud.google.com/compute/docs/reference/rest/v1/disks).
+
+Agoge now retains the selected base image through the first checkout and switches to the custom image only after check-in. Boot creation also rejects an orphaned or incompatible disk with the expected name instead of allowing it to be silently reused. Google documents that an existing disk matching `initializeParams.diskName` can be attached instead of creating a new disk; this is a possible cause to investigate, not a diagnosis from the serial message alone. See [the instance creation reference](https://docs.cloud.google.com/compute/docs/reference/rest/v1/instances/insert).
+
+To recover after pulling these fixes:
+
+1. Have the administrator deploy the updated **React application, API, and Cloud Function** to the affected child project. Run **Server Images & Build Specs → Synchronize Public OS Images** in setup to refresh architecture metadata in the public catalog.
+2. Create a replacement template with a **new server name**, such as `wireguard-server-v2`, and select the intended Ubuntu **AMD64** image for an `e2` VM. A new name avoids reusing the failed disk.
+3. Confirm Ubuntu boots and SSH works before configuring and checking in the replacement.
+4. Retain the failed VM and disk for inspection. Restarting does not recreate or repair the disk, and the new safeguard does not delete it automatically. Stop the failed VM while it is not being inspected.
+
+If the disk is ARM64 and the VM is E2, recovery requires a fresh AMD64 image
+and disk. Increasing disk size, changing SSH keys, or toggling Secure Boot
+does not convert an ARM operating system into an x86 operating system.
+
 ## Create, restore, and delete snapshots
 
 Snapshots preserve server disk state before risky changes. They are useful recovery points, but they are not a substitute for exporting important learner work.

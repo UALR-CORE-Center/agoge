@@ -1,7 +1,7 @@
 import time
 from typing import List
 
-from common.exceptions import Conflict
+from common.exceptions import Conflict, NotFound
 from common.utilities.gcp.compute.compute_firewall import ComputeFirewallsAPI
 from common.constants.google import FirewallDirection, FirewallRuleAction
 from common.models.agoge import FirewallRuleModel
@@ -35,10 +35,7 @@ class FirewallManager:
             if rule_direction is None:
                 rule_direction = FirewallDirection.INGRESS
 
-            rule_action = FirewallRuleAction.ALLOW
-            if target_tags and target_tags is not None:
-                if 'deny-outbound' in target_tags:
-                    rule_action = FirewallRuleAction.DENY
+            rule_action = self._rule_action(rule.action, target_tags)
 
             rules = []
             for ports_str in rule.ports:
@@ -58,18 +55,64 @@ class FirewallManager:
             )
 
             try:
-                self.firewalls_client.create(
+                created = self.firewalls_client.create(
                    resource_name=firewall_rule_name,
                    firewall_resource=firewall_body
                 )
-            except Conflict:
-                # Rebuilds must reconcile rules created by older versions of
-                # Agoge. In particular, legacy rules omitted target tags and
-                # could expose the wrong VMs or fail to target Guacamole.
-                self.firewalls_client.patch(
-                    resource_name=firewall_rule_name,
-                    firewall_body=firewall_body,
+                if not created:
+                    raise ConnectionError(
+                        f'Timed out creating firewall rule {firewall_rule_name}'
+                    )
+            except Conflict as error:
+                existing_rule = self.firewalls_client.get(
+                    resource_name=firewall_rule_name
                 )
+                if not self._firewalls_match(existing_rule, firewall_body):
+                    if self._is_wireguard_rule(firewall_body):
+                        raise Conflict(
+                            f'Existing firewall rule {firewall_rule_name} does not match '
+                            f'the requested configuration'
+                        ) from error
+
+                    # Reconcile older non-WireGuard rules that omitted target
+                    # tags. WireGuard listener rules stay fail-closed because
+                    # silently changing their public exposure is unsafe.
+                    patched = self.firewalls_client.patch(
+                        resource_name=firewall_rule_name,
+                        firewall_body=firewall_body,
+                    )
+                    if patched is False:
+                        raise ConnectionError(
+                            f'Timed out patching firewall rule {firewall_rule_name}'
+                        )
+                    continue
+                self.logger.info(
+                    f"{self.class_name}:{firewall_rule_name} - Matching firewall rule already exists"
+                )
+
+    @staticmethod
+    def _rule_action(action, target_tags: List[str]) -> FirewallRuleAction:
+        """Resolve an explicit allow/deny action with legacy compatibility."""
+        if isinstance(action, FirewallRuleAction):
+            return action
+        if action:
+            try:
+                return FirewallRuleAction[str(action).upper()]
+            except KeyError as exc:
+                raise ValueError(f"Unsupported firewall action '{action}'") from exc
+        if target_tags and 'deny-outbound' in target_tags:
+            return FirewallRuleAction.DENY
+        return FirewallRuleAction.ALLOW
+
+    @classmethod
+    def _is_wireguard_rule(cls, firewall) -> bool:
+        """Identify listener rules that must never be silently rewritten."""
+        name = str(cls._field(firewall, 'name', '')).lower()
+        target_tags = cls._field(firewall, 'target_tags', []) or []
+        return 'wireguard' in name or any(
+            'wireguard' in str(tag).lower()
+            for tag in target_tags
+        )
 
     def delete(
         self,
@@ -77,14 +120,23 @@ class FirewallManager:
     ) -> bool:
         self.logger.info(f"{self.class_name}:{build_id} - Deleting firewall for Workout")
         try:
-            list_response = self.firewalls_client.list(filter_='name = {}*'.format(build_id))
-            for fw_rule in list_response:
-                self.firewalls_client.delete(resource_name=fw_rule.name, wait=False)
+            for fw_rule in self._list_build_firewalls(build_id):
+                try:
+                    deleted = self.firewalls_client.delete(resource_name=fw_rule.name, wait=True)
+                    if not deleted:
+                        raise ConnectionError(
+                            f'Timed out deleting firewall rule {fw_rule.name}'
+                        )
+                except NotFound:
+                    self.logger.info(
+                        f"{self.class_name}:{fw_rule.name} - Firewall rule already deleted"
+                    )
 
             self._wait_for_deletion(build_id)
             return True
-        except ():
+        except Exception as error:
             self.logger.info(f"{self.class_name}:{build_id} - Error in deleting firewall rules for Workout")
+            self.logger.error(str(error))
             return False
 
     def _wait_for_deletion(
@@ -94,7 +146,7 @@ class FirewallManager:
         i = 0
         success = False
         while not success and i < 10:
-            list_response = self.firewalls_client.list(filter_='name = {}*'.format(build_id))
+            list_response = self._list_build_firewalls(build_id)
             if not list_response:
                 success = True
             else:
@@ -104,3 +156,64 @@ class FirewallManager:
         if not success:
             self.logger.error(f'{self.class_name}:{build_id} - Timeout in deleting firewall rules')
             raise ConnectionError
+
+    def _list_build_firewalls(self, build_id: str) -> list:
+        """List rules owned by a build without relying on GCE wildcard filters."""
+        prefix = f'{build_id}-'
+        return [
+            rule
+            for rule in self.firewalls_client.list()
+            if getattr(rule, 'name', '').startswith(prefix)
+        ]
+
+    @classmethod
+    def _firewalls_match(cls, existing, desired) -> bool:
+        """Compare the functional fields controlled by an Agoge firewall rule."""
+        scalar_fields = ('direction', 'priority', 'disabled')
+        list_fields = (
+            'source_ranges',
+            'destination_ranges',
+            'source_tags',
+            'target_tags',
+            'source_service_accounts',
+            'target_service_accounts',
+        )
+        return (
+            cls._resource_path(cls._field(existing, 'network'))
+            == cls._resource_path(cls._field(desired, 'network'))
+            and all(
+                cls._field(existing, field) == cls._field(desired, field)
+                for field in scalar_fields
+            )
+            and all(
+                sorted(cls._field(existing, field, []) or [])
+                == sorted(cls._field(desired, field, []) or [])
+                for field in list_fields
+            )
+            and cls._normalized_rules(cls._field(existing, 'allowed', []) or [])
+            == cls._normalized_rules(cls._field(desired, 'allowed', []) or [])
+            and cls._normalized_rules(cls._field(existing, 'denied', []) or [])
+            == cls._normalized_rules(cls._field(desired, 'denied', []) or [])
+        )
+
+    @classmethod
+    def _normalized_rules(cls, rules) -> list[tuple[str, tuple[str, ...]]]:
+        return sorted(
+            (
+                str(cls._field(rule, 'I_p_protocol', '')),
+                tuple(sorted(cls._field(rule, 'ports', []) or [])),
+            )
+            for rule in rules
+        )
+
+    @staticmethod
+    def _field(resource, name: str, default=None):
+        if isinstance(resource, dict):
+            return resource.get(name, default)
+        return getattr(resource, name, default)
+
+    @staticmethod
+    def _resource_path(resource_url: str | None) -> str:
+        value = str(resource_url or '')
+        marker = '/compute/v1/'
+        return value.split(marker, 1)[-1].lstrip('/')

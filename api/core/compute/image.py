@@ -23,6 +23,8 @@ from common.constants.pub_sub import PubSub
 from common.constants.states import ImageStatus
 from common.constants.enumerators import ImageScopes, SnapshotTypes
 from common.utilities.gcp.compute.compute_image import ComputeImageAPI
+from common.utilities.gcp.compute.compute_machine_type import ComputeMachineTypesAPI
+from common.utilities.gcp.compute.image_compatibility import compatible_boot_image, normalize_architecture
 from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.document_database.factory import DocumentDatabaseFactory
 from common.exceptions import BadRequest, NotFound, AgogeValidationError, NotReady
@@ -86,7 +88,7 @@ class ComputeImage:
         scope: ImageScopes = ImageScopes.PROJECT
     ) -> Union[dict, List]:
         """
-        Retrieves image data from both Compute and Datastore API
+        Retrieve independently available public and custom image catalogs.
 
         Raises:
             BadRequest: Invalid value for scope
@@ -95,12 +97,12 @@ class ComputeImage:
         if scope == ImageScopes.PROJECT:
             google_images = self.db.query(collection_name=DbCollections.GOOGLE_IMAGES)
             custom_images = self.db.query(collection_name=self.collection)
-            if google_images and custom_images:
-                custom = self.agoge_model_validator.load(custom_images)
-                global_images = self.compute_model_validator.load(google_images)
-                return {'custom': custom, 'project': global_images}
-            else:
-                return {'custom': [], 'project': []}
+            # A new project needs public images before it can create its first
+            # custom image. Neither catalog requires the other to be populated.
+            return {
+                'custom': self.agoge_model_validator.load(custom_images) if custom_images else [],
+                'project': self.compute_model_validator.load(google_images) if google_images else [],
+            }
         elif scope == ImageScopes.GLOBAL:
             if google_images := self.db.query(collection_name=DbCollections.GOOGLE_IMAGES):
                 return self.compute_model_validator.load(google_images)
@@ -344,6 +346,12 @@ class ComputeImage:
                                                f"following reserved names: {self.NAME_RESERVATIONS}")
 
         image_template, image_family = self._get_image(image_scope, image_id)
+        source_image = compatible_boot_image(
+            ComputeImageAPI(self.env.project, self.env.region, self.env.zone, log_name=self.log_name),
+            ComputeMachineTypesAPI(self.env.project, self.env.region, self.env.zone, log_name=self.log_name),
+            image_template, machine_type,
+        )
+        image_template = source_image.self_link
         if labels := form_data.get('labels'):
             labels = self._sanitize_labels(labels)
         else:
@@ -361,7 +369,8 @@ class ComputeImage:
             self_link=image_template,
             human_interaction=[generated_connection],
             labels=labels,
-            base_family=image_family
+            base_family=image_family,
+            architecture=normalize_architecture(source_image.architecture),
         )
         self.db.update(
             collection_name=self.collection,
@@ -483,6 +492,11 @@ class ComputeImage:
             else:
                 image_family = image.get('base_family', None)
             image_template = image.get('self_link')
+            if not isinstance(image_template, str) or not image_template.strip():
+                raise BadRequest(
+                    message='Selected image has no source image URL. Refresh the image catalog before creating a server.'
+                )
+            image_template = image_template.strip()
         else:
             self.logger.error(f"Requested image is invalid or does not exist",
                               image=image_id, image_scope=image_scope)

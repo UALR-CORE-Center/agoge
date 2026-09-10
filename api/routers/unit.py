@@ -104,10 +104,12 @@ async def create_unit(
 async def get_unit(
     build_id: str = Depends(build_id_path),
     env_dict: dict = Depends(get_cloud_env),
-    _: AgogeUser = Depends(teacher_required)
+    current_user: AgogeUser = Depends(teacher_required)
 ) -> AgogeResponse[UnitModel]:
     try:
-        unit = Unit(env_dict=env_dict).get(build_id)
+        unit_manager = Unit(env_dict=env_dict)
+        unit = unit_manager.get(build_id)
+        unit_manager._require_instructor_access(unit, current_user)
         return AgogeResponse(data=unit)
     except NotFound as e:
         logger.error(e.message)
@@ -115,6 +117,9 @@ async def get_unit(
     except BadRequest as e:
         logger.error(e.message)
         raise HTTPException(status_code=400)
+    except Unauthorized as e:
+        logger.error(e.message)
+        raise HTTPException(status_code=403, detail=e.message)
 
 
 @unit_router.get("/{build_id}/state/")
@@ -150,7 +155,7 @@ async def get_all_data(
         'user': current_user.uid
     }
     try:
-        unit_full = Unit(env_dict=env_dict).get_all_data(build_id)
+        unit_full = Unit(env_dict=env_dict).get_all_data(build_id, requester=current_user)
         rubric_support = env_dict.get("rubric_support", False)
         return AgogeResponse(
             data=UnitFullResponse(
@@ -164,6 +169,9 @@ async def get_all_data(
     except BadRequest as e:
         logger.error(e.message, **log_args)
         raise HTTPException(status_code=400, detail=e.message)
+    except Unauthorized as e:
+        logger.error(e.message, **log_args)
+        raise HTTPException(status_code=403, detail=e.message)
 
 
 @unit_router.get("/{build_id}/workouts/")
@@ -302,6 +310,5 @@ async def delete_unit(
     except Unauthorized as e:
         logger.error(e.message, **log_args)
         raise HTTPException(status_code=403, detail=e.message)
-
 
 

@@ -98,7 +98,9 @@ class FirestoreDatabase(DocumentDatabase):
                 doc = doc_ref.get()
                 if doc.exists:
                     data = doc.to_dict()
-                    self.logger.debug(f"Retrieved document data: {data}", custom_id=doc_id)
+                    # Image documents can contain startup scripts with embedded
+                    # credentials. Log identifiers, never document payloads.
+                    self.logger.debug(f"Retrieved document with ID: {doc_id}", custom_id=doc_id)
                     return data
                 else:
                     self.logger.error(f"Document with ID {doc_id} does not exist.")
@@ -133,7 +135,8 @@ class FirestoreDatabase(DocumentDatabase):
                     data=data,
                     merge=True
                 )
-            doc_ref.set(data, merge=True)
+            else:
+                doc_ref.set(data, merge=True)
             self.logger.debug(f"Updated document with ID: {doc_id}", custom_id=doc_id)
         except Exception as e:
             logging.error(f"Error updating document: {e}")
@@ -301,8 +304,11 @@ class FirestoreDatabase(DocumentDatabase):
         transaction = self.db.transaction()
 
         try:
-            transactional_operation = firestore.transactional(operation_func)
-            return transactional_operation(transaction, *args, **kwargs)
+            # ``Transaction`` does not expose a run method. The transactional
+            # wrapper executes the callback and retries it when Firestore detects
+            # a concurrent write conflict.
+            transaction_callable = firestore.transactional(operation_func)
+            return transaction_callable(transaction, *args, **kwargs)
         except Exception as e:
             self.logger.error(f"Transaction failed: {e}")
             raise
@@ -334,7 +340,7 @@ class FirestoreDatabase(DocumentDatabase):
                 if doc.exists:
                     data = doc.to_dict()
                     self.logger.debug(
-                        f"Retrieved document data within transaction: {data}",
+                        f"Retrieved document within transaction: {doc_ref.id}",
                         custom_id=doc_ref.id
                     )
                     return data

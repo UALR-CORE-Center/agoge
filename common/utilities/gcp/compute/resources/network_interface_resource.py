@@ -63,9 +63,13 @@ class NetworkInterfaceResource:
     def access_config(
         self,
         type_: str,
-        name: str
+        name: str,
+        nat_ip: str = None,
     ) -> AccessConfig:
-        return AccessConfig(type_=type_, name=name)
+        access_config = AccessConfig(type_=type_, name=name)
+        if nat_ip:
+            access_config.nat_i_p = nat_ip
+        return access_config
 
     def alias_ip_range(
         self,

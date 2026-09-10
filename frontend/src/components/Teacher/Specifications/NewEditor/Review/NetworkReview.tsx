@@ -99,6 +99,88 @@ const NetworkReview: React.FC<Props> = ({specification, loading, elevation, onNa
 
             </List>
 
+            <ReviewSectionLabel sx={{paddingY: theme.spacing(1), marginTop: theme.spacing(1)}} variant={'h6'}>
+                Static Routes
+            </ReviewSectionLabel>
+
+            <List sx={{padding: 0}} component={Paper} variant={'outlined'}>
+                <ReviewListHeader>
+                    <ReviewHeaderKey>Route</ReviewHeaderKey>
+                    <ReviewHeaderValue>Details</ReviewHeaderValue>
+                </ReviewListHeader>
+
+                {specification?.routes?.map((route, idx) => (
+                    <ReviewListItem
+                        key={`${route.name}-${idx}`}
+                        disableAlternatingColors
+                        sx={{alignItems: 'flex-start'}}
+                        divider
+                    >
+                        <ReviewItemKeyWrapper>
+                            <ReviewItemKey size={'small'} label={route.name}/>
+                        </ReviewItemKeyWrapper>
+                        <ReviewItemValue>
+                            <NestedReviewListItem>
+                                <ReviewItemKeyWrapper>Destination</ReviewItemKeyWrapper>
+                                <ReviewItemValueOrSkeleton
+                                    value={route.dest_range}
+                                    loading={loading}/>
+                            </NestedReviewListItem>
+
+                            <NestedReviewListItem>
+                                <ReviewItemKeyWrapper>Network</ReviewItemKeyWrapper>
+                                <ReviewItemValueOrSkeleton
+                                    value={route.network}
+                                    loading={loading}/>
+                            </NestedReviewListItem>
+
+                            <NestedReviewListItem>
+                                <ReviewItemKeyWrapper>Next Hop</ReviewItemKeyWrapper>
+                                <ReviewItemValueOrSkeleton
+                                    value={route.next_hop_instance}
+                                    loading={loading}/>
+                            </NestedReviewListItem>
+
+                            <NestedReviewListItem>
+                                <ReviewItemKeyWrapper>Priority</ReviewItemKeyWrapper>
+                                <ReviewItemValueOrSkeleton
+                                    value={String(route.priority ?? 1000)}
+                                    loading={loading}/>
+                            </NestedReviewListItem>
+
+                            <NestedReviewListItem>
+                                <ReviewItemKeyWrapper>Applies To</ReviewItemKeyWrapper>
+                                <ReviewItemValueOrSkeleton
+                                    value={
+                                        route.tags?.length
+                                            ? <ChipListView values={route.tags}/>
+                                            : 'All instances'
+                                    }
+                                    loading={loading}/>
+                            </NestedReviewListItem>
+
+                            {route.description && (
+                                <NestedReviewListItem>
+                                    <ReviewItemKeyWrapper>Description</ReviewItemKeyWrapper>
+                                    <ReviewItemValueOrSkeleton
+                                        value={route.description}
+                                        loading={loading}/>
+                                </NestedReviewListItem>
+                            )}
+                        </ReviewItemValue>
+                    </ReviewListItem>
+                ))}
+
+                {(specification?.routes || []).length === 0 && (
+                    <EmptyListItem>
+                        {loading
+                            ? <Skeleton variant={'rounded'} height={100} width={'100%'}/>
+                            : <EmptyListItemText>No Static Routes</EmptyListItemText>
+                        }
+                    </EmptyListItem>
+                )}
+            </List>
+
 
         </Stack>
     )

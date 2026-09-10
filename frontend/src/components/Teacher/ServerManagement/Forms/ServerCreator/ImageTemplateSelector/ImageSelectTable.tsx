@@ -15,6 +15,7 @@ import {serverService} from '../../../../../../services/Server/server.service';
 import {ExpandableCell} from '../../../../../Common/DataGrid/ExpandableCell';
 import StyledDataGrid from '../../../../../Common/DataGrid/StyledDataGrid';
 import {ResponsiveGrid} from '../../../../../Common/Grid/ResponsiveGrid';
+import {getImageArchitecture, imageArchitectureLabel, serverImageArchitectureError} from '../../../../../../utilities/imageArchitecture';
 
 interface Props {
     onSelect: (selectedRow: any) => void;
@@ -76,6 +77,7 @@ export const ImageSelectTable: React.FC<Props> = (props) => {
         if (model === "project") {
             return {
                 os: image.os,
+                architecture: getImageArchitecture(image),
                 id: image.uuid,
                 name: image.name,
                 uuid: image.uuid,
@@ -91,6 +93,7 @@ export const ImageSelectTable: React.FC<Props> = (props) => {
         } else {
             return  {
                 id: image.name,
+                architecture: getImageArchitecture(image),
                 os: image.os,
                 name: image.name,
                 disk_size: image.add_disk,
@@ -173,10 +176,17 @@ export const ImageSelectTable: React.FC<Props> = (props) => {
                     variant="text"
                     tabIndex={0}
                     aria-label={`Select ${params.value || "image"}`}
+                    disabled={!!serverImageArchitectureError(params.row)}
                 >
                     {params.value || "No image name."}
                 </Button>
             ),
+        },
+        {
+            field: 'architecture',
+            headerName: 'CPU Architecture',
+            width: 175,
+            valueGetter: (_value, row) => imageArchitectureLabel(row),
         },
         {
             field: 'description',
@@ -233,6 +243,9 @@ export const ImageSelectTable: React.FC<Props> = (props) => {
     return (
         <>
             <Box>
+                <Typography variant="body2" sx={{mb: 1}}>
+                    The available E2 machines require AMD64 (x86-64) images. ARM64 images are listed but cannot be selected.
+                </Typography>
                 <Box sx={{ border: "1px solid gray", borderRadius: "4px", p: 2}}>
                     <Stack direction={"row"} alignItems={"center"} p={1}>
                         <GridFilterListIcon />
@@ -249,6 +262,7 @@ export const ImageSelectTable: React.FC<Props> = (props) => {
                 <Box style={{width: "100%", marginBottom: 5}}>
                     <StyledDataGrid
                         data={flattenedData}
+                        isRowSelectable={(params) => !serverImageArchitectureError(params.row)}
                         columns={columns}
                         disableMultiRowSelection={true}
                         disableSelectBtn={true}

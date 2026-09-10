@@ -37,7 +37,7 @@ export const ProjectSettings: React.FC = () => {
     };
 
     const getInputType = (key: string): string => {
-        if (key === 'max_workspaces') {
+        if (key === 'max_workspaces' || key === 'wireguard_port') {
             return "number";
         } else if (key === 'student_workout_firewall') {
             return "boolean";

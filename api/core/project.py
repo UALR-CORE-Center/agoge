@@ -43,7 +43,19 @@ class Project:
         env_dict = self.get(as_dict=True)
 
         for key, value in data.items():
-            if key in env_dict or key in ['classroom_user', 'student_workout_firewall']:
+            if key == 'project':
+                # WireGuard DNS names use the globally unique GCP project ID as
+                # their tenant namespace. Allowing it to be patched would break
+                # that uniqueness invariant and would not rename the real GCP
+                # project in any case.
+                raise BadRequest('The GCP project ID is immutable')
+            if key in env_dict or key in [
+                'classroom_user',
+                'student_workout_firewall',
+                'wireguard_dns_prefix',
+                'wireguard_dns_suffix',
+                'wireguard_port',
+            ]:
                 if key == 'classroom_user':
                     if not self._validate_email(value):
                         raise AgogeValidationError(f'classroom_user must be a valid email address')
@@ -52,7 +64,13 @@ class Project:
                 raise BadRequest(f'Invalid or unrecognized key, `{key}`')
 
         try:
-            CloudEnvModel(**env_dict)
+            validated = CloudEnvModel(**env_dict)
+            # Persist the normalized values that runtime services consume. This
+            # prevents mixed-case/trailing-dot variants and numeric strings from
+            # bypassing the canonical project configuration.
+            for key in ('wireguard_dns_prefix', 'wireguard_dns_suffix', 'wireguard_port'):
+                if key in data:
+                    env_dict[key] = getattr(validated, key)
             self.db.update(DbCollections.ADMIN_INFO, doc_id=ADMIN_INFO_DOCUMENT, data=env_dict)
         except ValidationError as e:
             self.logger.error(

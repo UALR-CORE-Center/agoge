@@ -17,7 +17,10 @@ import {
 export class EditorFormFactory {
 
 
-    static generateSummaryForm(summary: Summary | null = null): FormType {
+    static generateSummaryForm(
+        summary: Summary | null = null,
+        unitType: UnitType = UnitType.SOLO
+    ): FormType {
         return {
             [SummaryFormKeys.summaryName]: {
                 ...createDefaultFormFieldMeta(
@@ -36,7 +39,7 @@ export class EditorFormFactory {
                 ...createDefaultFormFieldMeta(summary?.student_instructions_url || '')
             },
             [SummaryFormKeys.summaryUnitType]: {
-                ...createDefaultFormFieldMeta(summary?.unit_type || UnitType.SOLO, [requiredValidator])
+                ...createDefaultFormFieldMeta(unitType, [requiredValidator])
             },
             [SummaryFormKeys.summaryTeachingConcepts]: {
                 ...createDefaultFormFieldMeta(summary?.tags || [])
