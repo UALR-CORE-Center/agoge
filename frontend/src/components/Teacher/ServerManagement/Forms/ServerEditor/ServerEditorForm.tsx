@@ -2,7 +2,7 @@ import {ErrorOutline} from "@mui/icons-material";
 import Cancel from "@mui/icons-material/Cancel";
 import SaveIcon from "@mui/icons-material/Save";
 import {LoadingButton} from "@mui/lab";
-import {Box, Container, Paper, Stack, Typography} from "@mui/material";
+import {Box, Container, Paper, Stack, Typography, CircularProgress} from "@mui/material";
 import Alert from "@mui/material/Alert";
 import Button from "@mui/material/Button";
 import {useTheme} from "@mui/material/styles";
@@ -10,7 +10,7 @@ import {useModal} from "mui-modal-provider";
 import React, {useEffect, useState} from "react";
 import {useNavigate, useParams} from "react-router-dom";
 
-import {URL_TEACHER_SERVERS} from "../../../../../router/urls";
+import {URL_TEACHER_SERVERS, URL_TEACHER_SERVERS_EDITOR} from "../../../../../router/urls";
 import {AgogeImage} from "../../../../../services/Server/image.model";
 import {imageService} from "../../../../../services/Server/image.service";
 import {serverService} from "../../../../../services/Server/server.service";
@@ -22,6 +22,7 @@ import ServerValidationDialog from "../ServerValidationDialog";
 import {HumanInteractionForm} from "./HumanInteractionForm";
 import {ServerDetailsForm} from "./ServerDetailsForm";
 import {useHumanInteractionForm} from "./useHumanInteractionForm";
+import {SharedImageCopyDialog} from '../../SharedImageCopyDialog';
 
 
 interface MessageProps {
@@ -39,7 +40,7 @@ const initialForm: IServerForm = {
 };
 
 
-export const ServerEditorForm: React.FC = () => {
+const ServerEditor: React.FC = () => {
     const theme = useTheme();
     const {showModal} = useModal();
     const navigate = useNavigate();
@@ -58,6 +59,7 @@ export const ServerEditorForm: React.FC = () => {
     const hInteractionsForm = useHumanInteractionForm({initialize: false});
     const [formErrors, setFormErrors] = useState<string>("");
     const [openErrorDialog, setOpenErrorDialog] = useState<boolean>(false);
+    const [copyOpen, setCopyOpen] = useState(false);
 
     useEffect(() => {
         if (!initialized) manageSnackbar({message: "Loading image details ..."});
@@ -131,6 +133,7 @@ export const ServerEditorForm: React.FC = () => {
     }
 
     const handleSave = async () => {
+        if (!image.data || image.data.is_shared) return;
         if (hInteractionsForm.isEmpty()) {
             setFormErrors("Servers must have at least one human interaction configured.");
             return;
@@ -163,6 +166,40 @@ export const ServerEditorForm: React.FC = () => {
     }
 
     const handleCancel = () => navigate(URL_TEACHER_SERVERS);
+
+    if (image.pending || !image.data) {
+        return (
+            <Container sx={{mt: theme.spacing(9)}}>
+                {image.pending ? <CircularProgress aria-label="Loading image details" /> : <Alert severity="error">Could not load image details. Return to Manage Servers and try again.</Alert>}
+                <Button onClick={handleCancel}>Back to Manage Servers</Button>
+            </Container>
+        );
+    }
+
+    if (image.data.is_shared) {
+        return (
+            <Container sx={{mt: theme.spacing(9)}}>
+                <Paper sx={{p: 3}}>
+                    <Stack spacing={2}>
+                        <Typography variant="h5" component="h1">{image.data.name}</Typography>
+                        <Alert severity="info">
+                            This is a shared image{image.data.source_project ? ` from ${image.data.source_project}` : ''}.
+                            {' '}Create a local copy under a new name to edit its settings or customize the server.
+                        </Alert>
+                        <Stack direction="row" spacing={2}>
+                            <Button onClick={handleCancel}>Back to Manage Servers</Button>
+                            <Button variant="contained" onClick={() => setCopyOpen(true)}>Copy and edit</Button>
+                        </Stack>
+                    </Stack>
+                </Paper>
+                <SharedImageCopyDialog
+                    image={copyOpen ? image.data : null}
+                    onClose={() => setCopyOpen(false)}
+                    onCopied={(localImage) => navigate(`${URL_TEACHER_SERVERS_EDITOR}/${localImage.name}`, {replace: true})}
+                />
+            </Container>
+        );
+    }
 
     return (
         <>
@@ -261,3 +298,9 @@ export const ServerEditorForm: React.FC = () => {
         </>
     )
 }
+
+// A newly copied image needs fresh form state even when only the route ID changes.
+export const ServerEditorForm: React.FC = () => {
+    const {image_id} = useParams<{image_id: string}>();
+    return <ServerEditor key={image_id} />;
+};

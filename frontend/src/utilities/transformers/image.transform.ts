@@ -1,4 +1,4 @@
-import {AgogeImage, ImageSummaryLists} from "../../services/Server/image.model"
+import type {AgogeImage} from "../../services/Server/image.model"
 
 export const transformToAgogeImage = (data: any): AgogeImage => {
     return {
@@ -10,6 +10,10 @@ export const transformToAgogeImage = (data: any): AgogeImage => {
         human_interaction: data.human_interaction,
         image: data.image,
         image_exists: data.image_exists,
+        architecture: data.architecture,
+        base_family: data.base_family,
+        is_shared: data.is_shared === true,
+        source_project: data.source_project ?? null,
         in_use_by: data.in_use_by,
         machine_type: data.machine_type,
         name: data.name,
@@ -17,7 +21,7 @@ export const transformToAgogeImage = (data: any): AgogeImage => {
         self_link: data.self_link,
         labels: data.labels,
         state: data.state,
-        state_timestamp: data.state,
+        state_timestamp: data.state_timestamp,
         status: data.status,
         tags: data.tags,
     };

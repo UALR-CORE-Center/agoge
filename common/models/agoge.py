@@ -653,6 +653,9 @@ class AgogeImageModel(BaseModel):
     base_family: Optional[str] = None,
     image_exists: Optional[bool] = False
     architecture: Optional[str] = None
+    # Response metadata is derived from the stored source and active project.
+    is_shared: bool = False
+    source_project: Optional[str] = None
 
 
 class SnapshotModel(BaseModel):

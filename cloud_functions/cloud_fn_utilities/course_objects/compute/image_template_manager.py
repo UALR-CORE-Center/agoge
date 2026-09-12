@@ -7,13 +7,14 @@ from common.constants.states import ImageStatus, ServerStates
 from common.constants.pub_sub import PubSub
 from common.constants.database import DbCollections, DATABASE_NAME, DatabaseTypes, DbOperators
 from common.document_database import DocumentDatabaseFactory, DatabaseQueries
-from common.exceptions import Conflict, NotFound, BaseAgogeException, BadRequest
+from common.exceptions import Conflict, NotFound, BaseAgogeException, BadRequest, OperationTimeout
 from common.models.agoge import AgogeImageModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.compute.compute_image import ComputeImageAPI
 from common.utilities.gcp.compute.image_compatibility import compatible_boot_image
+from common.utilities.gcp.compute.image_ownership import is_shared_image
 from common.utilities.gcp.compute.resources.network_interface_resource import NetworkInterfaceResource
 from common.utilities.gcp.compute.resources.image_resource import ImageResource
 
@@ -133,6 +134,7 @@ class ImageTemplateManager(BaseComputeManager):
 
     def build(self) -> None:
         """Builds an individual server based on the image template specifications."""
+        self._require_local_image()
         self._build_server()
 
     def check_in(self) -> None:
@@ -140,7 +142,9 @@ class ImageTemplateManager(BaseComputeManager):
         For a given compute instance, generates a production image before
         deleting the instance and associated DNS records.
         """
-        self.create_production_image()
+        self._require_local_image()
+        if not self.create_production_image():
+            raise OperationTimeout(f'Could not create image {self.image_name}. The server remains checked out.')
 
         if self.debug:
             self.delete_server()
@@ -152,7 +156,8 @@ class ImageTemplateManager(BaseComputeManager):
                 action=str(PubSub.Actions.DELETE.value)
             )
 
-        self._update_record_status(ImageStatus.CHECKED_IN)
+        # Publish the new source only after image creation and verification.
+        self._update_record_status(ImageStatus.CHECKED_IN, image_created=True)
 
     def check_out(self) -> None:
         """
@@ -160,14 +165,17 @@ class ImageTemplateManager(BaseComputeManager):
         If successful, image is reserved for changes by the requesting user
         until checked-in (released)
         """
+        self._require_local_image()
         self.build()
 
         self._update_record_status(ImageStatus.CHECKED_OUT)
 
     def start_server(self) -> None:
+        self._require_local_image()
         self._start_server()
 
     def stop_server(self) -> None:
+        self._require_local_image()
         self._stop_server()
 
     def stop_all_running(self) -> None:
@@ -232,6 +240,7 @@ class ImageTemplateManager(BaseComputeManager):
             latest (bool): Create a new snapshot of server and use latest to create a new image
             snapshot_name (str, optional): Create an image from existing snapshot
         """
+        self._require_local_image()
         if latest:
             # latest is supplied, send request to generate a new snapshot from current template server state
             self.logger.info(f"{self.class_name}:{self.server_name} - Stopping the server before snapshotting.")
@@ -250,20 +259,33 @@ class ImageTemplateManager(BaseComputeManager):
 
         # Wait for previous image to delete first to avoid any insert conflicts
         if not self.delete_image():
-            self.logger.warning(f"{self.class_name}:{self.server_name} - "
-                                f"Could not delete the existing image for server")
+            raise OperationTimeout(f'Could not delete the existing image {self.image_name}. Retry check-in.')
 
         # It is now safe to send image insert request
         self.logger.info(f"{self.class_name}:{self.server_name} - Beginning to image the server.")
-        self._create_image_from_snapshot(snapshot_name)
+        if not self._create_image_from_snapshot(snapshot_name):
+            raise OperationTimeout(f'Could not create image {self.image_name}. The server remains checked out.')
+        created_image = self.compute_image.get(
+            self.image_name, project=self.env.project, fallback_to_shared=False,
+        )
+        expected_source = self.compute_image.self_link(self.image_name, self.env.project)
+        if (
+            created_image.status != 'READY'
+            or self._canonical_compute_resource(created_image.self_link)
+            != self._canonical_compute_resource(expected_source)
+        ):
+            raise OperationTimeout(f'Image {self.image_name} is not ready in project {self.env.project}. Retry check-in.')
         self.logger.info(f"{self.class_name}:{self.server_name} - Completed imaging the server.")
+        return True
 
     def cancel(self) -> None:
         """
         Deletes instance and cancels image reservation
         """
+        self._require_local_image()
         self.logger.info(f'canceling image template {self.image_name} changes')
-        self.delete_server(state_transition=False)
+        if not self.delete_server(state_transition=False):
+            raise OperationTimeout(f'Could not delete server {self.server_name}. Retry canceling the changes.')
 
         self._update_record_status(ImageStatus.CHECKED_IN)
 
@@ -271,6 +293,7 @@ class ImageTemplateManager(BaseComputeManager):
         """
         Delete production image, server, server snapshots, and image database records.
         """
+        self._require_local_image()
         self.logger.info(f'starting deletion process for image template {self.image_name}')
 
         # Delete the template server
@@ -288,12 +311,16 @@ class ImageTemplateManager(BaseComputeManager):
 
     def delete_server(self, state_transition: bool = True) -> bool:
         """Delete image server and server DNS records"""
+        self._require_local_image()
         self.logger.info(f'{self.class_name}:{self.server_name} - Deleting server')
         if state_transition:
             self.state_manager.state_transition(self.s.DELETING)
 
         try:
-            self.compute_instance.delete(self.server_name, wait=True)
+            if not self.compute_instance.delete(self.server_name, wait=True):
+                if state_transition:
+                    self.state_manager.state_transition(self.s.BROKEN)
+                return False
         except NotFound as e:
             # If the resource can't be found, it was either already deleted or never created
             self.logger.error(f'{self.class_name}:{self.server_name} - Deletion request returned status code 404. '
@@ -318,6 +345,7 @@ class ImageTemplateManager(BaseComputeManager):
 
     def delete_image(self) -> bool:
         """Delete image server image"""
+        self._require_local_image()
         if not self.image_name:
             self.logger.error(f'{self.class_name}: - Delete image called but no image name provided!')
             return False
@@ -540,13 +568,15 @@ class ImageTemplateManager(BaseComputeManager):
 
     def _update_record_status(
         self,
-        status: ImageStatus = ImageStatus.CHECKED_OUT
+        status: ImageStatus = ImageStatus.CHECKED_OUT,
+        image_created: bool = False,
     ) -> None:
         """Updates image status and state.
         Resets image record to default state if image is marked as checked-in.
 
         Args:
             status (ImageStatus): Status of current image
+            image_created (bool): A new child image was successfully created and verified.
         """
         db_image = self.db.get(collection_name=self.collection, doc_id=self.server_name)
 
@@ -560,10 +590,17 @@ class ImageTemplateManager(BaseComputeManager):
             db_image['state'] = ServerStates.START.value
             db_image['in_use_by'] = None
             db_image['dns_record'] = None
-            db_image['image_exists'] = True
-            # The custom image exists only after check-in. Keep the selected
-            # base image available for retries while the template is checked out.
-            db_image['self_link'] = self.compute_image.self_link(self.image_name, self.env.project)
+            if image_created:
+                db_image['image_exists'] = True
+                db_image['self_link'] = self.compute_image.self_link(self.image_name, self.env.project)
 
         if ModelValidator(AgogeImageModel, log_location=self.log_name).load(db_image):
             self.db.update(collection_name=self.collection, doc_id=self.server_name, data=db_image)
+
+    def _require_local_image(self) -> None:
+        """Reject queued or direct management of another project's image."""
+        image_record = self.db.get(collection_name=self.collection, doc_id=self.server_name)
+        if not image_record:
+            raise NotFound(f'No image template found with name {self.server_name}.')
+        if is_shared_image(image_record, self.env.project):
+            raise BadRequest('Shared images must be copied to this project under a new name before editing.')

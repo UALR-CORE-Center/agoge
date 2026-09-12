@@ -3,7 +3,7 @@ import ComputerIcon from '@mui/icons-material/Computer';
 import DeleteForeverOutlinedIcon from '@mui/icons-material/DeleteForeverOutlined';
 import LockOpenOutlinedIcon from '@mui/icons-material/LockOpenOutlined';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
-import {CircularProgress, Paper, Typography, Button} from '@mui/material';
+import {CircularProgress, Paper, Typography, Button, Chip, Tooltip} from '@mui/material';
 import {GridColDef, GridRowSelectionModel} from "@mui/x-data-grid";
 import {useModal} from "mui-modal-provider";
 import React, {useCallback, useEffect, useState} from 'react';
@@ -32,6 +32,7 @@ import {ImageActionButton} from "./Buttons/ImageActionButton";
 import {ConfirmCancelDialog} from "./ConfirmCancelDialog";
 import {ImageDetailsDialog} from "./ImageDetailsDialog/ImageDetailsDialog";
 import {resolveStatus} from "../../Common/Status/StateMapping";
+import {SharedImageCopyDialog} from './SharedImageCopyDialog';
 
 type MessageSeverity = 'success' | 'error' | 'warning' | 'info';
 type RowActions = "start" | "stop" | "checkIn" | "checkOut" | "snapshot" | "delete" | "cancel";
@@ -77,6 +78,7 @@ const ImageListTable: React.FC = () => {
     const [cancelModal, setCancelModal] = useState<ActiveRow>({open: false, row: undefined});
     const [cancelingRows, setCancelingRows] = useState<{ name: string, initialState: number }[]>([]);
     const [initialState, setInitialState] = useState<boolean>(true);
+    const [copyRequest, setCopyRequest] = useState<{image: AgogeImage, action: 'edit' | 'checkOut'} | null>(null);
 
     const fetchImages = async (showLoading: boolean = false) => {
         if (showLoading) {
@@ -128,15 +130,8 @@ const ImageListTable: React.FC = () => {
         return <Typography color="error">{error}</Typography>;
     }
 
-    const handlePostRequest = async (action: string, row) => {
-        try {
-            await imageService.post_action([row], action);
-        } catch (error: any) {
-            if(error?.status === 503){
-                showSnackbar("error","Image is still processing. Please try again in a short time.")
-            }
-            console.error('Error', error);
-        }
+    const handlePostRequest = async (action: string, row: AgogeImage) => {
+        await imageService.post_action([row], action);
     };
 
     const showSnackbar = (severity: MessageSeverity, message: string) => {
@@ -152,42 +147,51 @@ const ImageListTable: React.FC = () => {
         message: string,
         row: AgogeImage
     ) => {
-        switch (action) {
-            case 'checkOut':
-                setActiveButton((prevState) => (
-                    {...prevState, [action]: true, buttonId: row.name}
-                ));
-
-                showSnackbar(severity, message);
-                await handlePostRequest(String(PubSub.Actions.CHECK_OUT), row);
-                break;
-            case 'checkIn':
-                setActiveButton((prevState) => (
-                    {...prevState, [action]: true, buttonId: row.name}
-                ));
-                showSnackbar(severity, message);
-                await handlePostRequest(String(PubSub.Actions.CHECK_IN), row);
-                break;
-            case 'delete':
-                setImageName(row?.name || '');
-                setOpenDeleteDialog({open: true, row: row});
-                break;
-            case 'cancel':
-                setImageName(row?.name || '');
-                setCancelModal({open: true, row: row});
-                break;
-            default:
-                console.error(message);
-                showSnackbar('error', 'An error occurred');
-                break;
+        if (row.is_shared) {
+            if (action === 'checkOut') setCopyRequest({image: row, action: 'checkOut'});
+            return;
         }
-        setActiveButton((prevState) => ({...prevState, [action]: false, buttonId: ""}));
-        fetchImages(false);
+        try {
+            switch (action) {
+                case 'checkOut':
+                    setActiveButton((prevState) => (
+                        {...prevState, [action]: true, buttonId: row.name}
+                    ));
+                    showSnackbar(severity, message);
+                    await handlePostRequest(String(PubSub.Actions.CHECK_OUT), row);
+                    break;
+                case 'checkIn':
+                    setActiveButton((prevState) => (
+                        {...prevState, [action]: true, buttonId: row.name}
+                    ));
+                    showSnackbar(severity, message);
+                    await handlePostRequest(String(PubSub.Actions.CHECK_IN), row);
+                    break;
+                case 'delete':
+                    setImageName(row?.name || '');
+                    setOpenDeleteDialog({open: true, row: row});
+                    break;
+                case 'cancel':
+                    setImageName(row?.name || '');
+                    setCancelModal({open: true, row: row});
+                    break;
+                default:
+                    showSnackbar('error', 'An error occurred');
+                    break;
+            }
+        } catch (error: any) {
+            showSnackbar('error', error?.status === 503
+                ? 'Image is still processing. Please try again in a short time.'
+                : error.message || 'Could not update the image. Please try again.');
+        } finally {
+            setActiveButton((prevState) => ({...prevState, [action]: false, buttonId: ""}));
+            fetchImages(false);
+        }
     };
 
     const handleConfirmDelete = async () => {
         const activeRow = openDeleteDialog.row;
-        if (!activeRow) return;
+        if (!activeRow || activeRow.is_shared) return;
         setOpenDeleteDialog({open: false, row: undefined});
         setActiveButton((prevState) => (
             {...prevState, delete: true, buttonId: activeRow.name}
@@ -208,7 +212,7 @@ const ImageListTable: React.FC = () => {
 
     const handleConfirmCancel = async () => {
         const selectedRow = cancelModal.row;
-        if (!selectedRow) {
+        if (!selectedRow || selectedRow.is_shared) {
             return;
         }
 
@@ -229,14 +233,16 @@ const ImageListTable: React.FC = () => {
             } else{
                 await imageService.delete_image(selectedRow.name)
             }
-        } catch (error) {
-            showSnackbar('error', "Failed to cancel changes.");
+            showSnackbar('success', 'Cancel changes request accepted. The image list will update when it finishes.');
+        } catch (error: any) {
+            showSnackbar('error', error.message || 'Failed to cancel changes.');
+            setCancelingRows(rows => rows.filter(row => row.name !== selectedRow.name));
         } finally {
-            showSnackbar('success', "Successfully canceled changes.");
             setImageName('');
             setActiveButton((prevState) => (
-                {...prevState, checkIn: true, cancel: true, buttonId: ""}
+                {...prevState, checkIn: false, cancel: false, buttonId: ""}
             ));
+            fetchImages(false);
         }
     };
 
@@ -266,8 +272,24 @@ const ImageListTable: React.FC = () => {
     }
 
     const handleImageEditorBtn = (rowData: AgogeImage) =>{
-        navigate(`${URL_TEACHER_SERVERS_EDITOR}/${rowData.id}`);
+        handleImageDialogClose();
+        if (rowData.is_shared) {
+            setCopyRequest({image: rowData, action: 'edit'});
+            return;
+        }
+        navigate(`${URL_TEACHER_SERVERS_EDITOR}/${rowData.name}`);
     }
+
+    const handleCopiedImage = async (localImage: AgogeImage) => {
+        const action = copyRequest?.action;
+        setCopyRequest(null);
+        setImages(images => [...images.filter(image => image.name !== localImage.name), {...localImage, id: localImage.name}]);
+        if (action === 'checkOut') {
+            await buttonController('checkOut', 'success', 'Checking out your local copy... This may take up to 2 minutes', localImage);
+        } else {
+            navigate(`${URL_TEACHER_SERVERS_EDITOR}/${localImage.name}`);
+        }
+    };
 
     const handleRowSelection = (selectionModel: GridRowSelectionModel) => {
         const selectedRowData = activeImages.filter((row) => selectionModel.includes(row.name));
@@ -275,6 +297,7 @@ const ImageListTable: React.FC = () => {
     };
 
     const isRowActionDisabled = (action: RowActions, row: AgogeImage) => {
+        if (row.is_shared && action !== 'checkOut') return true;
         let disabled = false;
         if ("checkOut" === action) {
             disabled = [ServerStates.STOPPED, ServerStates.RUNNING].includes(row.state);
@@ -289,6 +312,25 @@ const ImageListTable: React.FC = () => {
     }
 
     const imageRowActions = (row: AgogeImage) => {
+        if (row.is_shared) {
+            return (
+                <>
+                    <ImageActionButton
+                        title="Copy shared image and check out the local copy"
+                        iconProps={{label: 'copy shared image and check out local copy', color: 'info'}}
+                        onClick={() => setCopyRequest({image: row, action: 'checkOut'})}
+                        Icon={LockOutlinedIcon}
+                        isDisabled={loading}
+                        loading={false}
+                    />
+                    <EditImageButton
+                        title="Copy shared image to edit locally"
+                        row={row}
+                        onClick={handleImageEditorBtn}
+                    />
+                </>
+            );
+        }
         const isCheckedOut = [
             ServerStates.STOPPED,
             ServerStates.STOPPING,
@@ -488,6 +530,17 @@ const ImageListTable: React.FC = () => {
             )
         },
         {
+            field: 'is_shared',
+            headerName: 'Source',
+            minWidth: 110,
+            type: 'boolean',
+            renderCell: (params) => (
+                <Tooltip title={params.row.source_project || (params.row.is_shared ? 'Shared project' : 'This project')}>
+                    <Chip label={params.row.is_shared ? 'Shared' : 'Local'} color={params.row.is_shared ? 'info' : 'default'} size="small" variant="outlined" />
+                </Tooltip>
+            )
+        },
+        {
             field: 'status',
             headerName: 'Availability',
             minWidth: 120,
@@ -539,7 +592,7 @@ const ImageListTable: React.FC = () => {
             headerName: 'Connect',
             width: 150,
             renderCell: (params: any) => (
-                <ServerConnectButton item={params.row} />
+                params.row.is_shared ? null : <ServerConnectButton item={params.row} />
             )
         },
         {
@@ -596,6 +649,14 @@ const ImageListTable: React.FC = () => {
                 image={imageDialogContents}
                 onClose={handleImageDialogClose}
                 loading={loading}
+                onEdit={handleImageEditorBtn}
+            />
+            <SharedImageCopyDialog
+                image={copyRequest?.image || null}
+                action={copyRequest?.action}
+                existingNames={activeImages.map(image => image.name)}
+                onClose={() => setCopyRequest(null)}
+                onCopied={handleCopiedImage}
             />
         </>
     );
