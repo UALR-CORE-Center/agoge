@@ -20,6 +20,7 @@ interface ImageDetails {
     image: AgogeImage | null;
     onClose: () => void;
     loading: boolean;
+    onEdit?: (image: AgogeImage) => void;
 }
 
 export const ImageDetailsDialog: React.FC<ImageDetails> = (props) => {
@@ -37,7 +38,11 @@ export const ImageDetailsDialog: React.FC<ImageDetails> = (props) => {
 
     const onNavigateToEdit = () => {
         if (image) {
-            const href = `${URL_TEACHER_SERVERS_EDITOR}/${image?.id}`
+            if (props.onEdit) {
+                props.onEdit(image);
+                return;
+            }
+            const href = `${URL_TEACHER_SERVERS_EDITOR}/${image.name}`
             navigate(href);
         }
     }
@@ -77,13 +82,20 @@ export const ImageDetailsDialog: React.FC<ImageDetails> = (props) => {
                                         color={"info"}
                                         endIcon={<EditOutlined/>}
                                     >
-                                        Edit
+                                        {image.is_shared ? 'Copy and edit' : 'Edit'}
                                     </Button>
                                 </Stack>
 
                                 <List  sx={{padding: 0}} component={Paper} variant={'outlined'}>
                                     <ImageListItem disableAlternatingColors sx={{alignItems: 'flex-start'}} divider>
                                         <ItemValue>
+                                            <NestedListItem>
+                                                <ItemKeyWrapper>Source</ItemKeyWrapper>
+                                                <ReviewItemValueOrSkeleton
+                                                    value={`${image.is_shared ? 'Shared' : 'Local'}${image.source_project ? ` (${image.source_project})` : ''}`}
+                                                    loading={loading}
+                                                />
+                                            </NestedListItem>
                                             <NestedListItem>
                                                 <ItemKeyWrapper>Description</ItemKeyWrapper>
                                                 <ReviewItemValueOrSkeleton

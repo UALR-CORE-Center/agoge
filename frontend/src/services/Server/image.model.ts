@@ -33,6 +33,8 @@ export interface AgogeImage {
     base_family?: string;
     image_exists?: boolean;
     architecture?: string | null;
+    is_shared?: boolean;
+    source_project?: string | null;
 }
 
 export interface ImageSummary {

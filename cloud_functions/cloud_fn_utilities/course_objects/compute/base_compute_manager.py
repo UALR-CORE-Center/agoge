@@ -164,7 +164,7 @@ class BaseComputeManager:
         Returns:
             A tuple containing the image name and server name.
         """
-        if name.startswith('image'):
+        if name.startswith('image-'):
             image_name = name
             server_name = name.removeprefix("image-")
         else:

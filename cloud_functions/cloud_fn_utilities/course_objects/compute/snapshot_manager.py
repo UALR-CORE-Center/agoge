@@ -12,6 +12,7 @@ from common.models.agoge import SnapshotsModel, SnapshotModel, WorkoutModel
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import LoggerNames, Logger
 from common.utilities.gcp.compute.base_compute_api import BaseComputeAPI
+from common.utilities.gcp.compute.image_ownership import is_shared_image
 from common.utilities.gcp.compute.resources.attached_disk_resource import AttachedDiskResource
 from common.utilities.id_generator import IdGenerator
 from common.utilities.timestamps import Timestamps
@@ -124,6 +125,7 @@ class SnapshotManager(BaseComputeManager):
         Returns:
             str: The name of the created snapshot, or None if the snapshot could not be created.
         """
+        self._require_local_template()
         # self._is_safe_to_perform_action()
 
         disk_name = self.server_name
@@ -289,6 +291,7 @@ class SnapshotManager(BaseComputeManager):
         self,
         snapshot_name: str = None
     ) -> None:
+        self._require_local_template()
         # self._is_safe_to_perform_action()
 
         server_snapshots = self._get_snapshot_record(ignore_missing=False)
@@ -363,6 +366,16 @@ class SnapshotManager(BaseComputeManager):
                 f'{self.class_name}:{self.server_name} - Delete disk failed with reason: {e}.',
                 server_name=self.server_name
             )
+
+    def _require_local_template(self) -> None:
+        """Template snapshot operations must manage the child's own image."""
+        if self.server_type != PubSub.CourseObjects.TEMPLATE_SERVER:
+            return
+        image_record = self.db.get(collection_name=DbCollections.IMAGE, doc_id=self.server_name)
+        if not image_record:
+            raise NotFound(f'No image template found with name {self.server_name}.')
+        if is_shared_image(image_record, self.env.project):
+            raise BadRequest('Shared images must be copied to this project under a new name before editing.')
 
     def _get_attached_disk(
         self,

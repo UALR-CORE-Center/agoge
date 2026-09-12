@@ -158,10 +158,20 @@ Effective learner instructions normally include prerequisites, objectives, expec
 
 Reusable server images provide the operating system, applications, data, and connection configuration used by lab templates.
 
+### Shared and local images
+
+The image list labels each image **Shared** or **Local**. Shared images belong to the shared resource project. Local images are managed in your institution's child project.
+
+To customize a Shared image, click its pencil action or **Check Out Template Server**. In **Create a local copy**, enter a new **Local image name**, then choose **Copy and edit** or **Copy and check out**. Agoge first copies the actual image into your child project. Wait for that copy to finish before the settings editor or checkout opens.
+
+The new Local image appears under the name you chose. Settings changes, checkout, check-in, and cancel now apply to that local copy. Canceling a checkout discards the working server changes and retains the local image for another checkout. The original Shared image remains unchanged and available to other projects.
+
+To use your customized image, select its **new local name** in the lab template's server configuration and build a pilot Lab. Existing lab templates that reference the shared image continue using it.
+
 ### Modify an existing image
 
 1. Open **Teachers → Manage Servers**.
-2. For a checked-in image, choose **Check Out Template Server**. Wait for the modifiable server to be prepared.
+2. For a checked-in Local image, choose **Check Out Template Server**. For a Shared image, complete the local-copy prompt described above. Wait for the modifiable server to be prepared.
 3. Click **Start Template Server** and wait for the state to become **Running**.
 4. Click **Connect** and use the configured connection method.
 5. Make and verify the required changes inside the server.
