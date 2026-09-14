@@ -7,7 +7,11 @@ import {Rubric} from "./rubric.model";
 
 const get = async (buildId: string) => {
     const endpoint = formatString(URL_RUBRIC_API_ITEM, {"ITEM_ID": buildId});
-    return await apiService.get<Rubric>(endpoint,null,true,transformToRubric);
+    return await apiService.get<Rubric | null>(endpoint, null, true, (data) => {
+        // The shared request service leaves the envelope intact for data: null.
+        if (!data || data.data === null) return null;
+        return transformToRubric(data);
+    });
 }
 
 const patch = async (buildId: string, formData: { [key: string]: any }) => {
@@ -17,7 +21,9 @@ const patch = async (buildId: string, formData: { [key: string]: any }) => {
 
 const generate_rubric = async (buildId: string, rubricParams: any) => {
     const endpoint = formatString(URL_RUBRIC_API_GENERATE, { "BUILD_ID": buildId });
-    return await apiService.post<Rubric>(endpoint, rubricParams, true, transformToRubric);
+    return await apiService.post<Rubric>(endpoint, rubricParams, true, null, (data) =>
+        transformToRubric({ ...data.content, build_id: data.id })
+    );
 };
 
 export const rubricService = {

@@ -51,6 +51,7 @@
   "scripts": {
     "start": "vite --debug",
     "build": "vite build",
+    "test": "vitest run",
     "preview": "vite preview"
   },
   "eslintConfig": {
@@ -81,6 +82,8 @@
     "eslint-plugin-import": "^2.30.0",
     "eslint-plugin-react": "^7.36.1",
     "eslint-plugin-react-hooks": "^4.6.2",
-    "vite": "^6.3.5"
+    "jsdom": "^26.1.0",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.7"
   }
 }
