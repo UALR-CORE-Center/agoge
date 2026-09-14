@@ -26,6 +26,7 @@ import { rubricService } from "../../../services/Rubric/rubric.service";
 interface UnitRubricEditorProps {
     buildId: string;
     isExpired: boolean;
+    rubricEnabled?: boolean;
 }
 
 const UnitRubricEditor: React.FC<UnitRubricEditorProps> = (props) => {
@@ -36,9 +37,11 @@ const UnitRubricEditor: React.FC<UnitRubricEditorProps> = (props) => {
     const [isGenerating, setIsGenerating] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [hasLoaded, setHasLoaded] = useState(false);
     const isBusy = isLoading || isGenerating || isSaving;
 
     const handleClickOpen = () => {
+        if (props.rubricEnabled !== true) return;
         setOpen(true);
         loadRubric();
     };
@@ -48,7 +51,7 @@ const UnitRubricEditor: React.FC<UnitRubricEditorProps> = (props) => {
     };
 
     const handleSave = async () => {
-        if (!rubric || !props.buildId || props.isExpired || isBusy) return;
+        if (props.rubricEnabled !== true || !rubric || !props.buildId || props.isExpired || isBusy) return;
         setIsSaving(true);
         setError(null);
         try {
@@ -84,42 +87,45 @@ const UnitRubricEditor: React.FC<UnitRubricEditorProps> = (props) => {
         });
     };
 
-    // Loading and generation are one sequence, started only by the instructor.
-    // Failures stay in this dialog so the rest of the lab remains available.
+    // Opening or retrying a lookup never generates a rubric or uses AI credits.
     const loadRubric = async () => {
-        if (!firebaseUser.user || !props.buildId || isBusy) return;
+        if (props.rubricEnabled !== true || !firebaseUser.user || !props.buildId || isBusy) return;
         setIsLoading(true);
         setError(null);
         setRubric(null);
+        setHasLoaded(false);
         try {
             const existingRubric = await rubricService.get(props.buildId);
             if (existingRubric?.categories?.length) {
                 setRubric(existingRubric);
-            } else if (!props.isExpired) {
-                setIsGenerating(true);
-                // TODO: This is using a hardcoded template, no other ones exist in database will need to update
-                const rubricParams = {
-                    id: props.buildId,
-                    total_points: 100,
-                    levels: ["Exemplary", "Proficient", "Developing", "Unsatisfactory"],
-                    categories: ["Configuration", "Documentation", "Communication", "Problem-solving"],
-                    criteria: [
-                        {
-                            description: "Configuration is fully complete, accurate, and optimized...",
-                            index: "0",
-                            category: "Configuration"
-                        }
-                    ],
-                    headers: ["Exemplary (20-25 pts)", "Proficient (14-19 pts)", "Developing (7-13 pts)", "Unsatisfactory (0-6 pts)"]
-                };
-                const generatedRubric = await rubricService.generate_rubric(props.buildId, rubricParams);
-                setRubric(generatedRubric);
             }
+            setHasLoaded(true);
         } catch (error) {
             setError(error instanceof Error ? error.message : "Could not load the rubric. Please try again.");
         } finally {
-            setIsGenerating(false);
             setIsLoading(false);
+        }
+    };
+
+    const generateRubric = async () => {
+        if (props.rubricEnabled !== true || !firebaseUser.user || !props.buildId ||
+            props.isExpired || isBusy || !hasLoaded || rubric) return;
+        setIsGenerating(true);
+        setError(null);
+        try {
+            const generatedRubric = await rubricService.generate_rubric(props.buildId, {
+                id: props.buildId,
+                confirm_ai_generation: true,
+                total_points: 100,
+                levels: ["Exemplary", "Proficient", "Developing", "Unsatisfactory"],
+                categories: ["Configuration", "Documentation", "Communication", "Problem-solving"],
+                headers: ["Exemplary (20-25 pts)", "Proficient (14-19 pts)", "Developing (7-13 pts)", "Unsatisfactory (0-6 pts)"]
+            });
+            setRubric(generatedRubric);
+        } catch (error) {
+            setError(error instanceof Error ? error.message : "Could not generate the rubric. Please try again.");
+        } finally {
+            setIsGenerating(false);
         }
     };
 
@@ -136,6 +142,8 @@ const UnitRubricEditor: React.FC<UnitRubricEditorProps> = (props) => {
         },
     }));
 
+
+    if (props.rubricEnabled !== true) return null;
 
     return (
         <Box>
@@ -228,11 +236,19 @@ const UnitRubricEditor: React.FC<UnitRubricEditorProps> = (props) => {
                                     </TableBody>
                                 </Table>
                             </TableContainer>
-                        ) : (
-                            <Typography>No rubric has been created for this lab.</Typography>
-                        )}
+                        ) : hasLoaded ? (
+                            <>
+                                <Typography>No rubric has been created for this lab.</Typography>
+                                {!props.isExpired && <Typography sx={{ mt: 1 }}>AI generation uses OpenAI API credits.</Typography>}
+                            </>
+                        ) : null}
                     </DialogContent>
                     <DialogActions>
+                        {error && !hasLoaded && !isBusy && (
+                            <Button variant="outlined" onClick={loadRubric}>
+                                Retry loading
+                            </Button>
+                        )}
                         {props.isExpired ? (
                             <Button variant="contained" color="primary" onClick={handleClose}>
                                 Close
@@ -242,9 +258,9 @@ const UnitRubricEditor: React.FC<UnitRubricEditorProps> = (props) => {
                                 <Button variant="contained" color="primary" onClick={handleClose}>
                                     Cancel
                                 </Button>
-                                {!rubric && !isBusy && (
-                                    <Button variant="outlined" onClick={loadRubric}>
-                                        Retry
+                                {!rubric && hasLoaded && (
+                                    <Button variant="outlined" onClick={generateRubric} disabled={isBusy}>
+                                        Generate with AI
                                     </Button>
                                 )}
                                 <LoadingButton

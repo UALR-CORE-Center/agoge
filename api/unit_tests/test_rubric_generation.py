@@ -11,11 +11,13 @@ from fastapi.testclient import TestClient
 from routers import rubric as routes
 from utilities.llm.rubric import rubric_generator as generation
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections
+from common.exceptions import NotFound
 
 
 BUILD_ID = "abcdefghij"
 PARAMS = {
     "id": BUILD_ID,
+    "confirm_ai_generation": True,
     "total_points": 100,
     "levels": ["Proficient", "Developing"],
     "categories": ["Configuration"],
@@ -48,14 +50,66 @@ def generator():
 
 
 @pytest.fixture
-def client(monkeypatch, generator):
+def unit_handler(monkeypatch):
+    handler = MagicMock()
+    handler.get.return_value = {"id": BUILD_ID, "rubric_support": True}
+    monkeypatch.setattr(routes, "Unit", MagicMock(return_value=handler))
+    return handler
+
+
+@pytest.fixture
+def client(monkeypatch, generator, unit_handler):
     monkeypatch.setattr(routes, "RubricGenerator", MagicMock(return_value=generator))
     app = FastAPI()
     app.include_router(routes.rubric_router)
-    app.dependency_overrides[routes.get_cloud_env] = lambda: {"project": "test-project"}
+    # This legacy global flag must never enable AI for an unconfigured lab.
+    app.dependency_overrides[routes.get_cloud_env] = lambda: {"project": "test-project", "rubric_support": True}
     app.dependency_overrides[routes.teacher_required] = lambda: SimpleNamespace(uid="test-instructor")
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.mark.parametrize("setting", [None, False, "true", 1])
+def test_lab_without_explicit_rubric_opt_in_never_initializes_ai(client, generator, unit_handler, setting):
+    unit_handler.get.return_value = {"id": BUILD_ID}
+    if setting is not None:
+        unit_handler.get.return_value["rubric_support"] = setting
+
+    # The caller cannot use the payload or the deployment flag to enable this lab.
+    response = client.post(f"/rubrics/generate/{BUILD_ID}/", json={**PARAMS, "rubric_support": True})
+
+    assert response.status_code == 403
+    assert "disabled for this lab" in response.json()["detail"]
+    unit_handler.get.assert_called_once_with(BUILD_ID, as_dict=True)
+    routes.RubricGenerator.assert_not_called()
+    generator.client.chat.completions.create.assert_not_called()
+    generator.db.update.assert_not_called()
+
+
+@pytest.mark.parametrize("confirmation", [None, False, "true", 1])
+def test_automatic_or_unconfirmed_request_never_initializes_ai(client, generator, confirmation):
+    params = {key: value for key, value in PARAMS.items() if key != "confirm_ai_generation"}
+    if confirmation is not None:
+        params["confirm_ai_generation"] = confirmation
+
+    response = client.post(f"/rubrics/generate/{BUILD_ID}/", json=params)
+
+    assert response.status_code == 400
+    assert "explicit confirmation" in response.json()["detail"]
+    routes.Unit.assert_not_called()
+    routes.RubricGenerator.assert_not_called()
+    generator.client.chat.completions.create.assert_not_called()
+    generator.db.update.assert_not_called()
+
+
+def test_nonexistent_lab_never_initializes_ai(client, generator, unit_handler):
+    unit_handler.get.side_effect = NotFound("No Unit found for given ID")
+
+    response = client.post(f"/rubrics/generate/{BUILD_ID}/", json=PARAMS)
+
+    assert response.status_code == 404
+    routes.RubricGenerator.assert_not_called()
+    generator.db.update.assert_not_called()
 
 
 def test_exhausted_credits_returns_actionable_error_without_writing(

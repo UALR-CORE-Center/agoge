@@ -26,7 +26,7 @@ const quotaMessage = "Rubric generation is unavailable because the OpenAI API ac
 function renderEditor(isExpired = false) {
     return render(
         <MemoryRouter>
-            <UnitRubricEditor buildId={rubric.build_id} isExpired={isExpired} />
+            <UnitRubricEditor buildId={rubric.build_id} isExpired={isExpired} rubricEnabled />
         </MemoryRouter>
     );
 }
@@ -39,40 +39,81 @@ describe("rubric editor", () => {
     });
     afterEach(cleanup);
 
+    it.each([undefined, false])("does not expose rubric tools without explicit lab opt-in (%s)", (enabled) => {
+        render(<UnitRubricEditor buildId={rubric.build_id} isExpired={false} rubricEnabled={enabled} />);
+        expect(screen.queryByRole("button", { name: "Manage Rubric" })).not.toBeInTheDocument();
+        expect(rubricService.get).not.toHaveBeenCalled();
+        expect(rubricService.generate_rubric).not.toHaveBeenCalled();
+    });
+
     it("does not load or generate a rubric when the lab page mounts", () => {
         renderEditor();
         expect(rubricService.get).not.toHaveBeenCalled();
         expect(rubricService.generate_rubric).not.toHaveBeenCalled();
     });
 
-    it("keeps quota errors in the dialog and retries only on request", async () => {
+    it("only looks up the rubric when opening or reopening the editor", async () => {
+        renderEditor();
+        fireEvent.click(screen.getByRole("button", { name: "Manage Rubric" }));
+
+        expect(await screen.findByText("No rubric has been created for this lab.")).toBeInTheDocument();
+        expect(screen.getByText("AI generation uses OpenAI API credits.")).toBeInTheDocument();
+        expect(rubricService.generate_rubric).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        fireEvent.click(screen.getByRole("button", { name: "Manage Rubric" }));
+
+        expect(await screen.findByText("No rubric has been created for this lab.")).toBeInTheDocument();
+        expect(rubricService.get).toHaveBeenCalledTimes(2);
+        expect(rubricService.generate_rubric).not.toHaveBeenCalled();
+    });
+
+    it("retries a failed lookup without generating a rubric", async () => {
+        vi.mocked(rubricService.get)
+            .mockRejectedValueOnce(new HttpError(503, "Lookup unavailable."))
+            .mockResolvedValueOnce(null);
+        renderEditor();
+        fireEvent.click(screen.getByRole("button", { name: "Manage Rubric" }));
+
+        expect(await screen.findByRole("alert")).toHaveTextContent("Lookup unavailable.");
+        expect(screen.queryByRole("button", { name: "Generate with AI" })).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Retry loading" }));
+
+        expect(await screen.findByText("No rubric has been created for this lab.")).toBeInTheDocument();
+        expect(rubricService.get).toHaveBeenCalledTimes(2);
+        expect(rubricService.generate_rubric).not.toHaveBeenCalled();
+    });
+
+    it("keeps quota errors in the dialog and retries only on an explicit AI action", async () => {
         vi.mocked(rubricService.generate_rubric)
             .mockRejectedValueOnce(new HttpError(503, quotaMessage))
             .mockResolvedValueOnce(rubric);
         renderEditor();
         fireEvent.click(screen.getByRole("button", { name: "Manage Rubric" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Generate with AI" }));
 
         expect(await screen.findByRole("alert")).toHaveTextContent(quotaMessage);
         expect(screen.getByRole("dialog")).toBeInTheDocument();
         expect(screen.getByRole("button", { name: "Confirm" })).toBeDisabled();
         expect(rubricService.generate_rubric).toHaveBeenCalledTimes(1);
 
-        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        fireEvent.click(screen.getByRole("button", { name: "Generate with AI" }));
 
         expect(await screen.findByDisplayValue("Complete configuration.")).toBeInTheDocument();
         expect(screen.queryByRole("alert")).not.toBeInTheDocument();
         expect(rubricService.generate_rubric).toHaveBeenCalledTimes(2);
-        expect(rubricService.get).toHaveBeenCalledTimes(2);
+        expect(rubricService.get).toHaveBeenCalledOnce();
     });
 
     it("shows the generated rubric without a second read or generation", async () => {
         renderEditor();
         fireEvent.click(screen.getByRole("button", { name: "Manage Rubric" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Generate with AI" }));
 
         expect(await screen.findByDisplayValue("Complete configuration.")).toBeInTheDocument();
         expect(rubricService.get).toHaveBeenCalledOnce();
         expect(rubricService.generate_rubric).toHaveBeenCalledWith(
-            rubric.build_id, expect.objectContaining({ id: rubric.build_id })
+            rubric.build_id, expect.objectContaining({ id: rubric.build_id, confirm_ai_generation: true })
         );
         expect(rubricService.generate_rubric).toHaveBeenCalledOnce();
     });
@@ -112,6 +153,7 @@ describe("rubric editor", () => {
         expect(await screen.findByText("No rubric has been created for this lab.")).toBeInTheDocument();
         expect(rubricService.generate_rubric).not.toHaveBeenCalled();
         expect(screen.queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Generate with AI" })).not.toBeInTheDocument();
     });
 
     it("disables repeat requests while generation is in progress", async () => {
@@ -122,10 +164,14 @@ describe("rubric editor", () => {
         renderEditor();
         const manageButton = screen.getByRole("button", { name: "Manage Rubric" });
         fireEvent.click(manageButton);
+        const generateButton = await screen.findByRole("button", { name: "Generate with AI" });
+        fireEvent.click(generateButton);
         await waitFor(() => expect(rubricService.generate_rubric).toHaveBeenCalledOnce());
         expect(manageButton).toBeDisabled();
+        expect(generateButton).toBeDisabled();
         expect(screen.getByRole("button", { name: "Confirm" })).toBeDisabled();
         fireEvent.click(manageButton);
+        fireEvent.click(generateButton);
         expect(rubricService.generate_rubric).toHaveBeenCalledOnce();
 
         await act(async () => finishGeneration(rubric));
