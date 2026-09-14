@@ -6,6 +6,7 @@ import {
 export const transformToSpecificationEdit = (data: any) : SpecificationEdit => {
     return {
         assessment: data?.assessment,
+        rubric_support: data.rubric_support === true,
         build_type: data?.build_type,
         creation_timestamp: data.creation_timestamp,
         discriminator: data.discriminator,

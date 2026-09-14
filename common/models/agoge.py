@@ -3,6 +3,7 @@ from pydantic import (
     BaseModel,
     Field,
     HttpUrl,
+    StrictBool,
     field_validator,
     model_validator,
 )
@@ -298,6 +299,7 @@ class UnitModel(BaseModel):
     firewalls: Optional[List[FirewallModel]] = Field(default=None)
     firewall_rules: Optional[List[FirewallRuleModel]] = Field(default=None, description="These are ONLY set by the program to allow all internal traffic")
     assessment: Optional[AssessmentModel] = Field(default=None, description="Use Agoge to provide grading support")
+    rubric_support: StrictBool = Field(default=False, description="Explicitly enable rubric tools for this lab. AI generation still requires an instructor action.")
     lms_integration: Optional[LMSIntegrationModel] = Field(default=None, description="Use connected LMS to provide grading support and distribution functionality")
     escape_room: Optional[EscapeRoomModel] = Field(default=None, description="Escape room units include additional specification of the escape room puzzles associated with each workout")
     test: Optional[bool] = Field(default=None, description="Whether the unit is a test. This helps in cleaning the datastore.")
@@ -339,6 +341,7 @@ class CatalogModel(BaseModel):
     version: str = Field(..., description="Version of the unit")
     id: str = Field(..., description="ID of the unit")
     assessment: Optional[AssessmentModel] = Field(default=None, description="Use Agoge to provide grading support")
+    rubric_support: StrictBool = Field(default=False, description="Explicitly enable rubric tools for labs built from this specification.")
     lms_quiz: Optional[LMSIntegrationModel] = Field(default=None, description="Use connected LMS to provide grading support and distribution functionality")
 
     class Config:
@@ -347,6 +350,7 @@ class CatalogModel(BaseModel):
 
 class CatalogEditModel(BaseModel):
     assessment: Optional[AssessmentModel] = Field(default=None, description="Use Agoge to provide grading support")
+    rubric_support: StrictBool = Field(default=False, description="Explicitly enable rubric tools for labs built from this specification.")
     build_type: str = Field(..., description="Build type of the unit")
     creation_timestamp: Optional[float] = None
     discriminator: str = Field(..., description="Discriminator field")

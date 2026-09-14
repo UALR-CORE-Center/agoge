@@ -151,7 +151,8 @@ async def get_all_data(
     }
     try:
         unit_full = Unit(env_dict=env_dict).get_all_data(build_id)
-        rubric_support = env_dict.get("rubric_support", False)
+        # Credentials or legacy deployment flags must not opt every lab into AI.
+        rubric_support = unit_full["unit"].rubric_support
         return AgogeResponse(
             data=UnitFullResponse(
                 **unit_full,
@@ -302,6 +303,5 @@ async def delete_unit(
     except Unauthorized as e:
         logger.error(e.message, **log_args)
         raise HTTPException(status_code=403, detail=e.message)
-
 
 

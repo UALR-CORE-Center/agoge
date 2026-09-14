@@ -1,20 +1,20 @@
-import { Button, Snackbar } from "@mui/material";
+import { Button, Snackbar, Typography } from "@mui/material";
 import React, { useState } from "react";
-import {useParams} from "react-router-dom";
 import { useAuthContext } from "../../../context/AuthContext";
 import { rubricService } from "../../../services/Rubric/rubric.service";
 
 interface RubricGeneratorProps {
     buildId: string;
+    rubricEnabled?: boolean;
 }
 
 const RubricGenerator: React.FC<RubricGeneratorProps> = (props) => {
     const { firebaseUser } = useAuthContext();
     const [snackbarOpen, setSnackbarOpen] = useState(false);
-    const { build_id } = useParams<{ build_id: string }>();
 
     const rubricParams = {
         id: props.buildId,
+        confirm_ai_generation: true,
         total_points: 100,
         levels: ["Exemplary", "Proficient", "Developing", "Unsatisfactory"],
         categories: ["Configuration", "Documentation", "Communication", "Problem-solving"],
@@ -29,27 +29,31 @@ const RubricGenerator: React.FC<RubricGeneratorProps> = (props) => {
     };
 
     const generateRubricClick = async () => {
+        if (props.rubricEnabled !== true) return;
         if (!firebaseUser.user){
             console.log("firebaseUser is missing");
             return;
         }
-        if (!build_id) {
+        if (!props.buildId) {
             console.error("build_id is undefined");
             return;
         }
         console.log("Generating Rubric");
         try {
-            await rubricService.generate_rubric(build_id, rubricParams);
+            await rubricService.generate_rubric(props.buildId, rubricParams);
             setSnackbarOpen(true);
         } catch (error) {
             console.error("Failed to generate rubric:", error);
         }
     };
 
+    if (props.rubricEnabled !== true) return null;
+
     return (
         <div>
+            <Typography>AI generation uses OpenAI API credits.</Typography>
             <Button variant="contained" color="primary" onClick={generateRubricClick}>
-                Generate Rubric
+                Generate with AI
             </Button>
             <Snackbar
                 open={snackbarOpen}

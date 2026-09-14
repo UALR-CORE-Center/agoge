@@ -12,6 +12,7 @@ Agoge documentation is organized by audience. These pages describe the current i
 ## Project documentation
 
 - [Register existing GCP server images](operations/import-server-images.md)
+- [Optional rubric support and troubleshooting](troubleshooting/rubric-generation.md)
 - [Project overview and deployment](../README.md)
 - [Contributing](../CONTRIBUTING.md)
 - [Security policy](../SECURITY.md)

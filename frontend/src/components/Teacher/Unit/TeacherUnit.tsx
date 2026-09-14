@@ -139,7 +139,7 @@ const TeacherUnit: React.FC = () => {
                         />
                         {
                             unitFull.value?.rubric_support && (
-                                <UnitRubricEditor buildId={String(build_id)} isExpired={isExpired} />
+                                <UnitRubricEditor buildId={String(build_id)} isExpired={isExpired} rubricEnabled={unitFull.value.rubric_support} />
                             )
                         }
 

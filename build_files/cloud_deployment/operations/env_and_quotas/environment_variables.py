@@ -85,9 +85,6 @@ class EnvironmentVariables:
                 else:
                     if not new_value:
                         new_value = str(input(f"What value would you like to set for {var}? "))
-                if var == 'openai_api_key':
-                    self.env['rubric_support'] = True  # Limits number of secrets calls during API requests
-                    self.db.update(collection_name=DbCollections.ADMIN_INFO, doc_id=ADMIN_INFO_DOCUMENT, data=self.env)
                 self.store_secret(var, new_value)
             else:
                 if not new_value:
