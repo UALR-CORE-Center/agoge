@@ -7,13 +7,14 @@ from common.constants.states import ImageStatus, ServerStates
 from common.constants.pub_sub import PubSub
 from common.constants.database import DbCollections, DATABASE_NAME, DatabaseTypes, DbOperators
 from common.document_database import DocumentDatabaseFactory, DatabaseQueries
-from common.exceptions import Conflict, NotFound, BaseAgogeException, BadRequest
+from common.exceptions import Conflict, NotFound, BaseAgogeException, BadRequest, OperationTimeout
 from common.models.agoge import AgogeImageModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.compute.compute_image import ComputeImageAPI
 from common.utilities.gcp.compute.image_compatibility import compatible_boot_image
+from common.utilities.gcp.compute.image_ownership import image_source, image_source_project, is_shared_image
 from common.utilities.gcp.compute.resources.network_interface_resource import NetworkInterfaceResource
 from common.utilities.gcp.compute.resources.image_resource import ImageResource
 
@@ -49,7 +50,8 @@ class ImageTemplateManager(BaseComputeManager):
         delete_previous: bool = False,
         env_dict: dict = None,
         source_image_project: str = SOURCE_IMAGE_PROJECT,
-        debug: bool = False
+        debug: bool = False,
+        shared_edit_authorized: bool = False,
     ) -> None:
         super().__init__(env_dict=env_dict, images=True, disks=True, snapshots=True)
         """
@@ -63,6 +65,7 @@ class ImageTemplateManager(BaseComputeManager):
         self.log_name = LoggerNames.CLOUD_FN
         self.debug = debug
         self.user = user
+        self.shared_edit_authorized = shared_edit_authorized is True
         self.delete_previous = delete_previous
         self.logger = Logger(self.log_name, class_name=self.class_name)
         self.env = CloudEnv(env_dict=env_dict) if env_dict else CloudEnv()
@@ -74,7 +77,8 @@ class ImageTemplateManager(BaseComputeManager):
         self.snapshot_manager = SnapshotManager(
             server_type=self.course_object,
             env_dict=self.env_dict,
-            debug=self.debug
+            debug=self.debug,
+            shared_edit_authorized=self.shared_edit_authorized,
         )
         self.source_image_project = source_image_project
         self.db = DocumentDatabaseFactory.create_db_object(
@@ -123,6 +127,7 @@ class ImageTemplateManager(BaseComputeManager):
 
         self.source_image_project = kwargs.get('source_image_project', self.env.project)
         self._load_template_server(server_spec=image_spec)
+        self.server_spec.self_link = image_source(image_spec)
         self.state_manager.set_build_record(self.server_name)
         self.snapshot_manager.load(
             server_name=self.server_name,
@@ -133,6 +138,7 @@ class ImageTemplateManager(BaseComputeManager):
 
     def build(self) -> None:
         """Builds an individual server based on the image template specifications."""
+        self._require_image_management()
         self._build_server()
 
     def check_in(self) -> None:
@@ -140,7 +146,9 @@ class ImageTemplateManager(BaseComputeManager):
         For a given compute instance, generates a production image before
         deleting the instance and associated DNS records.
         """
-        self.create_production_image()
+        self._require_image_management()
+        if not self.create_production_image():
+            raise OperationTimeout(f'Could not create image {self.image_name}. The server remains checked out.')
 
         if self.debug:
             self.delete_server()
@@ -149,10 +157,12 @@ class ImageTemplateManager(BaseComputeManager):
                 handler=str(PubSub.Handlers.CONTROL.value),
                 image_name=str(self.image_name),
                 course_object=str(PubSub.CourseObjects.TEMPLATE_SERVER.value),
-                action=str(PubSub.Actions.DELETE.value)
+                action=str(PubSub.Actions.DELETE.value),
+                shared_edit_authorized=str(self.shared_edit_authorized).lower(),
             )
 
-        self._update_record_status(ImageStatus.CHECKED_IN)
+        # Publish the new source only after image creation and verification.
+        self._update_record_status(ImageStatus.CHECKED_IN, image_created=True)
 
     def check_out(self) -> None:
         """
@@ -160,14 +170,17 @@ class ImageTemplateManager(BaseComputeManager):
         If successful, image is reserved for changes by the requesting user
         until checked-in (released)
         """
+        self._require_image_management()
         self.build()
 
         self._update_record_status(ImageStatus.CHECKED_OUT)
 
     def start_server(self) -> None:
+        self._require_image_management()
         self._start_server()
 
     def stop_server(self) -> None:
+        self._require_image_management()
         self._stop_server()
 
     def stop_all_running(self) -> None:
@@ -175,15 +188,23 @@ class ImageTemplateManager(BaseComputeManager):
         running_images = self.db_query.get_running(collection_name=DbCollections.IMAGE)
         for image in running_images:
             image_id = str(image['name'])
+            # Trusted daily maintenance stops edit VMs in this site only.
+            shared_edit_authorized = is_shared_image(image, self.env.project)
             if self.debug:
-                self.load(server_name=image_id, image_spec=image)
-                self.stop_server()
+                previous_authorization = self.shared_edit_authorized
+                try:
+                    self.shared_edit_authorized = shared_edit_authorized
+                    self.load(server_name=image_id, image_spec=image)
+                    self.stop_server()
+                finally:
+                    self.shared_edit_authorized = previous_authorization
             else:
                 self.pubsub_manager.msg(
                     handler=str(PubSub.Handlers.CONTROL.value),
                     action=str(PubSub.Actions.STOP.value),
                     course_object=str(PubSub.CourseObjects.TEMPLATE_SERVER.value),
                     image_name=str(image_id),
+                    shared_edit_authorized=str(shared_edit_authorized).lower(),
                 )
 
     def sync(
@@ -232,6 +253,7 @@ class ImageTemplateManager(BaseComputeManager):
             latest (bool): Create a new snapshot of server and use latest to create a new image
             snapshot_name (str, optional): Create an image from existing snapshot
         """
+        self._require_image_management()
         if latest:
             # latest is supplied, send request to generate a new snapshot from current template server state
             self.logger.info(f"{self.class_name}:{self.server_name} - Stopping the server before snapshotting.")
@@ -248,22 +270,45 @@ class ImageTemplateManager(BaseComputeManager):
         if not snapshot_name:
             raise ValueError("Missing value for `latest` or `snapshot_name`. Must provide one")
 
+        # Verify the replacement source before deleting an image used by other sites.
+        snapshot_source = self.compute_snapshot.get(resource_name=snapshot_name, project=self.env.project)
+        expected_snapshot = f'projects/{self.env.project}/global/snapshots/{snapshot_name}'
+        if (
+            snapshot_source.status != 'READY'
+            or self._canonical_compute_resource(snapshot_source.self_link) != expected_snapshot
+        ):
+            raise OperationTimeout(f'Snapshot {snapshot_name} is not ready. The existing image was retained.')
+
         # Wait for previous image to delete first to avoid any insert conflicts
         if not self.delete_image():
-            self.logger.warning(f"{self.class_name}:{self.server_name} - "
-                                f"Could not delete the existing image for server")
+            raise OperationTimeout(f'Could not delete the existing image {self.image_name}. Retry check-in.')
 
         # It is now safe to send image insert request
         self.logger.info(f"{self.class_name}:{self.server_name} - Beginning to image the server.")
-        self._create_image_from_snapshot(snapshot_name)
+        if not self._create_image_from_snapshot(snapshot_source.self_link):
+            raise OperationTimeout(f'Could not create image {self.image_name}. The server remains checked out.')
+        image_project, image_name = self._production_image_target()
+        created_image = self._production_image_api(image_project).get(
+            image_name, project=image_project, fallback_to_shared=False,
+        )
+        expected_source = self.compute_image.self_link(image_name, image_project)
+        if (
+            created_image.status != 'READY'
+            or self._canonical_compute_resource(created_image.self_link)
+            != self._canonical_compute_resource(expected_source)
+        ):
+            raise OperationTimeout(f'Image {image_name} is not ready in project {image_project}. Retry check-in.')
         self.logger.info(f"{self.class_name}:{self.server_name} - Completed imaging the server.")
+        return True
 
     def cancel(self) -> None:
         """
         Deletes instance and cancels image reservation
         """
+        self._require_image_management()
         self.logger.info(f'canceling image template {self.image_name} changes')
-        self.delete_server(state_transition=False)
+        if not self.delete_server(state_transition=False):
+            raise OperationTimeout(f'Could not delete server {self.server_name}. Retry canceling the changes.')
 
         self._update_record_status(ImageStatus.CHECKED_IN)
 
@@ -271,6 +316,7 @@ class ImageTemplateManager(BaseComputeManager):
         """
         Delete production image, server, server snapshots, and image database records.
         """
+        self._require_image_management()
         self.logger.info(f'starting deletion process for image template {self.image_name}')
 
         # Delete the template server
@@ -288,12 +334,16 @@ class ImageTemplateManager(BaseComputeManager):
 
     def delete_server(self, state_transition: bool = True) -> bool:
         """Delete image server and server DNS records"""
+        self._require_image_management()
         self.logger.info(f'{self.class_name}:{self.server_name} - Deleting server')
         if state_transition:
             self.state_manager.state_transition(self.s.DELETING)
 
         try:
-            self.compute_instance.delete(self.server_name, wait=True)
+            if not self.compute_instance.delete(self.server_name, wait=True):
+                if state_transition:
+                    self.state_manager.state_transition(self.s.BROKEN)
+                return False
         except NotFound as e:
             # If the resource can't be found, it was either already deleted or never created
             self.logger.error(f'{self.class_name}:{self.server_name} - Deletion request returned status code 404. '
@@ -318,12 +368,14 @@ class ImageTemplateManager(BaseComputeManager):
 
     def delete_image(self) -> bool:
         """Delete image server image"""
+        self._require_image_management()
         if not self.image_name:
             self.logger.error(f'{self.class_name}: - Delete image called but no image name provided!')
             return False
 
         try:
-            return self.compute_image.delete(self.image_name, wait=True)
+            image_project, image_name = self._production_image_target()
+            return self._production_image_api(image_project).delete(image_name, project=image_project, wait=True)
         except NotFound as e:
             self.logger.error(f"{self.class_name}:{self.image_name} - "
                               f"Error deleting image {self.image_name}: "
@@ -384,20 +436,21 @@ class ImageTemplateManager(BaseComputeManager):
 
     def _create_image_from_snapshot(
         self,
-        snapshot_name: str
+        snapshot_source: str
     ) -> bool:
-        """Create a new image from a snapshot"""
-        description = f'{str(self.env.project).capitalize()} production image.'
+        """Create a new image from a snapshot already verified as ready."""
+        self._require_image_management()
+        image_project, image_name = self._production_image_target()
+        description = f'{str(image_project).capitalize()} production image.'
         if self.server_spec.description:
             description = f'{description} {self.server_spec.description}'
 
-        snapshot_source = self.compute_snapshot.get(resource_name=snapshot_name, project=self.env.project)
-        
-        return self.compute_image.create(
-            resource_name=self.image_name,
+        return self._production_image_api(image_project).create(
+            resource_name=image_name,
+            project=image_project,
             description=description,
             source_type=ImageSource.SNAPSHOT,
-            source=snapshot_source.self_link
+            source=snapshot_source
         )
 
     def _add_disks(self):
@@ -540,17 +593,22 @@ class ImageTemplateManager(BaseComputeManager):
 
     def _update_record_status(
         self,
-        status: ImageStatus = ImageStatus.CHECKED_OUT
+        status: ImageStatus = ImageStatus.CHECKED_OUT,
+        image_created: bool = False,
     ) -> None:
         """Updates image status and state.
         Resets image record to default state if image is marked as checked-in.
 
         Args:
             status (ImageStatus): Status of current image
+            image_created (bool): A new production image was successfully created and verified.
         """
         db_image = self.db.get(collection_name=self.collection, doc_id=self.server_name)
 
         if status == ImageStatus.CHECKED_OUT:
+            # Legacy templates may store their only source URL in `image`.
+            if resolved_source := image_source(db_image):
+                db_image['self_link'] = resolved_source
             db_image['status'] = status.value
             db_image['image'] = self.image_name
             db_image['in_use_by'] = self.user
@@ -560,10 +618,39 @@ class ImageTemplateManager(BaseComputeManager):
             db_image['state'] = ServerStates.START.value
             db_image['in_use_by'] = None
             db_image['dns_record'] = None
-            db_image['image_exists'] = True
-            # The custom image exists only after check-in. Keep the selected
-            # base image available for retries while the template is checked out.
-            db_image['self_link'] = self.compute_image.self_link(self.image_name, self.env.project)
+            if image_created:
+                image_project, image_name = self._production_image_target(db_image)
+                db_image['image_exists'] = True
+                db_image['image'] = image_name
+                db_image['self_link'] = self.compute_image.self_link(image_name, image_project)
 
         if ModelValidator(AgogeImageModel, log_location=self.log_name).load(db_image):
             self.db.update(collection_name=self.collection, doc_id=self.server_name, data=db_image)
+
+    def _require_image_management(self) -> None:
+        """Shared mutations require authorization issued by the API."""
+        image_record = self.db.get(collection_name=self.collection, doc_id=self.server_name)
+        if not image_record:
+            raise NotFound(f'No image template found with name {self.server_name}.')
+        if is_shared_image(image_record, self.env.project) and not getattr(self, 'shared_edit_authorized', False):
+            raise BadRequest('Shared images require administrator authorization. Copy to this site under a new name to edit.')
+
+    def _production_image_target(self, image_record: dict = None) -> tuple[str, str]:
+        """Preserve an existing shared image's location; new templates save locally."""
+        if image_record is None:
+            image_record = self.db.get(collection_name=self.collection, doc_id=self.server_name)
+        if is_shared_image(image_record, self.env.project):
+            return image_source_project(image_record), image_source(image_record).rstrip('/').rsplit('/', 1)[-1]
+        return self.env.project, self.image_name
+
+    def _production_image_api(self, image_project: str) -> ComputeImageAPI:
+        """Bind operation polling to the project where the production image lives."""
+        if image_project == self.env.project:
+            return self.compute_image
+        client = getattr(self, '_shared_image_api', None)
+        if client is None or client.project != image_project:
+            client = ComputeImageAPI(
+                project=image_project, region=self.env.region, zone=self.env.zone, log_name=self.log_name,
+            )
+            self._shared_image_api = client
+        return client

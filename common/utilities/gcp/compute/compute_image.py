@@ -265,6 +265,7 @@ class ComputeImageAPI(BaseComputeAPI):
                     action='create',
                     resource=resource_name,
                     wait=wait,
+                    operation_type=OperationType.GLOBAL,
                     request=image_request
                 )
             except BrokenPipeError:

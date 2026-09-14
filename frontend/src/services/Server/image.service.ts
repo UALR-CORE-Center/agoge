@@ -23,15 +23,17 @@ const get = async (imageName: string) => {
     return await apiService.get<AgogeImage>(endpoint,null,true, transformToAgogeImage);
 }
 
-const post_action = async (images: AgogeImage[], action: string) => {
+const post_action = async (images: AgogeImage[], action: string, sharedEditConfirmed = false) => {
     const postData = JSON.stringify({
         "images": images,
         'action': action,
+        shared_edit_confirmed: sharedEditConfirmed,
     });
     return await apiService.post<AgogeImage>(
         URL_COMPUTE_IMAGE_API_BASE,
         postData,
         true,
+        null,
         transformToAgogeImage
     );
 }
@@ -43,6 +45,7 @@ const create = async (image: { [p: string]: string | File }) => {
         URL_COMPUTE_IMAGE_API_CREATE,
         postData,
         true,
+        null,
         transformToAgogeImage
     );
 }
@@ -57,8 +60,20 @@ const patch = async (imageId: string, formData: {[key: string]: any}) => {
     return await apiService.patch(endpoint, formData, true);
 };
 
+const copy = async (imageName: string, serverName: string) => {
+    const endpoint = formatString(URL_COMPUTE_IMAGE_API_ITEM, {ITEM_ID: encodeURIComponent(imageName)});
+    return await apiService.post<AgogeImage>(
+        `${endpoint}copy/`,
+        {server_name: serverName},
+        true,
+        null,
+        transformToAgogeImage
+    );
+};
+
 export const imageService = {
     create,
+    copy,
     get,
     list,
     post_action,

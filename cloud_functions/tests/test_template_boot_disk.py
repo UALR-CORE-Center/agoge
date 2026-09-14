@@ -186,3 +186,30 @@ def test_queued_arm_template_is_rejected_before_disk_or_instance_creation(manage
     manager.compute_instance.create.assert_not_called()
     manager.compute_disk.get.assert_not_called()
     manager.state_manager.state_transition.assert_called_once_with(ServerStates.BROKEN)
+
+
+@pytest.mark.parametrize('source_field', ['image', 'disks'])
+def test_legacy_shared_template_load_uses_stored_source_for_boot_disk(manager, source_field):
+    shared_source = 'projects/agoge-shared-resources/global/images/image-wireguard-server'
+    record = {
+        'name': 'wireguard-server', 'self_link': None, 'image': 'image-wireguard-server',
+        'machine_type': 'e2-standard-2', 'add_disk': '20', 'image_exists': True,
+    }
+    if source_field == 'image':
+        record['image'] = shared_source
+    else:
+        record['disks'] = [{'boot': True, 'initializeParams': {'sourceImage': shared_source}}]
+    manager.snapshot_manager = Mock()
+    manager.course_object = 'template'
+    manager.compute_image.get.return_value = Image(
+        name='image-wireguard-server', self_link=shared_source, architecture='X86_64',
+    )
+
+    manager.load(server_name='wireguard-server', image_spec=record)
+    manager._add_disks()
+
+    assert manager.server_spec.self_link == shared_source
+    assert manager.server_spec.disks[0].initialize_params.source_image == shared_source
+    manager.compute_image.get.assert_called_once_with(
+        resource='image-wireguard-server', project='agoge-shared-resources', fallback_to_shared=False,
+    )

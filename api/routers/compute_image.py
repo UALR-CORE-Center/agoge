@@ -1,4 +1,5 @@
 from typing import Union
+from pydantic import BaseModel, ConfigDict
 
 from fastapi import (
     APIRouter,
@@ -8,7 +9,7 @@ from fastapi import (
     Response
 )
 
-from common.exceptions import NotFound, BadRequest, ServiceUnavailable, AgogeValidationError, NotReady
+from common.exceptions import NotFound, BadRequest, Conflict, Forbidden, OperationTimeout, ServiceUnavailable, AgogeValidationError, NotReady
 from common.models.agoge import AgogeImageModel
 from common.models.users import AgogeUser
 from common.models.response import (
@@ -30,6 +31,34 @@ compute_image_router = APIRouter(prefix="/compute/images")
 logger = Logger(LoggerNames.API)
 
 
+class ImageCopyRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    server_name: str
+
+
+@compute_image_router.post('/{image_name}/copy/', status_code=201)
+def copy_shared_image(
+    image_name: str,
+    body: ImageCopyRequest,
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[AgogeImageModel]:
+    # Run the blocking Compute operation in FastAPI's worker thread pool.
+    try:
+        image = ComputeImage(env_dict).copy_shared_image(image_name, body.server_name)
+        return AgogeResponse(data=image)
+    except Conflict as e:
+        raise HTTPException(status_code=409, detail=e.message)
+    except NotFound as e:
+        raise HTTPException(status_code=404, detail=e.message)
+    except NotReady as e:
+        raise HTTPException(status_code=503, detail=e.message)
+    except OperationTimeout as e:
+        raise HTTPException(status_code=504, detail=e.message)
+    except (BadRequest, AgogeValidationError) as e:
+        raise HTTPException(status_code=400, detail=e.message)
+
+
 @compute_image_router.get("/")
 async def list_images(
     env_dict: dict = Depends(get_cloud_env),
@@ -40,7 +69,7 @@ async def list_images(
     }
 
     try:
-        images = ComputeImage(env_dict=env_dict).list_images()
+        images = ComputeImage(env_dict=env_dict).list_images(requester=current_user)
         return AgogeResponse(data={'items': images})
     except NotFound as e:
         logger.error(e.message, **log_args)
@@ -65,16 +94,20 @@ async def process_image_list_action(
     try:
         logger.info(f'POST request initiated by {current_user.uid}', **log_args)
         ComputeImage(env_dict=env_dict).process_action_on_list(
-            current_user.email,
+            current_user,
             json_data
         )
         return Response(status_code=200)
+    except Forbidden as e:
+        raise HTTPException(status_code=403, detail=e.message)
     except BadRequest as e:
         logger.error(f'action on image list failed with reason: {e.message}', **log_args)
         raise HTTPException(status_code=400, detail=e.message)
     except NotReady as e:
         logger.error(f"action on image list failed with reason: {e.message}", **log_args)
         raise HTTPException(status_code=503, detail=e.message)
+    except NotFound as e:
+        raise HTTPException(status_code=404, detail=e.message)
 
 
 @compute_image_router.get("/project/")
@@ -89,7 +122,7 @@ async def list_project_images(
     }
 
     try:
-        images = ComputeImage(env_dict=env_dict).list_project_images(scope=scope)
+        images = ComputeImage(env_dict=env_dict).list_project_images(scope=scope, requester=current_user)
         if scope == ImageScopes.GLOBAL:
             return AgogeResponse(data={'items': images})
         else:
@@ -130,7 +163,7 @@ async def get_image(
     }
 
     try:
-        image = ComputeImage(env_dict=env_dict).get(image_name)
+        image = ComputeImage(env_dict=env_dict).get(image_name, requester=current_user)
         return AgogeResponse(data=image)
     except NotFound as e:
         logger.error(e.message, **log_args)
@@ -184,6 +217,8 @@ async def create_image_server(
             json_data
         )
         return Response(status_code=200)
+    except Conflict as e:
+        raise HTTPException(status_code=409, detail=e.message)
     except NotFound as e:
         logger.error(e.message, **log_args)
         raise HTTPException(status_code=404, detail=e.message)
@@ -239,6 +274,8 @@ async def process_image_action(
                 server_name=image_name,
             )
             return Response(status_code=200)
+        except Conflict as e:
+            raise HTTPException(status_code=409, detail=e.message)
         except NotFound as e:
             logger.error(e.message, **log_args)
             raise HTTPException(status_code=404)
@@ -268,6 +305,8 @@ async def delete_image(
         logger.info(f'DELETE request for image {image_name} from user {current_user.uid}', **log_args)
         ComputeImage(env_dict).delete(image_name)
         return Response(status_code=200)
+    except BadRequest as e:
+        raise HTTPException(status_code=400, detail=e.message)
     except NotFound as e:
         logger.error(e.message, **log_args)
         raise HTTPException(status_code=404)
@@ -289,8 +328,10 @@ async def update_image(
 
     try:
         logger.info(f"PATCH request for {image_name} from user {current_user.uid}", **log_args)
-        ComputeImage(env_dict).update_image(image_name, json_data)
+        ComputeImage(env_dict).update_image(image_name, json_data, requester=current_user)
         return Response(status_code=200)
+    except Forbidden as e:
+        raise HTTPException(status_code=403, detail=e.message)
     except NotFound as e:
         logger.error(f"update_image - {e.message}", **log_args)
         raise HTTPException(status_code=404, detail="Requested image not found!")
@@ -303,5 +344,3 @@ async def update_image(
     except Exception as e:
         logger.error(f"update_image - {e}", **log_args)
         raise HTTPException(status_code=500, detail="Something went wrong!")
-
-
