@@ -66,7 +66,7 @@ class SetupManager:
             SetupOptions.DEFAULT_SERVER_IMAGES: lambda: DefaultServerImage().run(),
             SetupOptions.CLASSIFIED_APP: lambda: ClassifiedApp().deploy(),
             SetupOptions.ENV: lambda: EnvironmentVariables(project=self.project).run(),
-            SetupOptions.IMPORT_CUSTOM_IMAGES: lambda: CustomImageImportManager().run(),
+            SetupOptions.IMPORT_CUSTOM_IMAGES: lambda: CustomImageImportManager(project=self.project).run(),
             SetupOptions.IMPORT_LOCAL_IMAGE: lambda: LocalToCloud().run(),
             SetupOptions.STARTUP_SCRIPTS_AND_INSTRUCTIONS: lambda: BuildSpecification().sync_startup_scripts_and_instructions(),
             SetupOptions.INCREASE_QUOTAS: lambda: QuotaManager(project=self.project).request_all(),
