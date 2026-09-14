@@ -27,6 +27,8 @@ class ControlHandler:
         self.env = CloudEnv(env_dict=env_dict) if env_dict else CloudEnv()
         self.env_dict = self.env.get_env()
         self.debug = debug
+        # This field is issued by the authenticated API, never a user payload.
+        self.shared_edit_authorized = event_attributes.get('shared_edit_authorized') == 'true'
         self.logger = Logger(LoggerNames.CLOUD_FN, class_name=self.class_name)
         self.pub_sub_mgr = PubSubManager(PubSub.Topics.AGOGE, env_dict=self.env_dict)
         self.db = DocumentDatabaseFactory.create_db_object(
@@ -112,6 +114,7 @@ class ControlHandler:
         elif self.course_object == str(PubSub.CourseObjects.TEMPLATE_SERVER.value) and self.image_name:
             cm = ComputeManagerFactory.create_manager_object(
                 manager_type=PubSub.CourseObjects.TEMPLATE_SERVER,
+                shared_edit_authorized=self.shared_edit_authorized,
                 env_dict=self.env_dict,
                 user=self.user
             )
@@ -148,6 +151,7 @@ class ControlHandler:
         elif self.course_object == str(PubSub.CourseObjects.TEMPLATE_SERVER.value) and self.image_name:
             cm = ComputeManagerFactory.create_manager_object(
                 manager_type=PubSub.CourseObjects.TEMPLATE_SERVER,
+                shared_edit_authorized=self.shared_edit_authorized,
                 env_dict=self.env_dict,
                 user=self.user
             )
@@ -184,6 +188,7 @@ class ControlHandler:
         elif self.course_object == str(PubSub.CourseObjects.TEMPLATE_SERVER.value):
             cm = ComputeManagerFactory.create_manager_object(
                 manager_type=PubSub.CourseObjects.TEMPLATE_SERVER,
+                shared_edit_authorized=self.shared_edit_authorized,
                 env_dict=self.env_dict
             )
             cm.load(server_name=self.image_name)
@@ -191,6 +196,7 @@ class ControlHandler:
         elif self.course_object == str(PubSub.CourseObjects.IMAGE.value):
             cm = ComputeManagerFactory.create_manager_object(
                 manager_type=PubSub.CourseObjects.TEMPLATE_SERVER,
+                shared_edit_authorized=self.shared_edit_authorized,
                 env_dict=self.env_dict
             )
             cm.load(server_name=self.image_name)
@@ -203,6 +209,7 @@ class ControlHandler:
                 server_type = PubSub.CourseObjects.LAB_SERVER
 
             snapshot_manager = SnapshotManager(
+                shared_edit_authorized=self.shared_edit_authorized,
                 server_type=server_type,
                 env_dict=self.env_dict,
                 debug=self.debug
@@ -264,6 +271,7 @@ class ControlHandler:
     def _check_in(self) -> None:
         image_manager = ComputeManagerFactory.create_manager_object(
             manager_type=PubSub.CourseObjects.TEMPLATE_SERVER,
+            shared_edit_authorized=self.shared_edit_authorized,
             env_dict=self.env_dict
         )
         image_manager.load(server_name=self.image_name)
@@ -272,6 +280,7 @@ class ControlHandler:
     def _check_out(self) -> None:
         image_manager = ComputeManagerFactory.create_manager_object(
             manager_type=PubSub.CourseObjects.TEMPLATE_SERVER,
+            shared_edit_authorized=self.shared_edit_authorized,
             env_dict=self.env_dict,
             user=self.user
         )
@@ -281,6 +290,7 @@ class ControlHandler:
     def _snapshot(self) -> None:
         if self.course_object == str(PubSub.CourseObjects.TEMPLATE_SERVER.value):
             snapshot_manager = SnapshotManager(
+                shared_edit_authorized=self.shared_edit_authorized,
                 server_type=PubSub.CourseObjects.TEMPLATE_SERVER,
                 env_dict=self.env_dict,
                 debug=self.debug,
@@ -290,6 +300,7 @@ class ControlHandler:
             snapshot_manager.create_snapshot()
         elif self.course_object == str(PubSub.CourseObjects.LAB_SERVER.value):
             snapshot_manager = SnapshotManager(
+                shared_edit_authorized=self.shared_edit_authorized,
                 server_type=PubSub.CourseObjects.LAB_SERVER,
                 env_dict=self.env_dict,
                 debug=self.debug,
@@ -299,6 +310,7 @@ class ControlHandler:
             snapshot_manager.create_snapshot(expiration_date=self.expires)
         elif self.course_object == str(PubSub.CourseObjects.WORKOUT.value):
             snapshot_manager = SnapshotManager(
+                shared_edit_authorized=self.shared_edit_authorized,
                 server_type=PubSub.CourseObjects.WORKOUT,
                 env_dict=self.env_dict,
                 debug=self.debug,
@@ -317,6 +329,7 @@ class ControlHandler:
                 server_type = PubSub.CourseObjects.LAB_SERVER
 
             snapshot_manager = SnapshotManager(
+                shared_edit_authorized=self.shared_edit_authorized,
                 server_type=server_type,
                 env_dict=self.env_dict,
                 debug=self.debug
@@ -335,6 +348,7 @@ class ControlHandler:
     def _cancel_image_changes(self) -> None:
         image_manager = ComputeManagerFactory.create_manager_object(
             manager_type=PubSub.CourseObjects.TEMPLATE_SERVER,
+            shared_edit_authorized=self.shared_edit_authorized,
             env_dict=self.env_dict
         )
         image_manager.load(server_name=self.image_name)

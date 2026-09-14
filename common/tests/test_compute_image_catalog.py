@@ -79,6 +79,9 @@ def catalog(monkeypatch):
         return images
 
     service.db.query.side_effect = query
+    service.db.get.side_effect = lambda collection_name, doc_id: next(
+        (image for image in records[collection_name] or [] if image.get('name') == doc_id), None
+    )
     return service, records
 
 
@@ -146,23 +149,23 @@ def test_invalid_catalog_source_stops_before_build_is_queued(catalog, scope, sou
     collection = DbCollections.GOOGLE_IMAGES if public else DbCollections.IMAGE
     record = records[collection][0]
     record['self_link'] = source
-    service.db.get.return_value = record
 
     with pytest.raises(BadRequest, match='no source image URL'):
         service._create_database_object({
-            'server_name': 'wireguard-server', 'machine_type': 'e2-standard-2',
+            'server_name': 'new-wireguard-server', 'machine_type': 'e2-standard-2',
             'description': 'WireGuard router', 'disk_size': '20',
             'image_template': record['uuid'] if public else record['name'],
             'image_scope': scope.value, 'os': 'linux', 'username': 'wgadmin',
             'ssh_key': 'ssh-ed25519 test-key wgadmin',
         })
 
-    service.db.update.assert_not_called()
+    service.db.db.collection.return_value.document.return_value.create.assert_not_called()
 
 
 @pytest.mark.parametrize('machine_architecture', ['X86_64', ''])
 def test_creation_keeps_selected_public_source_in_saved_template(catalog, machine_architecture):
     service, records = catalog
+    records[DbCollections.IMAGE] = []
     service.machine_api.get_resource.return_value.architecture = machine_architecture
     service._check_out = Mock()
     service.create_image_server(SimpleNamespace(email='instructor@example.edu', uid='test-user'), {
@@ -173,7 +176,7 @@ def test_creation_keeps_selected_public_source_in_saved_template(catalog, machin
         'os': 'linux', 'username': 'wgadmin', 'ssh_key': 'ssh-ed25519 test-key wgadmin',
         'password': 'test-password',
     })
-    record = service.db.update.call_args.kwargs['data']
+    record = service.db.db.collection.return_value.document.return_value.create.call_args.args[0]
     assert record['self_link'] == PUBLIC_IMAGE['self_link']
     assert record['base_family'] == PUBLIC_IMAGE['family']
     assert record['add_disk'] == '20'
@@ -191,7 +194,6 @@ def test_arm_image_is_rejected_before_record_or_build_message(catalog, scope, ma
     record['self_link'] = source
     # A stale or tampered catalog value must not override live image metadata.
     record['architecture'] = 'X86_64'
-    service.db.get.return_value = record
     service.source_image_api.get.return_value = Image(
         name='ubuntu-minimal-2204-jammy-arm64-v20260906', self_link=source, architecture='ARM64',
     )
@@ -201,11 +203,11 @@ def test_arm_image_is_rejected_before_record_or_build_message(catalog, scope, ma
     with pytest.raises(BadRequest, match='ARM64.*e2-standard-2.*X86_64'):
         service.create_image_server(SimpleNamespace(email='instructor@example.edu', uid='test-user'), {
             'action': str(PubSub.Actions.BUILD.value),
-            'server_name': 'wireguard-server', 'machine_type': 'e2-standard-2',
+            'server_name': 'new-wireguard-server', 'machine_type': 'e2-standard-2',
             'description': 'WireGuard router', 'disk_size': '20',
             'image_template': record['uuid'] if scope == ImageScopes.GLOBAL else record['name'],
             'image_scope': scope.value, 'os': 'linux', 'username': 'wgadmin',
             'ssh_key': 'ssh-ed25519 test-key wgadmin', 'password': 'test-password',
         })
-    service.db.update.assert_not_called()
+    service.db.db.collection.return_value.document.return_value.create.assert_not_called()
     service._check_out.assert_not_called()

@@ -1,6 +1,7 @@
 import {DangerousOutlined, PlayArrowOutlined} from "@mui/icons-material";
 import Cancel from "@mui/icons-material/Cancel";
 import ComputerIcon from "@mui/icons-material/Computer";
+import PublicIcon from "@mui/icons-material/Public";
 import DeleteForeverOutlinedIcon from "@mui/icons-material/DeleteForeverOutlined";
 import LockOpenOutlinedIcon from "@mui/icons-material/LockOpenOutlined";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
@@ -18,6 +19,7 @@ const ServerManager: React.FC = () => {
         setShowButton(true);
         drawerData.header = "Server Manager Information";
         drawerData.items = [
+            { title: "Shared across sites", text: "These server images are used by multiple sites. Copy an image for this site to customize it. Only administrators can edit the shared image, after acknowledging that their changes can affect other sites.", icon: <PublicIcon fontSize={"medium"}/>},
             { title: "Create Image", text: "Create a new server to use and customize for labs.", icon: <ComputerIcon fontSize={"medium"}/>, time:"2 mins"},
             { title: "Check in", text: "Save and update changes made to selected server.", icon:<LockOpenOutlinedIcon fontSize={"medium"}/>, time:"5 mins"},
             { title: "Check out", text: "Reserve and make changes to selected server.", icon:<LockOutlinedIcon fontSize={"medium"}/>, time:"2 mins"},
@@ -34,7 +36,7 @@ const ServerManager: React.FC = () => {
     return (
         <>
             <Box
-                width={"80%"}
+                width={"95%"}
                 height={"auto"}
                 sx={{marginTop: "100px"}}
             >

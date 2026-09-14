@@ -1,6 +1,7 @@
 import json
 import re
 
+from google.api_core.exceptions import AlreadyExists
 from markupsafe import escape
 from pydantic import ValidationError
 from typing import List, Union, Tuple
@@ -20,14 +21,18 @@ from common.constants.database import (
     DbOperators
 )
 from common.constants.pub_sub import PubSub
-from common.constants.states import ImageStatus
+from common.constants.states import ImageStatus, ServerStates
+from common.constants.google import ImageSource
 from common.constants.enumerators import ImageScopes, SnapshotTypes
 from common.utilities.gcp.compute.compute_image import ComputeImageAPI
+from common.utilities.gcp.compute.compute_instance import ComputeInstanceAPI
+from common.utilities.gcp.compute.compute_disk import ComputeDiskAPI
 from common.utilities.gcp.compute.compute_machine_type import ComputeMachineTypesAPI
 from common.utilities.gcp.compute.image_compatibility import compatible_boot_image, normalize_architecture
+from common.utilities.gcp.compute.image_ownership import image_source, image_source_project, is_shared_image
 from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.document_database.factory import DocumentDatabaseFactory
-from common.exceptions import BadRequest, NotFound, AgogeValidationError, NotReady
+from common.exceptions import BadRequest, Conflict, Forbidden, NotFound, AgogeValidationError, NotReady, OperationTimeout
 
 from utilities.gcp.compute.compute_resources import ComputeResources
 from utilities.global_objects.words import Words
@@ -64,10 +69,11 @@ class ComputeImage:
 
     def get(
         self,
-        image_name: str
+        image_name: str,
+        requester: AgogeUser = None,
     ) -> AgogeImageModel:
         if image := self.db.get(collection_name=self.collection, doc_id=image_name):
-            return AgogeImageModel(**image)
+            return AgogeImageModel(**self._with_ownership(image, requester))
         raise NotFound(message=f"No image found for ID: {image_name}")
 
     def get_image_state(
@@ -78,14 +84,17 @@ class ComputeImage:
             return {"build_id": server_name, 'state': image.get('state')}
         raise NotFound(message=f"No image found for ID: {server_name}")
 
-    def list_images(self) -> List[AgogeImageModel]:
+    def list_images(self, requester: AgogeUser = None) -> List[AgogeImageModel]:
         if images := self.db.query(collection_name=self.collection):
-            return self.agoge_model_validator.load(images, halt_on_error=False)
+            return self.agoge_model_validator.load(
+                [self._with_ownership(image, requester) for image in images], halt_on_error=False
+            )
         return []
 
     def list_project_images(
         self,
-        scope: ImageScopes = ImageScopes.PROJECT
+        scope: ImageScopes = ImageScopes.PROJECT,
+        requester: AgogeUser = None,
     ) -> Union[dict, List]:
         """
         Retrieve independently available public and custom image catalogs.
@@ -100,7 +109,9 @@ class ComputeImage:
             # A new project needs public images before it can create its first
             # custom image. Neither catalog requires the other to be populated.
             return {
-                'custom': self.agoge_model_validator.load(custom_images) if custom_images else [],
+                'custom': self.agoge_model_validator.load(
+                    [self._with_ownership(image, requester) for image in custom_images]
+                ) if custom_images else [],
                 'project': self.compute_model_validator.load(google_images) if google_images else [],
             }
         elif scope == ImageScopes.GLOBAL:
@@ -112,6 +123,130 @@ class ComputeImage:
     def machine_types(self) -> List[MachineTypeModel]:
         """Retrieve list of valid machine types to use in server builds"""
         return ComputeResources(env_dict=self.env_dict).get_machine_types()
+
+    def _with_ownership(self, image: dict, requester: AgogeUser = None) -> dict:
+        shared = is_shared_image(image, self.env.project)
+        can_edit_shared = bool(shared and requester and requester.is_admin)
+        result = {
+            **image,
+            'source_project': image_source_project(image),
+            'is_shared': shared,
+            'can_edit_shared': can_edit_shared,
+        }
+        if shared and not can_edit_shared:
+            # A hidden Connect button must not leave working-server access
+            # credentials available through the list/details API. Copying uses
+            # the authoritative record and preserves its connection settings.
+            result.update(human_interaction=[], dns_record=None, startup_script=None)
+        return result
+
+    def _require_local_image(self, image: dict) -> None:
+        if is_shared_image(image, self.env.project):
+            raise BadRequest('Copy this shared image to a new local template before editing it.')
+
+    def _authorize_image_edit(self, image: dict, requester: AgogeUser = None,
+                              confirmed: bool = False, require_confirmation: bool = False) -> bool:
+        """Use stored ownership and authenticated roles for every mutation."""
+        if not is_shared_image(image, self.env.project):
+            return False
+        if not requester or not requester.is_admin:
+            raise Forbidden('Only administrators can edit shared images. Copy this image to edit it for this site.')
+        if require_confirmation and confirmed is not True:
+            raise BadRequest('Confirm that changes to this shared image affect multiple sites and applications.')
+        return True
+
+    def _validate_new_name(self, server_name: str) -> None:
+        # Leave nine characters for the longest snapshot suffix (-manual-0).
+        if not isinstance(server_name, str) or not re.fullmatch(r'[a-z](?:[a-z0-9-]{0,52}[a-z0-9])?', server_name):
+            raise BadRequest('Use 1–54 lowercase letters, numbers, or hyphens. Start with a letter and end with a letter or number.')
+        if server_name.startswith('image-') or server_name in self.NAME_RESERVATIONS:
+            raise BadRequest('Choose a server name without the reserved image- prefix or reserved names agoge and google.')
+
+    def _create_record(self, image: dict) -> None:
+        """Create atomically: a competing request must never replace a template."""
+        try:
+            self.db.db.collection(self.collection.value).document(image['name']).create(image)
+        except AlreadyExists as exc:
+            raise Conflict(f'Template {image["name"]} already exists. Choose a different name.') from exc
+
+    def copy_shared_image(self, image_name: str, server_name: str) -> AgogeImageModel:
+        """Copy the saved shared image before exposing a renamed local template.
+
+        The original catalog record and image are never modified. Compute insert
+        and Firestore create both reject existing names, including concurrent
+        requests. No editable record is published for an incomplete image copy.
+        """
+        self._validate_new_name(server_name)
+        source_record = self.db.get(collection_name=self.collection, doc_id=image_name)
+        if not source_record:
+            raise NotFound(f'No image found for ID: {image_name}')
+        if not is_shared_image(source_record, self.env.project):
+            raise BadRequest('This template is already local. Edit the existing local template.')
+        if server_name == image_name:
+            raise BadRequest('The local copy must have a different server name.')
+        if self.db.get(collection_name=self.collection, doc_id=server_name):
+            raise Conflict(f'Template {server_name} already exists. Choose a different name.')
+
+        source = image_source(source_record)
+        match = re.search(r'(?:^|/)projects/([^/]+)/global/images/([^/]+)$', source)
+        if not match:
+            raise BadRequest('The shared template needs a concrete source image URL before it can be copied.')
+        source_project, source_name = match.groups()
+        local_image_name = f'image-{server_name}'
+        if local_image_name == source_name:
+            raise BadRequest('The local copy must have a different image name.')
+        image_api = ComputeImageAPI(self.env.project, self.env.region, self.env.zone, log_name=self.log_name)
+        source_image = image_api.get(resource=source_name, project=source_project, fallback_to_shared=False)
+        if source_image.status != 'READY':
+            raise NotReady('The shared image is not ready to copy. Try again after it finishes processing.')
+        if image_source_project({'self_link': source_image.self_link}) != source_project:
+            raise BadRequest('The source image does not match the shared template project.')
+
+        # Reusing a VM/disk name could attach old contents on the first checkout.
+        lookups = [
+            lambda: image_api.get(resource=local_image_name, project=self.env.project, fallback_to_shared=False),
+            lambda: ComputeInstanceAPI(self.env.project, self.env.region, self.env.zone).get(resource_name=server_name),
+            lambda: ComputeDiskAPI(self.env.project, self.env.region, self.env.zone).get(resource_name=f'{server_name}-disk'),
+        ]
+        for lookup in lookups:
+            try:
+                lookup()
+            except NotFound:
+                continue
+            raise Conflict(f'A local image, server, or disk already uses {server_name}. Choose a different name.')
+
+        local_source = ComputeImageAPI.self_link(local_image_name, self.env.project)
+        record = AgogeImageModel(**{
+            **source_record,
+            'name': server_name,
+            'image': local_image_name,
+            'self_link': local_source,
+            'disks': None,
+            'status': ImageStatus.CHECKED_IN.value,
+            'state': ServerStates.START.value,
+            'state_timestamp': None,
+            'in_use_by': None,
+            'dns_record': None,
+            'image_exists': True,
+            'is_shared': False,
+            'can_edit_shared': False,
+            'source_project': self.env.project,
+            'architecture': normalize_architecture(source_image.architecture) or source_record.get('architecture'),
+        })
+
+        if not image_api.create(
+            resource_name=local_image_name, source=source_image.self_link,
+            source_type=ImageSource.IMAGE, project=self.env.project, wait=True,
+            description=record.description,
+        ):
+            raise OperationTimeout('The local image copy did not finish. No editable template was created.')
+        local_image = image_api.get(resource=local_image_name, project=self.env.project, fallback_to_shared=False)
+        if local_image.status != 'READY':
+            raise NotReady('The local image copy is not ready. No editable template was created.')
+        if local_image.self_link != local_source:
+            raise BadRequest('The copied image does not match the requested local destination.')
+        self._create_record(record.model_dump())
+        return record
 
     def create_image_server(
         self,
@@ -149,7 +284,8 @@ class ComputeImage:
         self,
         server_name: str
     ) -> None:
-        if self.db.get(collection_name=self.collection, doc_id=server_name):
+        if image := self.db.get(collection_name=self.collection, doc_id=server_name):
+            self._require_local_image(image)
             msg_args = {
                 self.pubsub_keys.HANDLER: str(PubSub.Handlers.CONTROL.value),
                 self.pubsub_keys.ACTION: str(PubSub.Actions.DELETE.value),
@@ -162,7 +298,7 @@ class ComputeImage:
 
     def process_action_on_list(
         self,
-        user: str,
+        requester: AgogeUser,
         data: dict,
     ) -> None:
         images = data.get("images", [])
@@ -177,20 +313,38 @@ class ComputeImage:
             msg_args = {
                 self.pubsub_keys.HANDLER: str(PubSub.Handlers.CONTROL.value),
                 self.pubsub_keys.ACTION: str(action),
-                self.pubsub_keys.USER: str(user),
+                self.pubsub_keys.USER: str(requester.email),
                 self.pubsub_keys.COURSE_OBJECT: str(PubSub.CourseObjects.TEMPLATE_SERVER.value)
             }
-            for image in images:
-                msg_args[self.pubsub_keys.IMAGE_NAME] = self._get_image_name(image)
-                if image.get('image_exists'):
+            pending_messages = []
+            for requested_image in images:
+                name = self._get_image_name(requested_image)
+                image = self.db.get(collection_name=self.collection, doc_id=name)
+                if not image:
+                    raise NotFound(f'No image found for ID: {name}')
+                shared = self._authorize_image_edit(
+                    image, requester,
+                    confirmed=data.get('shared_edit_confirmed'),
+                    require_confirmation=action in [str(PubSub.Actions.CHECK_OUT.value),
+                                                   str(PubSub.Actions.CHECK_IN.value)],
+                )
+                msg_args[self.pubsub_keys.IMAGE_NAME] = name
+                msg_args['shared_edit_authorized'] = 'true' if shared else 'false'
+                # Only checkout boots from the saved image. Check-in must be
+                # retryable if the previous image was deleted before a failed
+                # replacement; start/stop/cancel operate on the working VM.
+                if image.get('image_exists') and action == str(PubSub.Actions.CHECK_OUT.value):
                     img = (
                         ComputeImageAPI(self.env.project, self.env.region, self.env.zone)
-                        .get(resource=image.get('image'), project=self.env.project)
+                        .get(resource=image_source(image).rstrip('/').rsplit('/', 1)[-1] or image.get('image'),
+                             project=image_source_project(image) if shared else self.env.project,
+                             fallback_to_shared=False)
                     )
-                    if img.status != "READY" and action != str(PubSub.Actions.CANCEL.value):
-                        # If image is not ready and action is not cancel image changes, raise NotReady exception
+                    if img.status != "READY":
                         raise NotReady(message=f"Image {img.name} is not ready, current status: {img.status}")
-            self.pubsub_manager.msg(**msg_args)
+                pending_messages.append(dict(msg_args))
+            for message in pending_messages:
+                self.pubsub_manager.msg(**message)
             return
         raise BadRequest(message="Invalid or missing data")
 
@@ -243,7 +397,8 @@ class ComputeImage:
     def update_image(
         self,
         image_name: str,
-        json_data: dict
+        json_data: dict,
+        requester: AgogeUser = None,
     ) -> None:
         """
         Update existing Agoge Compute Image based from form data
@@ -263,6 +418,8 @@ class ComputeImage:
             'disk_size',
         ]
         if image := self.db.get(collection_name=self.collection, doc_id=image_name):
+            self._authorize_image_edit(image, requester, confirmed=json_data.get('shared_edit_confirmed'),
+                                       require_confirmation=True)
             for key in form_keys:
                 if new_value := json_data.get(key):
                     try:
@@ -341,9 +498,9 @@ class ComputeImage:
         ):
             raise BadRequest("Missing or invalid data")
 
-        if server_name in self.NAME_RESERVATIONS:
-            raise AgogeValidationError(message=f"Invalid server name! Cannot use any of the "
-                                               f"following reserved names: {self.NAME_RESERVATIONS}")
+        self._validate_new_name(server_name)
+        if self.db.get(collection_name=self.collection, doc_id=server_name):
+            raise Conflict(f'Template {server_name} already exists. Choose a different name.')
 
         image_template, image_family = self._get_image(image_scope, image_id)
         source_image = compatible_boot_image(
@@ -372,11 +529,7 @@ class ComputeImage:
             base_family=image_family,
             architecture=normalize_architecture(source_image.architecture),
         )
-        self.db.update(
-            collection_name=self.collection,
-            doc_id=str(server_name),
-            data=image.model_dump()
-        )
+        self._create_record(image.model_dump())
 
         return server_name
 

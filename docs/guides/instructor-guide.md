@@ -158,6 +158,15 @@ Effective learner instructions normally include prerequisites, objectives, expec
 
 Reusable server images provide the operating system, applications, data, and connection configuration used by lab templates.
 
+### Images shared across sites
+
+The **Used by** column labels images **Shared across sites** or **This site only**. Shared images supply multiple Agoge sites and applications; only administrators can edit them directly.
+
+- **Customize for this site:** Choose **Copy and edit**, enter a new image name, and select **Copy for this site and edit**. Agoge finishes copying the saved image before opening the new copy's settings. Select that new image name in your lab templates. To change software or files inside the copy, return to Manage Servers and follow the checkout steps below.
+- **Administrator shared edit:** Open the shared image's editing options and choose **Edit shared image**, or use its checkout action and choose **Check out shared image**. Read the warning and acknowledge that your changes can affect multiple sites. The editor displays a warning throughout editing; saving settings or checking in the shared server requires confirmation again.
+
+Checking in a shared server updates the source image used by other sites. Existing running lab servers are not rebuilt automatically; labs may receive the new image when their servers are built or rebuilt. Template settings (description, machine type, and connection details) are stored separately for each site. If server changes are intended only for your site, create a copy.
+
 ### Modify an existing image
 
 1. Open **Teachers → Manage Servers**.
