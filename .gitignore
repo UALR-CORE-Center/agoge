@@ -43,3 +43,4 @@ venv
 api/.env.bak
 CLAUDE.md
 .vscode/
+bugReport.md
