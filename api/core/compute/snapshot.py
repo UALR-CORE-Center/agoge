@@ -19,6 +19,7 @@ from common.constants.database import (
 from common.constants.states import ImageStatus
 from common.constants.pub_sub import PubSub
 from common.utilities.gcp.pubsub_manager import PubSubManager
+from common.utilities.gcp.compute.image_ownership import is_shared_image
 from common.document_database.factory import DocumentDatabaseFactory
 from common.exceptions import BadRequest, NotFound, AgogeValidationError
 
@@ -113,6 +114,8 @@ class ComputeSnapshot:
                     self.pubsub_manager.msg(**msg_args)
                 return
             elif course_object == PubSub.CourseObjects.TEMPLATE_SERVER.value:
+                for item in snapshot_items:
+                    self._require_local_template(str(item))
                 self.logger.info(
                     f'SNAPSHOT action called for TEMPLATE_SERVER list',
                     course_object=course_object,
@@ -147,12 +150,19 @@ class ComputeSnapshot:
                         f'for {PubSub.Actions(action).name} request'
             )
 
+        # Resolve ownership by stored server identity even when a caller supplies
+        # a different course object; shared image changes use the warning flow.
+        self._require_local_template(server_name)
+
         if action in [
             PubSub.Actions.SNAPSHOT.value,
             PubSub.Actions.RESTORE.value,
         ]:
             if course_object == PubSub.CourseObjects.TEMPLATE_SERVER.value:
                 template_server = self.db.get(collection_name=DbCollections.IMAGE, doc_id=server_name)
+
+                if not template_server:
+                    raise NotFound(f'No image found for ID: {server_name}')
 
                 if template_server.get('status', None) == ImageStatus.CHECKED_IN.value:
                     raise BadRequest(
@@ -202,6 +212,11 @@ class ComputeSnapshot:
                         self.pubsub_manager.msg(**msg_args)
                         return
                 raise NotFound(message=f"No snapshots found for server {server_name} with name {snapshot_name}")
+
+    def _require_local_template(self, server_name: str) -> None:
+        image = self.db.get(collection_name=DbCollections.IMAGE, doc_id=server_name)
+        if image and is_shared_image(image, self.env.project):
+            raise BadRequest('Manage snapshots on a local copy. Save shared image changes through the shared image editor.')
 
     def _get_workout_snapshots(
         self,

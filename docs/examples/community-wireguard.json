@@ -1,0 +1,128 @@
+{
+  "id": "community-wireguard-example",
+  "version": "1.1",
+  "build_type": "unit",
+  "unit_type": "community",
+  "instructor_id": [
+    "instructor@example.edu"
+  ],
+  "summary": {
+    "name": "Community WireGuard Range",
+    "description": "One shared WireGuard gateway and one Kali Linux workstation per student.",
+    "author": "Example instructor"
+  },
+  "networks": [
+    {
+      "name": "external",
+      "subnets": [
+        {
+          "name": "default",
+          "ip_subnet": "10.20.0.0/24"
+        }
+      ],
+      "reservations": [
+        "10.20.0.10"
+      ]
+    }
+  ],
+  "servers": [
+    {
+      "name": "wireguard",
+      "image": "image-wireguard-server",
+      "machine_type": "e2-medium",
+      "community_server": true,
+      "wireguard_gateway": true,
+      "can_ip_forward": true,
+      "hidden": true,
+      "tags": [
+        "wireguard-gateway"
+      ],
+      "nics": [
+        {
+          "network": "external",
+          "subnet_name": "default",
+          "internal_ip": "10.20.0.10",
+          "external_nat": true
+        }
+      ]
+    },
+    {
+      "name": "kali",
+      "image": "image-kali-linux-2023",
+      "machine_type": "e2-standard-2",
+      "community_server": false,
+      "can_ip_forward": false,
+      "hidden": false,
+      "human_interaction": [
+        {
+          "display": true,
+          "protocol": "rdp",
+          "username": "kali",
+          "password": "CHANGE-ME-BEFORE-PUBLISHING",
+          "security_mode": "any"
+        }
+      ],
+      "tags": [
+        "student-kali",
+        "wireguard-client"
+      ],
+      "nics": [
+        {
+          "network": "external",
+          "subnet_name": "default",
+          "internal_ip": null,
+          "external_nat": false
+        }
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "name": "wireguard-remote-lan",
+      "description": "Send the remote lab CIDR to the shared WireGuard gateway.",
+      "network": "external",
+      "dest_range": "172.30.0.0/24",
+      "next_hop_instance": "wireguard",
+      "priority": 1000,
+      "tags": [
+        "wireguard-client"
+      ]
+    }
+  ],
+  "firewall_rules": [
+    {
+      "name": "allow-wireguard-ingress",
+      "network": "external",
+      "action": "allow",
+      "target_tags": [
+        "wireguard-gateway"
+      ],
+      "ports": [
+        "udp/51820"
+      ],
+      "ip_ranges": [
+        "0.0.0.0/0"
+      ],
+      "direction": "INGRESS",
+      "priority": 1000
+    },
+    {
+      "name": "allow-wireguard-remote-to-kali",
+      "network": "external",
+      "action": "allow",
+      "target_tags": [
+        "wireguard-client"
+      ],
+      "ports": [
+        "tcp/any",
+        "udp/any",
+        "icmp/any"
+      ],
+      "ip_ranges": [
+        "172.30.0.0/24"
+      ],
+      "direction": "INGRESS",
+      "priority": 1000
+    }
+  ]
+}

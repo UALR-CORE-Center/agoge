@@ -83,7 +83,7 @@ def process_server_action_helper(env_dict, db, action, server_id: str, fake_admi
         "action": action,
     }
 
-    ComputeImage(env_dict).process_action_on_list(user=fake_admin.email, data=payload)
+    ComputeImage(env_dict).process_action_on_list(requester=fake_admin, data=payload)
     logger.info(f"Processing action '{action}' on server '{server_id}'.")
 
 def update_server_helper(env_dict, db, server_id: str, updated_data, fake_admin: SafeAgogeUser):

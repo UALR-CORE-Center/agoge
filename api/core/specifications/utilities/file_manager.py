@@ -57,7 +57,9 @@ class SpecFileManager(LabSpecBase):
 
             # Validate entire specification
             UnitModel(**self.spec)
-            UnitValidator().load(self.spec)
+            UnitValidator(
+                wireguard_port=self.env_dict.get('wireguard_port', 51820)
+            ).load(self.spec)
 
         # Spec is now validated
         self.validated = True

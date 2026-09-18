@@ -111,6 +111,9 @@ class AttachedDiskResource:
                 instance that can be attached to a new or existing
                 :class:`google.cloud.compute_v1.AttachedDisk`.
         """
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError('A non-empty image or snapshot source is required to initialize a disk.')
+        source = source.strip()
         init_params = AttachedDiskInitializeParams()
         if source_type == ImageSource.SNAPSHOT:
             init_params.source_snapshot = source

@@ -12,6 +12,9 @@ from cloud_deployment.utilities.menu_options import (
 )
 from cloud_deployment.setup_manager import SetupManager
 from cloud_deployment.operations.lab_management.shared_lab_manager import SharedLabManager
+from common.constants.build_constants import BuildConstants
+from common.exceptions import AgogeValidationError
+from cloud_deployment.operations.env_and_quotas.project_menu import ProjectMenu
 
 init(autoreset=True)
 
@@ -38,25 +41,67 @@ def main():
         default=True,
         help="Whether to use the central shared resources for the project"
     )
+    parser.add_argument(
+        "--reauthenticate",
+        "--refresh-gcp-auth",
+        action="store_true",
+        help=(
+            "Force a browser login and refresh both gcloud credentials and "
+            "Application Default Credentials before setup starts."
+        ),
+    )
+    parser.add_argument(
+        '--hide-environment', action='append', default=[], metavar='PROJECT_OR_NAME',
+        help='Hide an entry in the shared setup menu without deleting its GCP project.',
+    )
+    parser.add_argument(
+        '--show-environment', action='append', default=[], metavar='PROJECT_OR_NAME',
+        help='Restore a hidden setup menu entry.',
+    )
+    parser.add_argument(
+        '--rename-environment', action='append', nargs=2, default=[],
+        metavar=('PROJECT_OR_NAME', 'MENU_NAME'),
+        help='Change a shared setup menu label without changing the project ID or URL path.',
+    )
     args = vars(parser.parse_args())
     suppress = args['suppress']  # Not currently used, but set up for future expansions
     use_shared_resource = args['use_shared_resource']
 
-    # Instantiate environment manager
-    env_manager = GcloudEnvironmentManager()
+    # Authenticate before the environment manager queries the shared Firestore
+    # database. gcloud and Python client libraries use separate credential
+    # stores, so both must be checked and synchronized first.
+    env_manager = GcloudEnvironmentManager(load_configurations=False)
     current_account = env_manager.get_current_account()
 
     if current_account:
         print(Fore.CYAN + f"Currently logged in as: {current_account}" + Style.RESET_ALL)
     else:
-        print(Fore.RED + "[!!] No active Google Cloud account found. Please log in before continuing."
-              + Style.RESET_ALL)
-        # Optionally exit here, or allow user interaction to continue for login
-        # e.g., return or exit(1)
-        return
+        print(
+            Fore.YELLOW
+            + "[!] No active Google Cloud account found. Setup can authenticate now."
+            + Style.RESET_ALL
+        )
 
     # Allow user to pick/change accounts and environments
-    env_manager.set_account()
+    selected_account = env_manager.set_account()
+    env_manager.ensure_credentials(
+        account=selected_account,
+        quota_project=BuildConstants.SharedResourceProjects.MAIN_SHARED_RESOURCE_PROJECT,
+        force=args["reauthenticate"],
+        # A valid ADC token can still belong to a different account than the
+        # selected gcloud identity. Synchronize ADC explicitly for that account,
+        # even when the CLI can reuse a cached login.
+        synchronize=bool(selected_account),
+    )
+    if args['hide_environment'] or args['show_environment'] or args['rename_environment']:
+        ProjectMenu().update(
+            hide=args['hide_environment'], show=args['show_environment'],
+            rename=args['rename_environment'],
+        )
+        env_manager.load_configurations()
+        env_manager.display_menu()
+        return
+    env_manager.load_configurations()
     env_manager.display_menu()
     selected_env = env_manager.select_environment()
     project_id = env_manager.switch_environment(selected_env)
@@ -93,4 +138,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except AgogeValidationError as exc:
+        print(Fore.RED + f"[!!] {exc}" + Style.RESET_ALL)
+        raise SystemExit(1) from exc

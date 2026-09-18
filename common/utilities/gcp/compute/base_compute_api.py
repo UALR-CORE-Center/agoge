@@ -74,6 +74,7 @@ class BaseComputeAPI:
         self.networks_client = None
         self.subnetworks_client = None
         self.routes_client = None
+        self.addresses_client = None
         self.operations_client = None
 
     @abstractmethod

@@ -1,5 +1,5 @@
 import {Close, EditOutlined} from "@mui/icons-material";
-import {Button, Dialog, DialogContent, DialogTitle, IconButton, List, Paper, Stack, useTheme} from "@mui/material";
+import {Alert, Button, Dialog, DialogContent, DialogTitle, IconButton, List, Paper, Stack, useTheme} from "@mui/material";
 import DialogActions from "@mui/material/DialogActions";
 import React from "react";
 import {useNavigate} from "react-router-dom";
@@ -20,6 +20,7 @@ interface ImageDetails {
     image: AgogeImage | null;
     onClose: () => void;
     loading: boolean;
+    onEdit?: (image: AgogeImage) => void;
 }
 
 export const ImageDetailsDialog: React.FC<ImageDetails> = (props) => {
@@ -37,7 +38,11 @@ export const ImageDetailsDialog: React.FC<ImageDetails> = (props) => {
 
     const onNavigateToEdit = () => {
         if (image) {
-            const href = `${URL_TEACHER_SERVERS_EDITOR}/${image?.id}`
+            if (props.onEdit) {
+                props.onEdit(image);
+                return;
+            }
+            const href = `${URL_TEACHER_SERVERS_EDITOR}/${image.name}`
             navigate(href);
         }
     }
@@ -67,6 +72,9 @@ export const ImageDetailsDialog: React.FC<ImageDetails> = (props) => {
                             </Stack>
                         </DialogTitle>
                         <DialogContent>
+                            {image.is_shared && <Alert severity="warning" sx={{mb: 2}}>
+                                This server image is shared across multiple sites and applications. Only administrators can edit it directly.
+                            </Alert>}
                             <Stack sx={{padding:2}} component={Paper} elevation={1}>
                                 <Stack sx={{paddingY: theme.spacing(1)}} direction={'row'} alignItems={'center'}
                                        justifyContent={'space-between'}>
@@ -77,13 +85,20 @@ export const ImageDetailsDialog: React.FC<ImageDetails> = (props) => {
                                         color={"info"}
                                         endIcon={<EditOutlined/>}
                                     >
-                                        Edit
+                                        {image.is_shared ? (image.can_edit_shared ? 'Edit options' : 'Copy and edit') : 'Edit'}
                                     </Button>
                                 </Stack>
 
                                 <List  sx={{padding: 0}} component={Paper} variant={'outlined'}>
                                     <ImageListItem disableAlternatingColors sx={{alignItems: 'flex-start'}} divider>
                                         <ItemValue>
+                                            <NestedListItem>
+                                                <ItemKeyWrapper>Used by</ItemKeyWrapper>
+                                                <ReviewItemValueOrSkeleton
+                                                    value={image.is_shared ? 'Shared across sites' : 'This site only'}
+                                                    loading={loading}
+                                                />
+                                            </NestedListItem>
                                             <NestedListItem>
                                                 <ItemKeyWrapper>Description</ItemKeyWrapper>
                                                 <ReviewItemValueOrSkeleton

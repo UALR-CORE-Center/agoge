@@ -37,6 +37,7 @@ import {
 } from "../../../../services/Specification/specificationEdit.model";
 import {specificationEditService} from "../../../../services/Specification/specificationEdit.service";
 import {FormType} from "../../../../types/Form";
+import {UnitType} from "../../../../types/BuildConstants";
 import ErrorDialog from "../../../Common/Dialogs/ErrorDialog";
 import SimpleSnackbar from "../../../Common/SnackBar/SnackBar";
 import AssessmentForm from "./AssessmentForms/AssessmentForm";
@@ -171,7 +172,9 @@ const Editor: React.FC = () => {
             {}
         );
 
-        serverForm.validateNetworkAndServerNics(networks);
+        const isCommunityBuild =
+            summaryForm.form?.[SummaryFormKeys.summaryUnitType]?.value === UnitType.COMMUNITY;
+        serverForm.validateNetworkAndServerNics(networks, isCommunityBuild);
     }, [
         networkForms.forms?.map(
             (field) => field[NetworkFormKeys.networkName].value
@@ -182,6 +185,10 @@ const Editor: React.FC = () => {
                     f[ServerFormKeys.serverNicNetwork].value +
                     f[ServerFormKeys.serverNicIPv4Addr].value
             )
+        ),
+        summaryForm.form?.[SummaryFormKeys.summaryUnitType]?.value,
+        serverForm.forms.map(
+            (field) => field[ServerFormKeys.serverSettingCommunity].value
         ),
     ]);
 
@@ -267,8 +274,12 @@ const Editor: React.FC = () => {
         assessmentForm.handleInitialization(specification.assessment, specification.lms_quiz);
         serverForm.handleInitialization(specification.servers);
 
+        const legacyUnitType = (specification?.summary as Summary & {unit_type?: UnitType})?.unit_type;
         summaryForm.handleInitialization(
-            EditorFormFactory.generateSummaryForm(specification?.summary)
+            EditorFormFactory.generateSummaryForm(
+                specification?.summary,
+                (specification?.unit_type || legacyUnitType || UnitType.SOLO) as UnitType
+            )
         );
         networkForms.handleInitialization(localNetworkForms);
         webApplicationForms.handleInitialization(localWebAppForms);
@@ -378,16 +389,21 @@ const Editor: React.FC = () => {
             const body = generateSpecification();
             const dataToPost =
                 key !== "review" ? body![key as keyof SpecificationEdit] : body;
-            let postBody = {
+            let postBody: Record<string, any> = {
                 form_type: key === "lms_quiz" ? "assessment" : key,
             };
             if (Array.isArray(dataToPost)) {
-                // @ts-expect-error
                 postBody[key as keyof typeof postBody] = dataToPost;
             } else {
                 postBody = {
                     ...(dataToPost as object),
                     ...postBody,
+                };
+            }
+            if (key === "summary") {
+                postBody = {
+                    ...postBody,
+                    unit_type: body!.unit_type,
                 };
             }
 
@@ -464,16 +480,20 @@ const Editor: React.FC = () => {
                 description: summaryForm.form![SummaryFormKeys.summaryDescription].value,
                 teacher_instructions_url: summaryForm.form![SummaryFormKeys.summaryTeacherInstructions].value.uid,
                 student_instructions_url: summaryForm.form![SummaryFormKeys.summaryStudentInstructions].value.uid,
-                unit_type: summaryForm.form![SummaryFormKeys.summaryUnitType].value,
                 author: summaryForm.form![SummaryFormKeys.summaryAuthor].value,
                 tags: ((summaryForm.form![SummaryFormKeys.summaryTeachingConcepts].value as TeachingConcept[])
                     .map((t) => t.id) as unknown as TeachingConcept[]),
             }
+            const unitType = summaryForm.form![SummaryFormKeys.summaryUnitType].value as UnitType;
 
             const networkValues: Network[] = [];
             for (const form of networkForms.forms!) {
+                const networkName = form[NetworkFormKeys.networkName].value;
                 networkValues.push({
-                    name: form[NetworkFormKeys.networkName].value,
+                    name: networkName,
+                    reservations: specification.data?.networks?.find(
+                        network => network.name === networkName
+                    )?.reservations || [],
                     subnets: [
                         {
                             name: "default",
@@ -509,7 +529,7 @@ const Editor: React.FC = () => {
             return {
                 ...specification.data!,
                 id: specification.data!.id,
-                unit_type: summaryValues.unit_type,
+                unit_type: unitType,
                 build_type: specification.data!.build_type,
                 edit_id: specification.data!.edit_id,
                 status: "",

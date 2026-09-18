@@ -30,6 +30,7 @@ class ResourceType(Enum):
     FIREWALLS = auto()
     NETWORKS = auto()
     SUBNETWORKS = auto()
+    ADDRESSES = auto()
 
 
 class ImageSource(Enum):
@@ -78,6 +79,7 @@ class ClientType(Enum):
     NETWORKS = 'networks'
     SUBNETWORKS = 'subnetworks'
     OPERATIONS = 'operations'
+    ADDRESSES = 'addresses'
 
 
 class OperationType(Enum):

@@ -64,6 +64,13 @@ const SummaryReview: React.FC<Props> = ({specification, elevation, loading, onNa
 
                 <ReviewListItem divider>
                     <ReviewItemKeyWrapper>
+                        <ReviewItemKey size={'small'} label={"Unit Type"}/>
+                    </ReviewItemKeyWrapper>
+                    <ReviewItemValueOrSkeleton value={specification?.unit_type} loading={loading}/>
+                </ReviewListItem>
+
+                <ReviewListItem divider>
+                    <ReviewItemKeyWrapper>
                         <ReviewItemKey size={'small'} label={"Description"}/>
                     </ReviewItemKeyWrapper>
 

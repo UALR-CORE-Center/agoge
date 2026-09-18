@@ -21,6 +21,8 @@ class ProjectInfo(BaseModel):
     project_name: str = Field(..., description="Name of the project")
     impersonation_account: str = Field(..., description="The account used for managing the project services")
     tenant_name: str = Field(..., description="The name of the tenant (e.g. company, school, unit, etc.)")
+    setup_menu_name: Optional[str] = Field(default=None, description="Optional label shown by the setup project menu")
+    setup_menu_hidden: bool = Field(default=False, description="Hide this project from the setup menu")
     created_date: datetime = Field(..., description="The date the project was created")
     last_modified: datetime = Field(..., description="The date the project was last modified")
     deployed_version: Optional[str] = Field(default=None, description="The overall version of the project deployed")

@@ -9,7 +9,7 @@ from common.constants.build_constants import BuildConstants
 from common.constants.database import DbCollections
 from common.constants.states import SpecificationStates
 from common.exceptions import AgogeValidationError
-from common.models.agoge import NetworkModel, FirewallRuleModel, ServerModel
+from common.models.agoge import NetworkModel, FirewallRuleModel, RouteModel, ServerModel
 from common.models.users import AgogeUser
 from common.utilities.id_generator import IdGenerator
 
@@ -17,6 +17,7 @@ from utilities.infrastructure_as_code.object_validators import (
     AssessmentValidator,
     FirewallRulesValidator,
     NetworksValidator,
+    RoutesValidator,
     ServersValidator,
     SummaryValidator,
     WebApplicationsValidator
@@ -161,6 +162,12 @@ class SpecEditManager(LabSpecBase):
         returns: Cleaned specification object to use in future builds
         """
         cleaned = {}
+        summary = self.spec.get('summary', {})
+        self.spec['unit_type'] = self.spec.get(
+            'unit_type',
+            summary.pop('unit_type', BuildConstants.UnitType.SOLO.value)
+        )
+        summary.pop('unit_type', None)
         ignore_keys = ['edit_id', 'promiscuous_mode', 'network_map', 'parent_id', 'status']
         for key, val in self.spec.items():
             if key not in ignore_keys:
@@ -185,6 +192,13 @@ class SpecEditManager(LabSpecBase):
         """
         # Create temporary copy to save future spec changes
         self.spec = copy.deepcopy(spec_db)
+        self.spec['unit_type'] = self.spec.get(
+            'unit_type',
+            self.spec.get('summary', {}).pop(
+                'unit_type', BuildConstants.UnitType.SOLO.value
+            )
+        )
+        self.spec.get('summary', {}).pop('unit_type', None)
         self.spec['edit_id'] = self.generate_edit_id()
         self.spec['parent_id'] = spec_db['id']
         self.spec['summary']['author'] = self._default_author(requester)
@@ -218,6 +232,7 @@ class SpecEditManager(LabSpecBase):
             'networks': [BuildConstants.Networks.WORKOUT_DEFAULT_NETWORK_CONFIG],
             'status': SpecificationStates.EDIT,
             'servers': [],
+            'unit_type': BuildConstants.UnitType.SOLO.value,
             'summary': {
                 "name": "New Agoge Lab",
                 "description": "Agoge Lab Description",
@@ -233,6 +248,10 @@ class SpecEditManager(LabSpecBase):
 
         # Set default placeholder values
         self.spec.setdefault('creation_timestamp', datetime.now().timestamp())
+        self.spec.setdefault('unit_type', BuildConstants.UnitType.SOLO.value)
+        valid_unit_types = {member.value for member in BuildConstants.UnitType}
+        if self.spec['unit_type'] not in valid_unit_types:
+            raise AgogeValidationError(f'Invalid unit_type: {self.spec["unit_type"]}')
         if build_type in [BuildConstants.BuildType.UNIT.value, BuildConstants.BuildType.ESCAPE_ROOM.value]:
             instructor_id = self.spec.get('instructor_id', ['instructor@example.com'])
             if not isinstance(instructor_id, list):
@@ -250,10 +269,21 @@ class SpecEditManager(LabSpecBase):
                 list(self._generate_schema(servers, ServerModel))
                 server_validator = ServersValidator(self.spec).load()
                 self.spec.update(server_validator)
+            if routes := self.spec.get('routes'):
+                list(self._generate_schema(routes, RouteModel))
+                routes_validator = RoutesValidator(self.spec).load()
+                self.spec.update(routes_validator)
             if 'firewall_rules' in self.spec or servers:
                 if firewall_rules := self.spec.get('firewall_rules'):
                     list(self._generate_schema(firewall_rules, FirewallRuleModel))
-                firewall_validator = FirewallRulesValidator(self.spec).load()
+                # Partial editor saves may define the gateway before its listener
+                # rule. Enforce reachability when the review form publishes the
+                # completed specification.
+                firewall_validator = FirewallRulesValidator(
+                    self.spec,
+                    wireguard_port=self.env_dict.get('wireguard_port', 51820),
+                    require_wireguard_listener=self.catalog,
+                ).load()
                 self.spec.update(firewall_validator)
             if self.spec.get('assessment'):
                 assessment_validator = AssessmentValidator(self.spec).load()
@@ -316,6 +346,14 @@ class SpecEditManager(LabSpecBase):
             'tags': BuildConstants.TeachingConcepts.map(form.get('tags')),
         })
 
+        unit_type = form.get('unit_type', self.spec.get('unit_type'))
+        valid_unit_types = {member.value for member in BuildConstants.UnitType}
+        if unit_type not in valid_unit_types:
+            raise AgogeValidationError(f'Invalid unit_type: {unit_type}')
+        self.spec['unit_type'] = unit_type
+        # Earlier versions of the editor incorrectly nested this value in summary.
+        self.spec['summary'].pop('unit_type', None)
+
     def _parse_assessment_form(
         self,
         form: dict,
@@ -351,6 +389,7 @@ class SpecEditManager(LabSpecBase):
             subnet = network.get('subnets', [])
             serialized_network = {
                 'name': network.get('name'),
+                'reservations': network.get('reservations') or [],
                 'subnets': []
             }
 
@@ -413,7 +452,13 @@ class SpecEditManager(LabSpecBase):
                 'name': server.get('name'),
                 'image': f"image-{image_id}",
                 'hidden': bool(server.get('hidden', False)),
-                'community_server': bool(server.get('community_server', False)),
+                'community_server': self._parse_boolean_field(
+                    server.get('community_server', False)
+                ),
+                'wireguard_gateway': self._parse_boolean_field(
+                    server.get('wireguard_gateway', False)
+                ),
+                'can_ip_forward': self._parse_boolean_field(server.get('can_ip_forward', False)),
                 'machine_type': processed_machine_type,
                 'details': {
                     "os": image.get('os'),
@@ -421,14 +466,24 @@ class SpecEditManager(LabSpecBase):
                     "labels": image.get('labels', [])
                 },
                 'human_interaction': processed_human_interaction,
-                'tags': [],
+                'tags': self._parse_tags(server.get('tags')),
                 'nics': [],
             }
+            if startup_script := server.get('startup_script'):
+                processed_server['startup_script'] = startup_script
+            elif legacy_startup_scripts := server.get('startup_scripts'):
+                if isinstance(legacy_startup_scripts, list):
+                    processed_server['startup_script'] = '\n'.join(legacy_startup_scripts)
+                else:
+                    processed_server['startup_script'] = legacy_startup_scripts
+            if routes := server.get('routes'):
+                processed_server['routes'] = routes
             for nic in server.get('nics', []):
                 processed_nic = {
                     'subnet_name': 'default',
                     'internal_ip': nic.get('internal_ip'),
                     'external_nat': nic.get('external_nat', False),
+                    'external_ip_name': nic.get('external_ip_name'),
                     'direct_connect': nic.get('direct_connect', False),
                     'network': nic.get('network'),
                 }
@@ -440,7 +495,8 @@ class SpecEditManager(LabSpecBase):
                 processed_server['nics'].append(processed_nic)
 
             if server.get('deny_outbound'):
-                processed_server['tags'].append('deny-outbound')
+                if 'deny-outbound' not in processed_server['tags']:
+                    processed_server['tags'].append('deny-outbound')
             servers.append(processed_server)
         self.spec['servers'] = servers
 
@@ -484,6 +540,16 @@ class SpecEditManager(LabSpecBase):
     @staticmethod
     def _parse_boolean_field(value) -> bool:
         return str(value).lower() in ['true', '1', 'on']
+
+    @staticmethod
+    def _parse_tags(value) -> list[str]:
+        if not value:
+            return []
+        if isinstance(value, str):
+            value = value.split(',')
+        return list(dict.fromkeys(
+            tag.strip() for tag in value if isinstance(tag, str) and tag.strip()
+        ))
 
 
 # [ eof ]

@@ -9,8 +9,10 @@ from common.constants.project_constants import CURRENT_VERSION
 from common.document_database import DocumentDatabaseFactory
 from cloud_deployment.operations.app_install_updates.base_build import BaseBuild
 from cloud_deployment.operations.app_install_updates.agoge_app import AgogeApp
+from cloud_deployment.operations.app_install_updates.shared_load_balancer import SharedLoadBalancer
 from cloud_deployment.operations.guacamole_image_management.guacamole_image_manager import GuacamoleImageManager
 from cloud_deployment.operations.lab_management.shared_lab_manager import SharedLabManager
+from cloud_deployment.operations.images_and_specs.public_image_catalog import PublicImageCatalog
 
 class InstallUpdateManager:
     def __init__(self, project_id: str):
@@ -22,30 +24,39 @@ class InstallUpdateManager:
         deploying the main app, and deploying cloud functions.
         """
         BaseBuild(project=self.project_id).run()
-        agoge_app = AgogeApp()
-        app_deployed = agoge_app.deploy_main_app()
-        function_deployed = agoge_app.deploy_cloud_functions()
+        agoge_app = AgogeApp(project=self.project_id)
+        if not agoge_app.deploy_main_app():
+            return
+        if not agoge_app.deploy_cloud_functions():
+            return
+        if not SharedLoadBalancer(project=self.project_id).run():
+            return
+        if not PublicImageCatalog(project=self.project_id).run():
+            return
         GuacamoleImageManager(
             project=self.project_id
         ).create_guac_project_image()
         SharedLabManager().run()
 
-        print(
-            "🎉 Setup complete! Your new Agoge project is ready.\n"
-            "👉 Next step: create Cloud DNS records that map your domain to the Cloud Run app and API."
-        )
-        if app_deployed and function_deployed:
-            self._create_update_record(action="initial install")
+        self._create_update_record(action="initial install")
+        print("🎉 Setup complete! Your new Agoge project is ready with shared app/API routing.")
 
     def run_update(self) -> None:
         """
         Updates the main application and cloud functions.
         """
-        agoge_app = AgogeApp()
-        app_deployed = agoge_app.deploy_main_app()
-        function_deployed = agoge_app.deploy_cloud_functions()
-        if app_deployed and function_deployed:
-            self._create_update_record(action="update")
+        # Existing projects did not run the WireGuard DNS bootstrap that was
+        # added to full installs. Perform the same idempotent migration before
+        # deploying code that depends on it.
+        BaseBuild(project=self.project_id, suppress=True).ensure_wireguard_prerequisites()
+        agoge_app = AgogeApp(project=self.project_id)
+        if not agoge_app.deploy_main_app():
+            return
+        if not agoge_app.deploy_cloud_functions():
+            return
+        if not SharedLoadBalancer(project=self.project_id).run():
+            return
+        self._create_update_record(action="update")
 
     def _create_update_record(self, action: str) -> None:
         """

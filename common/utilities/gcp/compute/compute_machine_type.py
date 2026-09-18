@@ -106,6 +106,10 @@ class ComputeMachineTypesAPI(BaseComputeAPI):
         Raises:
             NotFound: If the requested machine type could not be found.
         """
+        return self._machine_type_object(self.get_resource(resource, project=project, zone=zone))
+
+    def get_resource(self, resource: str, project: str = None, zone: str = None) -> MachineType:
+        """Read complete machine metadata without dropping its architecture."""
         client = self.client()
 
         if not project:
@@ -126,7 +130,7 @@ class ComputeMachineTypesAPI(BaseComputeAPI):
             wait=False,
             request=request
         )
-        return self._machine_type_object(machine_type)
+        return machine_type
 
     def create(self, resource_name: str, wait: bool = True, **kwargs) -> bool:
         pass

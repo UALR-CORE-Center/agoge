@@ -34,6 +34,7 @@ class SetupOptions(bytes, Enum):
     CLOUD_FUNCTION = (2, "Update Cloud Function Only")
     MAIN_APP = (3, "Update Main Application Only")
     CLASSIFIED_APP = (5, "Update Classified Application Only")
+    SHARED_LOAD_BALANCER = (22, "Configure Shared Load Balancer Routing")
 
     # Images
     DEFAULT_SERVER_IMAGES = (4, "Copy Over Default Server Images")
@@ -41,10 +42,12 @@ class SetupOptions(bytes, Enum):
     IMPORT_LOCAL_IMAGE = (7, "Import Custom Image from Local Environment into App")
     STARTUP_SCRIPTS_AND_INSTRUCTIONS = (11, "Synchronize Startup Scripts and Instructions")
     REFRESH_GUACAMOLE_IMAGE_AND_CERT = (12, "Refresh/Create guacamole image and certificate.")
+    SYNC_PUBLIC_IMAGES = (23, "Synchronize Public OS Images")
 
     # Environment & Quotas
     ENV = (10, "Synchronize Environment Variables")
     INCREASE_QUOTAS = (13, "Increase Quotas (EXPERIMENTAL)")
+    REFRESH_GCP_CREDENTIALS = (21, "Refresh gcloud and Python GCP Credentials")
 
     # Projects
     PROJECT_CREATION = (14, "Create a New GCP Project")
@@ -88,6 +91,7 @@ category_menu = {
             (SetupOptions.CLOUD_FUNCTION, SetupOptions.CLOUD_FUNCTION.description),
             (SetupOptions.MAIN_APP, SetupOptions.MAIN_APP.description),
             (SetupOptions.CLASSIFIED_APP, SetupOptions.CLASSIFIED_APP.description),
+            (SetupOptions.SHARED_LOAD_BALANCER, SetupOptions.SHARED_LOAD_BALANCER.description),
             (SetupOptions.BACK, SetupOptions.BACK.description),
         ],
     },
@@ -105,12 +109,17 @@ category_menu = {
                 SetupOptions.REFRESH_GUACAMOLE_IMAGE_AND_CERT,
                 SetupOptions.REFRESH_GUACAMOLE_IMAGE_AND_CERT.description,
             ),
+            (SetupOptions.SYNC_PUBLIC_IMAGES, SetupOptions.SYNC_PUBLIC_IMAGES.description),
             (SetupOptions.BACK, SetupOptions.BACK.description),
         ],
     },
     SetupCategories.ENV_AND_QUOTAS: {
         "label": "Environment & Quotas",
         "options": [
+            (
+                SetupOptions.REFRESH_GCP_CREDENTIALS,
+                SetupOptions.REFRESH_GCP_CREDENTIALS.description,
+            ),
             (SetupOptions.ENV, SetupOptions.ENV.description),
             (SetupOptions.INCREASE_QUOTAS, SetupOptions.INCREASE_QUOTAS.description),
             (SetupOptions.BACK, SetupOptions.BACK.description),

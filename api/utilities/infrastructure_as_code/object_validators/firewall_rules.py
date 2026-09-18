@@ -1,5 +1,11 @@
+import re
+
 from common.exceptions import AgogeValidationError
 from common.constants.build_constants import BuildConstants
+from common.utilities.wireguard_firewall import (
+    DEFAULT_WIREGUARD_PORT,
+    has_public_wireguard_ingress,
+)
 
 from .networks import NetworksValidator
 
@@ -7,12 +13,16 @@ from .networks import NetworksValidator
 class FirewallRulesValidator:
     def __init__(
         self,
-        config: dict
+        config: dict,
+        wireguard_port: int = DEFAULT_WIREGUARD_PORT,
+        require_wireguard_listener: bool = True,
     ) -> None:
         self.config = config
         self.firewalls = self.config.get('firewalls')
         self.network_map = {}
         self.external_network = None
+        self.wireguard_port = wireguard_port
+        self.require_wireguard_listener = require_wireguard_listener
 
     def load(self) -> dict:
         networks_validator = NetworksValidator(self.config)
@@ -32,6 +42,7 @@ class FirewallRulesValidator:
         # Update config with validated firewall rules
         self._add_firewall_rules()
         self._validate_firewall_rules()
+        self._validate_wireguard_listener()
 
         return self.config
 
@@ -130,8 +141,71 @@ class FirewallRulesValidator:
         rules = self.config.get('firewall_rules', [])
         if rules:
             for rule in rules:
+                name = rule.get('name')
+                if not self._valid_resource_suffix(name):
+                    raise AgogeValidationError(
+                        f'Firewall rule name {name} must use lowercase letters, numbers, '
+                        'or hyphens, start with a letter, not end with a hyphen, and be '
+                        "no longer than 52 characters so Agoge's build ID prefix fits "
+                        'the 63-character GCE firewall-rule limit'
+                    )
+                for tag in rule.get('target_tags') or []:
+                    if not self._valid_network_tag(tag):
+                        raise AgogeValidationError(
+                            f'Firewall rule {name} has invalid target tag {tag}; tags must '
+                            'be 1-63 lowercase letters, numbers, or hyphens, start with a '
+                            'letter, and not end with a hyphen'
+                        )
                 if rule['network'] == self.external_network:
                     continue
                 elif not self.network_map.get(rule['network'], False):
                     raise AgogeValidationError(f'Invalid network given for firewall rule with name: {rule["name"]}. '
                                                f'Network {rule["network"]} does not exist!')
+
+    def _validate_wireguard_listener(self) -> None:
+        """Require an explicit, project-port-aware rule before publication."""
+        if not self.require_wireguard_listener:
+            return
+        if self.config.get('unit_type', BuildConstants.UnitType.SOLO) != BuildConstants.UnitType.COMMUNITY:
+            return
+
+        gateways = [
+            server
+            for server in self.config.get('servers', [])
+            if server.get('wireguard_gateway', False)
+        ]
+        if not gateways:
+            return
+        try:
+            port = int(self.wireguard_port)
+        except (TypeError, ValueError) as error:
+            raise AgogeValidationError(
+                'The project wireguard_port must be an integer from 1 through 65535'
+            ) from error
+        if isinstance(self.wireguard_port, bool) or not 1 <= port <= 65535:
+            raise AgogeValidationError(
+                'The project wireguard_port must be an integer from 1 through 65535'
+            )
+        if has_public_wireguard_ingress(self.config, port):
+            return
+
+        gateway = gateways[0]
+        public_nic = next(
+            (nic for nic in gateway.get('nics', []) if nic.get('external_nat', False)),
+            {},
+        )
+        network = public_nic.get('network', '<gateway-network>')
+        raise AgogeValidationError(
+            f'Community WireGuard gateway {gateway.get("name")} requires an explicit '
+            f'allow INGRESS firewall rule on network {network} for public UDP port '
+            f'{port}. The rule must apply to the gateway tag (or all targets), allow '
+            'a public source range, and use priority 0-65534.'
+        )
+
+    @staticmethod
+    def _valid_resource_suffix(name: str) -> bool:
+        return bool(re.fullmatch(r'[a-z](?:[a-z0-9-]{0,50}[a-z0-9])?', str(name)))
+
+    @staticmethod
+    def _valid_network_tag(tag: str) -> bool:
+        return bool(re.fullmatch(r'[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?', str(tag)))

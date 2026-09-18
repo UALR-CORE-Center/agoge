@@ -5,7 +5,12 @@ export enum ServerFormKeys {
     serverBaseImage,
     serverSettingHide,
     serverSettingCommunity,
+    serverSettingWireGuardGateway,
+    serverSettingCanIpForward,
     serverSettingDeny,
+    serverSettingTags,
+    serverStartupScript,
+    serverRoutes,
     serverSettingsDiskSizeGb,
     serverSettingsMachineType,
     serverNetworks,
@@ -13,6 +18,7 @@ export enum ServerFormKeys {
     serverNicIPv4Addr,
     serverNicIpAliases,
     serverNicEnableExternalNat,
+    serverNicExternalIpName,
     serverEnableDirectConnections,
 }
 
@@ -35,6 +41,11 @@ export interface IServerForm {
     [ServerFormKeys.serverBaseImage]: IServerFormField;
     [ServerFormKeys.serverSettingHide]: IServerFormField;
     [ServerFormKeys.serverSettingCommunity]: IServerFormField;
+    [ServerFormKeys.serverSettingWireGuardGateway]: IServerFormField;
+    [ServerFormKeys.serverSettingCanIpForward]: IServerFormField;
+    [ServerFormKeys.serverSettingTags]: IServerFormField;
+    [ServerFormKeys.serverStartupScript]: IServerFormField;
+    [ServerFormKeys.serverRoutes]: IServerFormField;
     [ServerFormKeys.serverSettingsDiskSizeGb]: IServerFormField;
     [ServerFormKeys.serverSettingsMachineType]: IServerFormField;
     [ServerFormKeys.serverSettingDeny]: IServerFormField;
@@ -46,5 +57,6 @@ export interface IServerFormNetworks {
     [ServerFormKeys.serverNicIPv4Addr]: IFormFieldMeta;
     [ServerFormKeys.serverNicIpAliases]: IFormFieldMeta;
     [ServerFormKeys.serverNicEnableExternalNat]: IFormFieldMeta;
+    [ServerFormKeys.serverNicExternalIpName]: IFormFieldMeta;
     [ServerFormKeys.serverEnableDirectConnections]: IFormFieldMeta;
 }

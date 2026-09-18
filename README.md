@@ -55,6 +55,8 @@ Agoge runs entirely in Google Cloud and uses several managed services:
 
 The platform supports multi-tenant deployments where multiple training environments share a central resource project.
 
+For current hosting settings and parent-project SendGrid, OpenAI, and Shodan keys, see [Shared project setup and API secrets](docs/operations/shared-project-setup.md).
+
 ## Project Status
 Agoge is actively developed and maintained by the UALR CORE Center.
 
@@ -97,6 +99,65 @@ Most deployments use the script to 1) create a fresh customer-specific project, 
 python setup.py
 ````
 
+If setup reports missing/expired credentials, appears to wait for an invisible
+authentication prompt, or you changed Google accounts, run a complete local
+credential refresh first:
+
+```bash
+python setup.py --reauthenticate
+```
+
+This opens the normal browser sign-in and synchronizes both credential stores
+used by setup: the active `gcloud` login and Application Default Credentials
+(ADC) used by the Python Google Cloud clients. The same action is available
+under **Environment & Quotas → Refresh gcloud and Python GCP Credentials**.
+
+Normal startup now runs a CLI login followed by an explicit ADC login for the
+selected account. It can reuse cached user credentials, so the warning
+`Re-using locally stored credentials` is not itself a failure. Setup validates
+both stores before reading the shared project registry. `--reauthenticate`
+forces a fresh browser login when a stored login needs renewal.
+
+If an older checkout stops with `Authentication completed, but credential
+validation failed: Application Default Credentials are missing or expired`,
+pull the updated setup script and run `python setup.py --reauthenticate`.
+There is no application redeployment required for this setup correction. The
+old message also covered network, TLS, and credential-file errors, so it does
+not establish that the credentials actually expired.
+
+For manual recovery, use the same Windows account and terminal environment as
+your IDE. Replace the email below with the setup account, complete any browser
+prompts, and stop if a command reports an error:
+
+```powershell
+$setupAccount = "you@example.edu"
+gcloud auth login $setupAccount --force --project=agoge-shared-resources
+gcloud auth application-default login $setupAccount --project=agoge-shared-resources
+gcloud auth application-default set-quota-project agoge-shared-resources
+gcloud auth application-default print-access-token > $null
+```
+
+The last command discards the access token while leaving errors visible. A zero
+exit code (`$LASTEXITCODE`) means ADC can obtain a token. The quota-project step
+requires `serviceusage.services.use` on the shared project. After successful
+validation, rerun `python setup.py`.
+
+If credentials work in PowerShell but fail in PyCharm, compare the IDE run
+configuration's `GOOGLE_APPLICATION_CREDENTIALS` and `CLOUDSDK_CONFIG` settings
+with the terminal environment. An explicit credential file takes precedence
+over user ADC. Keep it if intentional; remove an obsolete override from the
+run configuration when using your browser login. Setup does not unset it or
+change the referenced file automatically.
+
+See Google's [ADC login reference](https://docs.cloud.google.com/sdk/gcloud/reference/auth/application-default/login)
+and [ADC lookup order](https://docs.cloud.google.com/docs/authentication/application-default-credentials)
+for the separate credential stores and override behavior.
+
+Project creation also requires `roles/resourcemanager.projectCreator` on the
+configured production or development folder. The defaults can be overridden
+without editing source code by setting `AGOGE_PRODUCTION_FOLDER_ID`,
+`AGOGE_DEVELOPMENT_FOLDER_ID`, and `AGOGE_BILLING_ACCOUNT_ID`.
+
 The wizard will:
 
 1. Create / select the customer project.
@@ -104,36 +165,27 @@ The wizard will:
 3. Copy base server images from the shared-resource project.
 4. Deploy Cloud Run services and Cloud Functions.
 5. Prompt you for an admin email used for Firebase / IAM bootstrap.
+6. Populate the child project's public OS image catalog for server creation. Existing projects can run **Server Images & Build Specs → Synchronize Public OS Images**; see [catalog setup and recovery](docs/operations/shared-project-setup.md#public-os-image-catalog).
 
 ### 3  Post-deployment tasks
 
 | Task                | Where to do it         | Details                                                                                                                                                                                                                                                                                 |
 | ------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Domain mappings** | Cloud Run → *Domains*  | Map `api.<your-domain>` → API service, `app.<your-domain>` → React front-end.                                                                                                                                                                                                           |
+| **Shared routing** | Parent project's load balancer / gateway | Route this tenant's `project_path` on the shared app and API hostnames to its Cloud Run services. See [shared project setup](docs/operations/shared-project-setup.md). |
 | **Quota boosts**    | IAM & Admin → *Quotas* | Set limits using the table below (MCB = Max Concurrent Builds).<br><br> <ul><li>Subnetworks = MCB × 2</li><li>Networks = MCB × 1</li><li>Firewall Rules = MCB × 3</li><li>Routes = MCB × 2</li><li>In-Use IPs = MCB × 1</li><li>CPUs = MCB × 3</li><li>Concurrent Builds = 50</li></ul> |
 
 ---
 
-### 4  Firebase & SSO (Configuration steps directed during the setup script)
+### 4  Firebase & SSO
 
-1. **DNS records**
-   * `api.<your-domain>` → Cloud Run default CNAME-record.
-   * `app.<your-domain>` → Cloud Run default CNAME-record.
-   * `auth.<your-domain>` → CNAME to `<project>.web.app.`
+Follow the [Firebase authentication setup guide](docs/operations/firebase-authentication.md) during initial installation or when repairing an existing login. It includes console links, a complete `test-dev` example, and troubleshooting for incorrect projects and redirect errors.
 
-2. **Firebase console → Build ▸ Authentication**
+1. **Select the child project in Firebase.** Add Firebase to that existing GCP project if needed, register a Web app, and copy its SDK configuration's `apiKey`. Save it as `api_key` through **Environment & Quotas → Synchronize Environment Variables → Specific**. Each tenant uses its own Firebase key, even when other API secrets come from the parent.
+2. **Configure Authentication in that child.** Enable Google with a support email and any other providers used by the UI. Add the shared app hostname, such as `app.agoge-labs.com`, to **Authentication → Settings → Authorized domains**. Enter a hostname without `https://` or `/test-dev`.
+3. **Check the OAuth client used by Firebase's Google provider.** In the child's **Google Auth Platform → Clients**, open that existing Web client. Its callback is `https://<child-project>.firebaseapp.com/__/auth/handler`; the app's `/test-dev/login` address is the return page. See the guide for exact origins and callback values.
+4. **Build React with the child's settings.** Setup verifies the key's project and defaults to `<child-project>.firebaseapp.com`, which needs no tenant DNS zone. For an existing app, use **Application Installation and Updates → Update Main Application Only → Specific → React**. Vite embeds these settings during the build; changing Cloud Run runtime variables alone cannot update the deployed JavaScript.
 
-   * *Settings* → **Authorized domains** → add `app.<your-domain>`, `auth.<your-domain>`, `127.0.0.1`.
-   * *Hosting* → “Add custom domain” → `auth.<your-domain>` (choose *serve traffic*).
-
-3. **Google Cloud console → APIs & Services ▸ OAuth 2.0**
-
-   * Create / edit a **Web application** client.
-   * **Authorized JavaScript origins** → same list as Firebase.
-   * **Authorized redirect URIs** →
-
-     * `https://<project>.firebaseapp.com/__/auth/handler`
-     * `https://auth.<your-domain>/__/auth/handler`
+Setup prints project-specific console links and required values. Provider, authorized-domain, and OAuth-client changes remain manual. Keep a custom `firebase_auth_domain` only when its Firebase Hosting and OAuth configuration belongs to the same child project, as covered in the guide.
 
 ### 5  Automating quota changes (optional)
 

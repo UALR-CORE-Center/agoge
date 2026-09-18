@@ -1,5 +1,5 @@
 # One-to-one Google-defined enumerations
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Union, List
 
 
@@ -28,8 +28,18 @@ class ComputeImageModel(BaseModel):
     is_enabled: Optional[bool]
     creationTimestamp: Optional[str]
     project: Optional[str]
-    global_id: Optional[int]
+    global_id: Optional[str]
     description: Optional[str]
+    architecture: Optional[str] = None
+
+    @field_validator('global_id', mode='before')
+    @classmethod
+    def normalize_image_id(cls, value):
+        # Compute IDs are uint64; Firestore integers are signed int64. Keep
+        # identifiers as strings, including when reading older numeric records.
+        if isinstance(value, int) and not isinstance(value, bool):
+            return str(value)
+        return value
 
 
 class MachineTypeModel(BaseModel):

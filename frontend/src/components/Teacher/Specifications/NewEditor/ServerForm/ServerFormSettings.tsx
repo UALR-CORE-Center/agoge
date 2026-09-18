@@ -1,12 +1,13 @@
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import {Accordion, AccordionDetails, AccordionSummary, Box, useTheme} from "@mui/material";
+import {Accordion, AccordionDetails, AccordionSummary, Box, Stack, useTheme} from "@mui/material";
 import React from "react";
 import {
     FormCheckBox,
-    FormRadioBtns,
+    FormMuliTextField,
+    FormTextField,
     StyledFormFieldLabel
 } from "../utils/FormFields";
-import {ServerFormKeys} from "./ServerFormTypes";
+import {IServerForm, ServerFormKeys} from "./ServerFormTypes";
 import {IUseServerForm} from "./useServerForm";
 
 interface Props {
@@ -16,7 +17,12 @@ interface Props {
     expanded: boolean;
 }
 
-const ServerFormSettings: React.FC<Props> = ({serverForm, serverIndex, disableForm, expanded}) => {
+const ServerFormSettings: React.FC<Props> = ({
+    serverForm,
+    serverIndex,
+    disableForm,
+    expanded,
+}) => {
     const theme = useTheme();
     return (
         <Accordion elevation={3}>
@@ -63,6 +69,33 @@ const ServerFormSettings: React.FC<Props> = ({serverForm, serverIndex, disableFo
                     />
 
                     <FormCheckBox
+                        formKey={ServerFormKeys.serverSettingWireGuardGateway}
+                        fieldFn={(key) => serverForm.getField(key, serverIndex)}
+                        disabled={disableForm}
+                        onInputChange={(field, value) => {
+                            serverForm.handleServerValueChange(field, value, serverIndex)
+                        }}
+                        size={'small'}
+                        label={"WireGuard Gateway"}
+                        helpText={
+                            'Marks the shared community server as the WireGuard next hop. ' +
+                            'This also enables Community Server and IP Forwarding.'
+                        }
+                    />
+
+                    <FormCheckBox
+                        formKey={ServerFormKeys.serverSettingCanIpForward}
+                        fieldFn={(key) => serverForm.getField(key, serverIndex)}
+                        disabled={disableForm}
+                        onInputChange={(field, value) => {
+                            serverForm.handleServerValueChange(field, value, serverIndex)
+                        }}
+                        size={'small'}
+                        label={"Enable IP Forwarding"}
+                        helpText={'Allows this VM to forward packets as a router. The guest operating system must also enable forwarding.'}
+                    />
+
+                    <FormCheckBox
                         formKey={ServerFormKeys.serverSettingDeny}
                         fieldFn={(key) => serverForm.getField(key, serverIndex)}
                         disabled={disableForm}
@@ -77,6 +110,39 @@ const ServerFormSettings: React.FC<Props> = ({serverForm, serverIndex, disableFo
                             'the server outwards. Does not block traffic directed towards attached local networks.'
                         }
                     />
+
+                    <Stack gap={1} mt={2}>
+                        <StyledFormFieldLabel>Network Tags</StyledFormFieldLabel>
+                        <FormTextField
+                            placeholder={'wireguard-gateway, lab-router'}
+                            helpText={'Comma-separated Google Cloud network tags.'}
+                            formKey={ServerFormKeys.serverSettingTags}
+                            fieldFn={(key) => serverForm.getField(key, serverIndex)}
+                            disabled={disableForm}
+                            onInputChange={(field, value) => {
+                                serverForm.handleServerValueChange(field, value, serverIndex)
+                            }}
+                        />
+                    </Stack>
+
+                    <Stack gap={1} mt={2}>
+                        <StyledFormFieldLabel>Startup Script</StyledFormFieldLabel>
+                        <FormMuliTextField
+                            rows={6}
+                            placeholder={'#!/bin/bash'}
+                            helpText={'Optional inline Compute Engine startup script.'}
+                            disabled={disableForm}
+                            formKey={ServerFormKeys.serverStartupScript}
+                            fieldFn={(key) => serverForm.getField(key, serverIndex)}
+                            onInputChange={(field, value) => {
+                                serverForm.handleServerValueChange(
+                                    field as keyof IServerForm,
+                                    value,
+                                    serverIndex
+                                )
+                            }}
+                        />
+                    </Stack>
                 </Box>
             </AccordionDetails>
         </Accordion>

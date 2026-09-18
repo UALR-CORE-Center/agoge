@@ -5,17 +5,21 @@ import shutil
 
 
 from common.utilities.gcp.cloud_env import CloudEnv
+from common.exceptions import AgogeValidationError
+from cloud_deployment.operations.app_install_updates.firebase_build import prepare_firebase_auth
+from cloud_deployment.operations.env_and_quotas.shared_api_secrets import ensure_shared_api_secret_access
 
 
 class Commands:
-    BASE_BUILD_CLOUD_RUN_COMMAND = "gcloud builds submit {target_dir} --tag {image_path}"
-    BUILD_API_CLOUD_RUN_COMMAND = "gcloud builds submit . --tag {image_path}"
+    BASE_BUILD_CLOUD_RUN_COMMAND = "gcloud builds submit {target_dir} --tag {image_path} --project={project}"
+    BUILD_API_CLOUD_RUN_COMMAND = "gcloud builds submit . --tag {image_path} --project={project}"
     BASE_DEPLOY_CLOUD_RUN_COMMAND = (
         "gcloud run deploy agoge-{app_type} "
         "--image {image_path} "
         "--memory=4096Mi " 
         "--cpu 4 "
         "--platform=managed "
+        "--project={project} "
         "--region={region} "
         "--allow-unauthenticated " 
         "--service-account={service_account}"
@@ -29,6 +33,7 @@ class Commands:
     DEPLOY_CLOUD_FUNCTION_COMMAND = (
         "gcloud functions deploy --quiet agoge "
         "--gen2 "
+        "--project={project} "
         "--region={region} "
         "--memory=2048Mi "
         "--entry-point=agoge_cloud_function "
@@ -47,7 +52,8 @@ class Commands:
         f"--topic=agoge "
         f"--message-body=Hello! "
         f"--attributes=handler=MAINTENANCE "
-        f"--location=us-central1"
+        "--location={region} "
+        "--project={project}"
     )
 
     class ServiceAccounts:
@@ -80,10 +86,10 @@ class Commands:
     ) -> str:
         image_path = self.image_path(app_type)
         print(f"Submitting build for agoge-{app_type} in {self.env.project}")
-        if app_type == self.AppType.REACT:
-            return self.BASE_BUILD_CLOUD_RUN_COMMAND.format(target_dir=target_dir, image_path=image_path)
-        elif app_type == self.AppType.API:
-            return self.BASE_BUILD_CLOUD_RUN_COMMAND.format(target_dir=target_dir, image_path=image_path)
+        if app_type in (self.AppType.REACT, self.AppType.API):
+            return self.BASE_BUILD_CLOUD_RUN_COMMAND.format(
+                target_dir=target_dir, image_path=image_path, project=self.env.project
+            )
 
     def deploy_cloud_run(
         self,
@@ -101,6 +107,7 @@ class Commands:
             app_type=app_type,
             image_path=image_path,
             region=self.env.region,
+            project=self.env.project,
             service_account=service_account
         )
         if min_instance:
@@ -120,10 +127,17 @@ class Commands:
 class AgogeApp:
     def __init__(
         self,
-        suppress: bool = True
+        suppress: bool = True,
+        *,
+        project: str | None = None,
     ) -> None:
         self.suppress = suppress
-        self.env = CloudEnv()
+        self.env = CloudEnv(project=project)
+        if project and self.env.project != project:
+            raise AgogeValidationError(
+                f'The environment document project ({self.env.project}) does not match '
+                f'the selected project ({project}). Correct its project field before deploying.'
+            )
         self.service = discovery.build('cloudscheduler', 'v1')
         self.commands = Commands(env=self.env)
         self.job_name = (f"projects/{self.env.project}/locations/{self.env.region}/jobs/"
@@ -141,17 +155,26 @@ class AgogeApp:
 
     def deploy_main_app(self) -> bool:
         confirm_all = int(input("Deploy\n - [0] All\n - [1] Specific\nSelection: "))
+        if confirm_all not in (0, 1):
+            raise AgogeValidationError('Choose 0 for All or 1 for Specific.')
+        api_or_frontend = None
+        if confirm_all != 0:
+            api_or_frontend = int(input("Select an app to deploy:\n - [0] API\n - [1] React\nSelection: "))
+            if api_or_frontend not in (0, 1):
+                raise AgogeValidationError('Choose 0 for API or 1 for React.')
+        include_frontend = confirm_all == 0 or api_or_frontend == 1
+        if include_frontend:
+            prepare_firebase_auth(self.env)
 
         self._backup_env_files()
 
         try:
-            self._write_env_files()
+            self._write_env_files(include_frontend=include_frontend)
             if confirm_all == 0:
                 if not self._deploy_api():
                     return False
                 return self._deploy_react()
             else:
-                api_or_frontend = int(input("Select an app to deploy:\n - [0] API\n - [1] React\nSelection: "))
                 if api_or_frontend == 0:
                     return self._deploy_api()
                 else:
@@ -160,6 +183,7 @@ class AgogeApp:
             self._restore_env_files()
 
     def _deploy_api(self):
+        ensure_shared_api_secret_access(self.env)
         self._stage_build(app_type=Commands.AppType.API)
 
         return self._deploy_cloud_run(
@@ -232,6 +256,7 @@ class AgogeApp:
         return True
 
     def deploy_cloud_functions(self) -> bool:
+        ensure_shared_api_secret_access(self.env)
         # This does not need to be run everytime, but this is here temporarily to make sure it gets set up correctly.
         print(f"Setting the default cloud function service account permissions to the editor role.")
         command = self.commands.ADD_DEFAULT_COMPUTE_EDITOR_ROLE.format(project=self.env.project,
@@ -252,7 +277,8 @@ class AgogeApp:
             print(f"Error deploying the cloud function! See messages above. Exiting without deploying the "
                   f"cloud function")
             return False
-        self._set_scheduler()
+        if not self._set_scheduler():
+            return False
 
         if self.staging_dir.exists():
             print('... removing temporary .staging directory ')
@@ -269,17 +295,21 @@ class AgogeApp:
                 backup_path = env_file.with_suffix(env_file.suffix + ".bak")
                 shutil.copy(env_file, backup_path)
                 self.backup_files[env_file] = backup_path
+            else:
+                self.backup_files[env_file] = None
 
     def _restore_env_files(self):
         """
         Restore the original environment files from backups.
         """
         for original, backup in self.backup_files.items():
-            if backup.exists():
+            if backup is None:
+                original.unlink(missing_ok=True)
+            elif backup.exists():
                 shutil.move(backup, original)
                 print(f"Restored original file: {original}")
 
-    def _set_scheduler(self) -> None:
+    def _set_scheduler(self) -> bool:
         parent = f'projects/{self.env.project}/locations/{self.env.region}'
         response = self.service.projects().locations().jobs().list(parent=parent).execute()
         job_exists = False
@@ -287,8 +317,13 @@ class AgogeApp:
             if job.get('name', None) == self.job_name:
                 job_exists = True
         if not job_exists:
-            if not self._stream_command_output(self.commands.CLOUD_SCHEDULER_COMMAND):
+            command = self.commands.CLOUD_SCHEDULER_COMMAND.format(
+                project=self.env.project, region=self.env.region
+            )
+            if not self._stream_command_output(command):
                 print(f"Error setting up the cloud scheduler! See messages above.")
+                return False
+        return True
 
     @staticmethod
     def _stream_command_output(command: str) -> bool:
@@ -304,7 +339,7 @@ class AgogeApp:
         process.wait()
         return process.returncode == 0
 
-    def _write_env_files(self):
+    def _write_env_files(self, *, include_frontend: bool = True):
         """
         Write variables to the environment files for FastAPI and React Vite.
         """
@@ -318,11 +353,17 @@ class AgogeApp:
                 {
                     "DEVELOPMENT": "false",
                     "PARENT_DOMAIN": self.env.parent_dns_suffix.lstrip('.'),
-                    "DOMAIN": self.env.dns_suffix.lstrip('.'),
-                    "SUB_DOMAIN": self.env.app_sub_domain,
+                    # Existing standalone deployments may retain explicit
+                    # overrides. Shared projects need only PARENT_DOMAIN.
+                    "DOMAIN": (self.env.env_dict.get('dns_suffix') or '').strip('.') or None,
+                    "SUB_DOMAIN": self.env.env_dict.get('app_sub_domain'),
                 }
             ),
+            remove_variables=('DOMAIN', 'SUB_DOMAIN'),
         )
+
+        if not include_frontend:
+            return
 
         # Write to React Vite environment file
         self._update_env_file(
@@ -342,18 +383,20 @@ class AgogeApp:
                     "VITE_FIREBASE_KEY": self.env.api_key,
                     "VITE_FIREBASE_AUTH_DOMAIN": self.env.firebase_auth_domain,
                     "VITE_PROJECT_ID": self.env.project,
-                    "VITE_PROJECT_PATH": f"/{self.env.project_path}/",
+                    "VITE_PROJECT_PATH": f"/{self.env.project_path}/" if self.env.project_path else '/',
                 }
             ),
         )
 
-    def _update_env_file(self, env_file: Path, new_variables: dict):
+    def _update_env_file(self, env_file: Path, new_variables: dict, remove_variables=()):
         """
         Update or create an environment file with the given variables.
         Preserves existing variables not explicitly updated.
         """
         try:
             env_variables = self._read_env_file(env_file)
+            for key in remove_variables:
+                env_variables.pop(key, None)
             env_variables.update(new_variables)  # Update or add new variables
             with open(env_file, "w") as file:
                 for key, value in env_variables.items():

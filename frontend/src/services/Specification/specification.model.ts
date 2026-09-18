@@ -24,11 +24,22 @@ export interface Network {
 
 export interface Nic {
     network: string;
-    internal_ip?: string;
+    internal_ip?: string | null;
     subnet_name?: string;
     external_nat?: boolean;
+    external_ip_name?: string;
     ip_aliases?: string[];
     direct_connect?: boolean;
+}
+
+export interface Route {
+    name: string;
+    network: string;
+    dest_range: string;
+    next_hop_instance: string;
+    priority?: number;
+    tags?: string[];
+    description?: string;
 }
 
 export interface HumanInteraction {
@@ -58,6 +69,10 @@ export interface Server {
     metadata?: string;
     sshkey?: string;
     can_ip_forward?: boolean;
+    wireguard_gateway?: boolean;
+    wireguard_endpoint_id?: string;
+    startup_script?: string;
+    routes?: Route[];
     min_cpu_platform?: string;
     nics?: Nic[];
     human_interaction?: HumanInteraction[];
@@ -222,6 +237,7 @@ export interface Unit {
     unit_type?: string;
     summary: AgogeSummary;
     networks?: Network[];
+    routes?: Route[];
     servers?: Server[];
     web_applications?: WebApplication[];
     firewalls?: Firewall[];

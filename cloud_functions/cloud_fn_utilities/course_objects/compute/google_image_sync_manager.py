@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from typing import Union, Dict, List
+from uuid import NAMESPACE_URL, uuid5
 from google.cloud.compute_v1 import Image
 
 from common.exceptions.agoge import ServiceUnavailable, NotFound
@@ -10,7 +11,7 @@ from common.models.google import ComputeImageModel
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.compute.compute_image import ComputeImageAPI
-from common.utilities.id_generator import IdGenerator
+from common.utilities.gcp.compute.image_compatibility import normalize_architecture
 
 
 class GoogleImageSyncManager:
@@ -23,6 +24,8 @@ class GoogleImageSyncManager:
     class SyncActions:
         SYNCING = 0
         COMPLETE = 1
+        PARTIAL = 2
+        FAILED = 3
 
     def __init__(self, env: dict = None) -> None:
         self.class_name = self.__class__.__name__
@@ -32,12 +35,15 @@ class GoogleImageSyncManager:
         self.compute_images = ComputeImageAPI(self.env.project, self.env.region, self.env.zone)
         self.db = DocumentDatabaseFactory.create_db_object(
             db_type=DatabaseTypes.firestore,
-            database_name=DATABASE_NAME
+            database_name=DATABASE_NAME,
+            project_id=self.env.project,
         )
         self.collection = DbCollections.GOOGLE_IMAGES
         self.image_data = {}
         self.images: List[ComputeImageModel] = []
         self.image_keys = set()
+        self.failed_projects = {}
+        self.successful_projects = set()
 
     def get_image_data(self) -> Dict:
         """Returns the Google Cloud Compute image data."""
@@ -48,67 +54,117 @@ class GoogleImageSyncManager:
         sort: bool = False
     ) -> Union[List, Dict]:
         """Get a family image for all global Google Cloud Compute image project"""
+        self.image_data = {}
+        self.images = []
+        self.failed_projects = {}
+        self.successful_projects = set()
         for project in ImageProjects.ALL:
-            images = self._get_family_images(project)
+            try:
+                images = self._get_family_images(project)
+            except Exception as error:
+                self.failed_projects[project] = str(error)
+                self.logger.warning(
+                    f'Public images from {project} could not be refreshed: {error}. '
+                    'Existing records for this publisher will be retained.'
+                )
+                continue
             self.image_data[project] = images
+            self.images.extend(images)
+            self.successful_projects.add(project)
 
         if sort:
             return self.image_data
         return self.images
 
-    def sync(self) -> None:
-        """
-        Sync the document database with available Global Google Cloud compute images
-        """
-        self._log_update(action=self.SyncActions.SYNCING)
+    def sync(self) -> dict:
+        """Refresh available publishers and retain catalogs that could not be read."""
+        self._log_update(action=self.SyncActions.SYNCING, error=None, failed_projects={})
+        self.logger.info(f'Beginning public image sync for {self.env.project} ...')
+        try:
+            self.get_all_images()
+            if not self.images:
+                raise ServiceUnavailable(
+                    'No public OS image families were retrieved. Existing catalog retained. '
+                    'Check Compute API access and the publisher errors, then retry.'
+                )
+            self._save_catalog()
+        except Exception as error:
+            try:
+                self._log_update(
+                    self.SyncActions.FAILED, error=str(error),
+                    failed_projects=self.failed_projects,
+                )
+            except Exception:
+                self.logger.error('Could not record the failed public image sync status.')
+            raise
 
-        self.logger.info("Beginning to sync global images ...")
-        self.get_all_images()
-        existing_images = self.db.query(collection_name=self.collection)
+        report = {
+            'image_count': len(self.images),
+            'enabled_count': sum(image.is_enabled is True for image in self.images),
+            'project_counts': {project: len(images) for project, images in self.image_data.items()},
+            'failed_projects': self.failed_projects,
+        }
+        action = self.SyncActions.PARTIAL if self.failed_projects else self.SyncActions.COMPLETE
+        self._log_update(action, **report)
+        self.logger.info(
+            f'Public image sync for {self.env.project}: {report["image_count"]} families refreshed, '
+            f'{report["enabled_count"]} enabled, {len(self.failed_projects)} publishers unavailable.'
+        )
+        return report
 
-        existing_image_map = {}
-        if existing_images:
-            existing_image_map = {db_image.get('global_id'): db_image for db_image in existing_images}
+    def _save_catalog(self) -> None:
+        existing_images = self.db.query(collection_name=self.collection) or []
+        # A family moves to a new Compute image ID when its publisher releases
+        # an update. Keep the Agoge selection ID and admin choice across versions.
+        by_family = {}
+        by_id = {}
+        for record in sorted(existing_images, key=lambda item: item.get('uuid', '')):
+            key = (record.get('project'), record.get('family'))
+            if key not in by_family or record.get('is_enabled') is False:
+                by_family[key] = record
+            by_id[(record.get('project'), str(record.get('global_id')))] = record
 
-        images_to_sync = []
-        operation_type = DbOperationTypes.SET
+        operations = []
+        retained_ids = set()
         for image in self.images:
-            global_id = str(image.global_id)
-
-            # Check if the image exists in the database
-            existing_image = existing_image_map.pop(global_id, None)
-
-            if existing_image:
-                # Preserve `is_enabled` status from database if available
-                is_enabled = False
-                if image.is_enabled is not None:
-                    is_enabled = image.is_enabled
-                image.is_enabled = existing_image.get('is_enabled', is_enabled)
-                operation_type = DbOperationTypes.UPDATE
-
-            images_to_sync.append(
+            previous = by_family.get((image.project, image.family)) or by_id.get(
+                (image.project, str(image.global_id))
+            )
+            if previous:
+                image.uuid = previous.get('uuid') or image.uuid
+                if previous.get('is_enabled') is not None:
+                    image.is_enabled = previous['is_enabled']
+            retained_ids.add(image.uuid)
+            operations.append(
                 self.db.operation(
                     collection_name=self.collection,
                     doc_id=image.uuid,
-                    operation_type=operation_type,
-                    data=image.model_dump()
+                    operation_type=DbOperationTypes.SET,
+                    data=image.model_dump(),
                 )
             )
 
-        # Remaining items in `db_image_map` are no longer in `self.images` and should be deleted
+        # Write usable replacements before removing obsolete entries. A fetch
+        # failure must never erase that publisher's previously available images.
+        self._write_catalog_batches(operations)
         to_delete = [
             self.db.operation(
                 collection_name=self.collection,
-                doc_id=i['uuid'],
-                operation_type=DbOperationTypes.DELETE
+                doc_id=record['uuid'],
+                operation_type=DbOperationTypes.DELETE,
             )
-            for i in existing_image_map.values()
+            for record in existing_images
+            if record.get('project') in self.successful_projects
+            and record.get('uuid') and record['uuid'] not in retained_ids
         ]
         if to_delete:
-            self.db.batch_write(to_delete)
+            self._write_catalog_batches(to_delete)
 
-        self.db.batch_write(images_to_sync)
-        self._log_update(self.SyncActions.COMPLETE)
+    def _write_catalog_batches(self, operations: list) -> None:
+        # The database's legacy multi-batch helper logs and suppresses failures.
+        # Use single batches so a failed write reaches sync() before any pruning.
+        for start in range(0, len(operations), 500):
+            self.db.batch_write(operations[start:start + 500])
 
     def _get_family_images(
         self,
@@ -128,6 +184,7 @@ class GoogleImageSyncManager:
                     project=project,
                     zone=self.env.zone,
                     family=True,
+                    fallback_to_shared=False,
                 )
                 if image_family_request:
                     db_image = self._create_image_object(
@@ -137,15 +194,12 @@ class GoogleImageSyncManager:
                         is_enabled=is_enabled
                     )
                     processed_images.append(db_image)
-                    self.images.append(db_image)
             except NotFound:
                 self.logger.warning(
                     f"{self.class_name}:_get_family_images - family '{family}' "
                     f"not found in project '{project}'. Ignoring ..."
                 )
                 continue
-            except AttributeError as e:
-                self.logger.debug(str(e))
             except Exception as e:
                 raise ServiceUnavailable(
                     message=f"{self.class_name}:_get_family_images - An error occurred while "
@@ -170,7 +224,7 @@ class GoogleImageSyncManager:
                     if self._is_valid_family(family=family):
                         families.add(family)
 
-            return list(families)
+            return sorted(families)
         return []
 
     def _get_custom_images(self) -> Union[List[Dict], List[str]]:
@@ -192,7 +246,7 @@ class GoogleImageSyncManager:
         is_enabled: bool
     ) -> Union[ComputeImageModel]:
         new_image = {
-            'uuid': IdGenerator.uuid(),
+            'uuid': str(uuid5(NAMESPACE_URL, f'https://compute.googleapis.com/projects/{project}/global/images/family/{family}')),
             'global_id': str(image.id),
             'name': self._get_name_from_image(family),
             'self_link': image.self_link,
@@ -202,6 +256,7 @@ class GoogleImageSyncManager:
             'creationTimestamp': image.creation_timestamp,
             'description': image.description,
             'disk_size': image.disk_size_gb,
+            'architecture': normalize_architecture(image.architecture),
             'os': self._get_os_from_project(project)
         }
         return ComputeImageModel(**new_image)
@@ -217,11 +272,13 @@ class GoogleImageSyncManager:
 
     def _log_update(
         self,
-        action: int
+        action: int,
+        **details,
     ) -> None:
         record = {
             'action': action,
             'update_time': datetime.now(UTC).isoformat(),
+            **details,
         }
         self.db.update(
             collection_name=DbCollections.UPDATES,

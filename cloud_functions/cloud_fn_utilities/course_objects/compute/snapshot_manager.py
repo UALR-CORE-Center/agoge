@@ -7,11 +7,12 @@ from common.constants.enumerators import SnapshotTypes
 from common.constants.pub_sub import PubSub
 from common.constants.states import WorkoutStates
 from common.document_database import DocumentDatabaseFactory, DatabaseQueries
-from common.exceptions import NotFound, BadRequest, BaseAgogeException
+from common.exceptions import NotFound, BadRequest, BaseAgogeException, OperationTimeout
 from common.models.agoge import SnapshotsModel, SnapshotModel, WorkoutModel
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import LoggerNames, Logger
 from common.utilities.gcp.compute.base_compute_api import BaseComputeAPI
+from common.utilities.gcp.compute.image_ownership import is_shared_image
 from common.utilities.gcp.compute.resources.attached_disk_resource import AttachedDiskResource
 from common.utilities.id_generator import IdGenerator
 from common.utilities.timestamps import Timestamps
@@ -28,7 +29,8 @@ class SnapshotManager(BaseComputeManager):
         server_type: PubSub.CourseObjects = PubSub.CourseObjects.LAB_SERVER,
         env_dict: dict = None,
         debug: bool = False,
-        snapshot_type: str = SnapshotTypes.AUTO.value
+        snapshot_type: str = SnapshotTypes.AUTO.value,
+        shared_edit_authorized: bool = False,
     ) -> None:
         """
         Args:
@@ -48,6 +50,7 @@ class SnapshotManager(BaseComputeManager):
         self.class_name = self.__class__.__name__
         self.log_name = LoggerNames.CLOUD_FN
         self.debug = debug
+        self.shared_edit_authorized = shared_edit_authorized is True
         self.logger = Logger(self.log_name, class_name=self.class_name)
         self.env = CloudEnv(env_dict=env_dict) if env_dict else CloudEnv()
         self.db = DocumentDatabaseFactory.create_db_object(
@@ -124,6 +127,7 @@ class SnapshotManager(BaseComputeManager):
         Returns:
             str: The name of the created snapshot, or None if the snapshot could not be created.
         """
+        self._require_template_management()
         # self._is_safe_to_perform_action()
 
         disk_name = self.server_name
@@ -134,10 +138,11 @@ class SnapshotManager(BaseComputeManager):
         # create the snapshot
         try:
             _, current_disk = self.compute_instance.get_boot_disk_name(self.server_name)
-            self.compute_disk.create_snapshot(
+            if not self.compute_disk.create_snapshot(
                 disk_name=current_disk,
                 snapshot_name=next_snapshot_name
-            )
+            ):
+                raise OperationTimeout(f'Snapshot {next_snapshot_name} did not finish. Retry after it completes.')
         except (NotFound, BadRequest, BaseAgogeException) as e:
             self.logger.error(
                 f"{self.class_name}:{self.server_name} - Error creating snapshot {next_snapshot_name} from "
@@ -200,6 +205,7 @@ class SnapshotManager(BaseComputeManager):
         Args:
             snapshot_name (str): The name of the snapshot to delete.
         """
+        self._require_template_management()
         try:
             if not self.compute_snapshot.delete(snapshot_name):
                 self.logger.error(
@@ -222,6 +228,7 @@ class SnapshotManager(BaseComputeManager):
 
     def delete_snapshots(self) -> None:
         """Delete all snapshots attached to an image server"""
+        self._require_template_management()
         if server_snapshots := self.db.get(collection_name=DbCollections.SNAPSHOTS, doc_id=self.server_name):
             snapshots_model = SnapshotsModel(**server_snapshots)
 
@@ -236,7 +243,9 @@ class SnapshotManager(BaseComputeManager):
                             PubSub.EventAttributes.ACTION: PubSub.Actions.DELETE.value,
                             PubSub.EventAttributes.COURSE_OBJECT: PubSub.CourseObjects.SNAPSHOT.value,
                             PubSub.EventAttributes.SERVER_TYPE: self.server_type.value,
-                            PubSub.EventAttributes.SERVER_NAME: snapshot.name
+                            PubSub.EventAttributes.SERVER_NAME: self.server_name,
+                            PubSub.EventAttributes.SNAPSHOT_NAME: snapshot.name,
+                            'shared_edit_authorized': str(self.shared_edit_authorized).lower(),
                         }
                         self.pubsub_manager.msg(**message_attr)
 
@@ -289,6 +298,7 @@ class SnapshotManager(BaseComputeManager):
         self,
         snapshot_name: str = None
     ) -> None:
+        self._require_template_management()
         # self._is_safe_to_perform_action()
 
         server_snapshots = self._get_snapshot_record(ignore_missing=False)
@@ -351,7 +361,8 @@ class SnapshotManager(BaseComputeManager):
                 PubSub.EventAttributes.HANDLER: PubSub.Handlers.CONTROL.value,
                 PubSub.EventAttributes.ACTION: PubSub.Actions.START.value,
                 PubSub.EventAttributes.COURSE_OBJECT: self.server_type.value,
-                PubSub.EventAttributes.IMAGE_NAME: self.image_name
+                PubSub.EventAttributes.IMAGE_NAME: self.image_name,
+                'shared_edit_authorized': str(self.shared_edit_authorized).lower(),
             }
             self.pubsub_manager.msg(**message_attr)
 
@@ -363,6 +374,16 @@ class SnapshotManager(BaseComputeManager):
                 f'{self.class_name}:{self.server_name} - Delete disk failed with reason: {e}.',
                 server_name=self.server_name
             )
+
+    def _require_template_management(self) -> None:
+        """Template snapshots honor the same shared-image authorization as edits."""
+        if self.server_type != PubSub.CourseObjects.TEMPLATE_SERVER:
+            return
+        image_record = self.db.get(collection_name=DbCollections.IMAGE, doc_id=self.server_name)
+        if not image_record:
+            raise NotFound(f'No image template found with name {self.server_name}.')
+        if is_shared_image(image_record, self.env.project) and not getattr(self, 'shared_edit_authorized', False):
+            raise BadRequest('Shared images require administrator authorization. Copy to this site under a new name to edit.')
 
     def _get_attached_disk(
         self,

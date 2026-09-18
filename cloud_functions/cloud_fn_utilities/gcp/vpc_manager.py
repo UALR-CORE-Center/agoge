@@ -86,14 +86,18 @@ class VpcManager:
     def delete(
         self,
         network: NetworkModel
-    ) -> None:
+    ) -> bool:
         network_name = self._network_name(self.build_id, network)
         subnets = network.subnets or []
         for subnet in subnets:
             subnet_name = self._subnet_name(network_name, subnet)
             self.logger.info(f"{self.class_name}:{network_name} - Deleting subnetwork {subnet_name}")
             try:
-                self.subnetworks_client.delete(resource_name=subnet_name)
+                deleted = self.subnetworks_client.delete(resource_name=subnet_name)
+                if not deleted:
+                    raise ConnectionError(
+                        f'Timed out deleting subnetwork {subnet_name}'
+                    )
             except NotFound:
                 self.logger.info(
                     f"{self.class_name}:{network_name} - Error deleting subnetwork {subnet_name}. "
@@ -103,13 +107,16 @@ class VpcManager:
 
         self.logger.info(f"{self.class_name}:{network_name} - Deleting network")
         try:
-            self.networks_client.delete(resource_name=network_name, raise_runtime=False)
+            deleted = self.networks_client.delete(resource_name=network_name)
+            if not deleted:
+                raise ConnectionError(
+                    f'Timed out deleting network {network_name}'
+                )
             time.sleep(3)
-        except RuntimeError:
-            pass
         except NotFound:
             self.logger.info(
                 f"{self.class_name}:{network_name} - Error deleting network: "
                 f"resource does not exist! Ignoring ..."
             )
             pass
+        return True

@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from enum import Enum
+import re
 
 from fastapi import Request
 from pydantic import ValidationError
@@ -26,6 +27,7 @@ from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.utilities.id_generator import IdGenerator
+from common.services.wireguard_endpoint import WireGuardEndpointRegistry
 from common.utilities.timestamps import Timestamps
 
 from utilities.lms.lms_canvas import LMSSpecCanvas
@@ -67,6 +69,7 @@ class Unit:
         as_dict: bool = False
     ) -> Union[UnitModel, dict]:
         if unit := self.db.get(collection_name=self.collection, doc_id=build_id):
+            unit = self._hydrate_wireguard_endpoint(unit)
             if as_dict:
                 return unit
             else:
@@ -76,17 +79,72 @@ class Unit:
                     raise BadRequest(message=f"Unit.get failed with validation errors: {e}")
         raise NotFound(message="No Unit found for given ID")
 
+    def _hydrate_wireguard_endpoint(self, unit: dict) -> dict:
+        """Overlay current registry state onto the immutable allocation snapshot."""
+        endpoint = unit.get("wireguard_endpoint")
+        endpoint_id = endpoint.get("id") if isinstance(endpoint, dict) else None
+        if not endpoint_id:
+            return unit
+
+        try:
+            registration = WireGuardEndpointRegistry(
+                env_dict=self.env_dict,
+                db=self.db,
+                log_name=self.log_name,
+            ).get(endpoint_id)
+            if registration.unit_id != unit.get("id"):
+                self.logger.error(
+                    f"WireGuard endpoint {endpoint_id} is linked to the wrong Unit",
+                    unit_id=unit.get("id"),
+                )
+                hydrated = dict(unit)
+                hydrated["wireguard_endpoint"] = None
+                return hydrated
+            hydrated = dict(unit)
+            hydrated["wireguard_endpoint"] = registration.public_endpoint().model_dump()
+            return hydrated
+        except (NotFound, ValidationError) as error:
+            self.logger.warning(
+                f"Could not hydrate WireGuard endpoint {endpoint_id}: {error}",
+                unit_id=unit.get("id"),
+            )
+            # Never fall back to the immutable allocation snapshot. Once its
+            # tombstone is purged, the same five-digit ID may legitimately
+            # belong to a different Unit.
+            hydrated = dict(unit)
+            hydrated["wireguard_endpoint"] = None
+            return hydrated
+
     def get_all_data(
         self,
-        build_id: str
+        build_id: str,
+        requester: AgogeUser,
     ) -> dict:
         unit = self.get(build_id)
+        self._require_instructor_access(unit, requester)
         try:
             workouts = self.list_workouts(build_id)
         except NotFound:
             workouts = []
         roster = self.get_unit_roster_size(children=workouts)
         return {'unit': unit, 'workouts': workouts, 'roster': roster}
+
+    @staticmethod
+    def _require_instructor_access(unit: UnitModel | dict, requester: AgogeUser) -> None:
+        """Limit instructor-only Unit details to assigned instructors and admins."""
+        if requester.is_admin:
+            return
+        instructor_ids = (
+            unit.get('instructor_id', [])
+            if isinstance(unit, dict)
+            else unit.instructor_id
+        )
+        if isinstance(instructor_ids, str):
+            instructor_ids = [instructor_ids]
+        if requester.email not in (instructor_ids or []):
+            raise Unauthorized(
+                message="Requesting user is not authorized to view this Unit"
+            )
 
     def list(
         self,
@@ -201,6 +259,7 @@ class Unit:
             )
             unit.build_type = build_spec.get('build_type', BuildConstants.BuildType.UNIT.value)
             unit.instructor_id = [requester.email]
+            endpoint_registry = self._allocate_wireguard_endpoint(unit)
 
             lms_integration = data.get('lms_integration', None)
             try:
@@ -208,17 +267,29 @@ class Unit:
                     build_spec = self._lms_integrate(requester=requester, build_spec=unit, data=data)
                     self.commit(build_spec)
                 else:
-                    self.commit(unit, publish=False)
+                    # Solo Units are provisioned lazily with each Workout. A
+                    # Community Unit must create its shared VPC and servers now.
+                    self.commit(
+                        unit,
+                        publish=unit.unit_type == BuildConstants.UnitType.COMMUNITY,
+                    )
                 return unit_id
             except (AgogeValidationError, ValidationError) as e:
+                self._cancel_uncommitted_wireguard_endpoint(unit, endpoint_registry)
                 self.logger.error(
                     message=str(e),
-                    specification_id=build_spec.id,
+                    specification_id=unit.id,
 
                 )
+                unit_name = unit.summary.name if unit.summary else unit.id
                 error_message = (f'Validation errors occurred processing selected specification: '
-                                 f'{build_spec.summary.name}')
+                                 f'{unit_name}')
                 raise BadRequest(error_message)
+            except Exception:
+                # If commit completed but Pub/Sub failed, the Unit lookup keeps
+                # the endpoint. Otherwise remove the orphaned reservation.
+                self._cancel_uncommitted_wireguard_endpoint(unit, endpoint_registry)
+                raise
         else:
             raise BadRequest('Missing or invalid data')
 
@@ -590,6 +661,79 @@ class Unit:
                 action=str(PubSub.Actions.BUILD.value),
                 course_object=str(PubSub.CourseObjects.UNIT.value),
                 build_id=(str(build_spec.id))
+            )
+
+    def _allocate_wireguard_endpoint(
+        self,
+        unit: UnitModel,
+    ) -> WireGuardEndpointRegistry | None:
+        """Decorate a community Unit and its one gateway with runtime endpoint data."""
+        if unit.unit_type != BuildConstants.UnitType.COMMUNITY:
+            return None
+
+        gateways = [server for server in unit.servers or [] if server.wireguard_gateway]
+        if not gateways:
+            return None
+        if len(gateways) != 1:
+            raise BadRequest("A community Unit can have only one WireGuard gateway")
+
+        gateway = gateways[0]
+        public_nic = next(
+            (nic for nic in gateway.nics or [] if nic.external_nat),
+            None,
+        )
+        if public_nic is None:
+            raise BadRequest("The WireGuard gateway requires an external NAT interface")
+
+        # A logical name is portable in Catalog specifications. Compute managers
+        # prefix it with the Unit ID to obtain the actual reserved address name.
+        if not public_nic.external_ip_name:
+            public_nic.external_ip_name = "wireguard-ip"
+        external_ip_name = public_nic.external_ip_name
+        if not external_ip_name.startswith(f"{unit.id}-"):
+            external_ip_name = f"{unit.id}-{external_ip_name}"
+        if not re.fullmatch(
+            r"[a-z](?:[-a-z0-9]{0,61}[a-z0-9])?",
+            external_ip_name,
+        ):
+            raise BadRequest(
+                "The final WireGuard external address name must be a 1-63 character "
+                "lowercase Google Compute Engine resource name"
+            )
+
+        server_name = f"{unit.id}-{gateway.name}"
+        registry = WireGuardEndpointRegistry(
+            env_dict=self.env_dict,
+            db=self.db,
+            log_name=self.log_name,
+        )
+        endpoint = registry.allocate(
+            unit_id=unit.id,
+            server_name=server_name,
+            external_ip_name=external_ip_name,
+            expires=unit.workspace_settings.expires if unit.workspace_settings else None,
+        )
+        gateway.wireguard_endpoint_id = endpoint.id
+        unit.wireguard_endpoint = endpoint
+        return registry
+
+    def _cancel_uncommitted_wireguard_endpoint(
+        self,
+        unit: UnitModel,
+        registry: WireGuardEndpointRegistry | None,
+    ) -> None:
+        """Compensate for validation failures before a Unit document is saved."""
+        endpoint = unit.wireguard_endpoint
+        if not registry or not endpoint:
+            return
+        try:
+            if self.db.get(collection_name=self.collection, doc_id=unit.id):
+                return
+            registry.cancel_reservation(endpoint.id, unit_id=unit.id)
+        except Exception as error:
+            self.logger.warning(
+                f"Could not cancel WireGuard endpoint {endpoint.id}: {error}",
+                unit_id=unit.id,
             )
 
     @staticmethod

@@ -2,7 +2,7 @@ import {ErrorOutline} from "@mui/icons-material";
 import Cancel from "@mui/icons-material/Cancel";
 import SaveIcon from "@mui/icons-material/Save";
 import {LoadingButton} from "@mui/lab";
-import {Box, Container, Paper, Stack, Typography} from "@mui/material";
+import {Box, Container, Paper, Stack, Typography, CircularProgress} from "@mui/material";
 import Alert from "@mui/material/Alert";
 import Button from "@mui/material/Button";
 import {useTheme} from "@mui/material/styles";
@@ -10,7 +10,7 @@ import {useModal} from "mui-modal-provider";
 import React, {useEffect, useState} from "react";
 import {useNavigate, useParams} from "react-router-dom";
 
-import {URL_TEACHER_SERVERS} from "../../../../../router/urls";
+import {URL_TEACHER_SERVERS, URL_TEACHER_SERVERS_EDITOR} from "../../../../../router/urls";
 import {AgogeImage} from "../../../../../services/Server/image.model";
 import {imageService} from "../../../../../services/Server/image.service";
 import {serverService} from "../../../../../services/Server/server.service";
@@ -22,6 +22,8 @@ import ServerValidationDialog from "../ServerValidationDialog";
 import {HumanInteractionForm} from "./HumanInteractionForm";
 import {ServerDetailsForm} from "./ServerDetailsForm";
 import {useHumanInteractionForm} from "./useHumanInteractionForm";
+import {SharedImageCopyDialog} from '../../SharedImageCopyDialog';
+import {SharedImageWarningDialog} from '../../SharedImageWarningDialog';
 
 
 interface MessageProps {
@@ -39,7 +41,7 @@ const initialForm: IServerForm = {
 };
 
 
-export const ServerEditorForm: React.FC = () => {
+const ServerEditor: React.FC = () => {
     const theme = useTheme();
     const {showModal} = useModal();
     const navigate = useNavigate();
@@ -58,6 +60,9 @@ export const ServerEditorForm: React.FC = () => {
     const hInteractionsForm = useHumanInteractionForm({initialize: false});
     const [formErrors, setFormErrors] = useState<string>("");
     const [openErrorDialog, setOpenErrorDialog] = useState<boolean>(false);
+    const [copyOpen, setCopyOpen] = useState(false);
+    const [sharedEditAcknowledged, setSharedEditAcknowledged] = useState(false);
+    const [sharedWarning, setSharedWarning] = useState<'edit' | 'save' | null>(null);
 
     useEffect(() => {
         if (!initialized) manageSnackbar({message: "Loading image details ..."});
@@ -130,9 +135,14 @@ export const ServerEditorForm: React.FC = () => {
         setImageForm(image);
     }
 
-    const handleSave = async () => {
+    const handleSave = async (sharedSaveConfirmed = false) => {
+        if (!image.data || (image.data.is_shared && (!image.data.can_edit_shared || !sharedEditAcknowledged))) return;
         if (hInteractionsForm.isEmpty()) {
             setFormErrors("Servers must have at least one human interaction configured.");
+            return;
+        }
+        if (image.data.is_shared && !sharedSaveConfirmed) {
+            setSharedWarning('save');
             return;
         }
         setIsLoading(true);
@@ -142,7 +152,8 @@ export const ServerEditorForm: React.FC = () => {
             'labels': imageForm[IFormKeys.TAGS],
             'machine_type': imageForm[IFormKeys.MACHINE_TYPE],
             'disk_size': imageForm[IFormKeys.DISK_SIZE],
-            'human_interaction': hInteractionsForm.render()
+            'human_interaction': hInteractionsForm.render(),
+            'shared_edit_confirmed': image.data.is_shared && sharedSaveConfirmed,
         }
 
         manageSnackbar({message: "Updating image details ..."});
@@ -159,16 +170,67 @@ export const ServerEditorForm: React.FC = () => {
                 setFormErrors(err.message);
             }).finally(() => {
                 setIsLoading(false);
+                setSharedWarning(null);
             });
     }
 
     const handleCancel = () => navigate(URL_TEACHER_SERVERS);
+
+    if (image.pending || !image.data) {
+        return (
+            <Container sx={{mt: theme.spacing(9)}}>
+                {image.pending ? <CircularProgress aria-label="Loading image details" /> : <Alert severity="error">Could not load image details. Return to Manage Servers and try again.</Alert>}
+                <Button onClick={handleCancel}>Back to Manage Servers</Button>
+            </Container>
+        );
+    }
+
+    if (image.data.is_shared && (!image.data.can_edit_shared || !sharedEditAcknowledged)) {
+        return (
+            <Container sx={{mt: theme.spacing(9)}}>
+                <Paper sx={{p: 3}}>
+                    <Stack spacing={2}>
+                        <Typography variant="h5" component="h1">{image.data.name}</Typography>
+                        <Alert severity="info">
+                            This server image is shared across multiple sites and applications.
+                            {' '}Only administrators can edit it directly. Create a copy for this site to customize it under a new name.
+                        </Alert>
+                        <Stack direction="row" spacing={2}>
+                            <Button onClick={handleCancel}>Back to Manage Servers</Button>
+                            <Button variant="contained" onClick={() => setCopyOpen(true)}>Copy for this site and edit</Button>
+                            {image.data.can_edit_shared && <Button color="warning" variant="outlined" onClick={() => setSharedWarning('edit')}>Edit shared image</Button>}
+                        </Stack>
+                    </Stack>
+                </Paper>
+                <SharedImageCopyDialog
+                    image={copyOpen ? image.data : null}
+                    onClose={() => setCopyOpen(false)}
+                    onCopied={(localImage) => navigate(`${URL_TEACHER_SERVERS_EDITOR}/${localImage.name}`, {replace: true})}
+                />
+                <SharedImageWarningDialog
+                    open={sharedWarning === 'edit'}
+                    imageName={image.data.name}
+                    action="edit"
+                    onClose={() => setSharedWarning(null)}
+                    onConfirm={() => {
+                        if (!image.data?.can_edit_shared) return;
+                        setSharedEditAcknowledged(true);
+                        setSharedWarning(null);
+                    }}
+                />
+            </Container>
+        );
+    }
 
     return (
         <>
             <Container sx={{ width: "80%", overflow: "hidden", mt: theme.spacing(9) }}>
                 <Paper elevation={1} square={false} sx={{ width: "100%", paddingY: theme.spacing(1) }}>
                     <Stack sx={{ padding: theme.spacing(2), overflowY: "auto" }}>
+                        {image.data.is_shared && <Alert severity="warning" sx={{mb: 2}}>
+                            <strong>This image is shared across sites.</strong> Checking in server changes updates the image used by other sites and applications.
+                            {' '}The template settings below apply to this site.
+                        </Alert>}
                         <Stack direction={"row"} alignItems={"center"} justifyContent={"space-between"}>
                             <Stack gap={1} direction={"row"} alignItems={"center"}>
                                 <Typography variant={"h5"} component={"h1"}>Edit {image_id} </Typography>
@@ -234,7 +296,7 @@ export const ServerEditorForm: React.FC = () => {
                                     Cancel
                                 </LoadingButton>
                                 <LoadingButton
-                                    onClick={handleSave}
+                                    onClick={() => handleSave()}
                                     variant="contained"
                                     color="primary"
                                     startIcon={<SaveIcon />}
@@ -258,6 +320,20 @@ export const ServerEditorForm: React.FC = () => {
                     </Stack>
                 </Paper>
             </Container>
+            <SharedImageWarningDialog
+                open={sharedWarning === 'save'}
+                imageName={image.data.name}
+                action="save"
+                onClose={() => setSharedWarning(null)}
+                onConfirm={() => handleSave(true)}
+                loading={isLoading}
+            />
         </>
     )
 }
+
+// A newly copied image needs fresh form state even when only the route ID changes.
+export const ServerEditorForm: React.FC = () => {
+    const {image_id} = useParams<{image_id: string}>();
+    return <ServerEditor key={image_id} />;
+};

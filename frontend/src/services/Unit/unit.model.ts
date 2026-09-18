@@ -17,6 +17,17 @@ export interface Unit {
     creation_timestamp: number;
     lms_integration?: Dictionary;
     rubric_support?: boolean;
+    wireguard_endpoint?: WireGuardEndpoint | null;
+}
+
+export interface WireGuardEndpoint {
+    id: string;
+    hostname: string;
+    server_name: string;
+    port: number;
+    external_ip_name?: string | null;
+    public_ip?: string | null;
+    status: "reserved" | "active" | "releasing" | "released" | "error";
 }
 
 export interface UnitSummary extends Partial<Unit> {

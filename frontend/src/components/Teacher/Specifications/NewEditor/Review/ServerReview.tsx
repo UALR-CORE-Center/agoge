@@ -26,7 +26,7 @@ interface Props extends ReviewCommonChildrenProps {
 const ServerReview: React.FC<Props> = ({ specification, loading, elevation, onNavigateToStep, includeHeader = true, styles={},}) => {
     const theme = useTheme();
 
-    const serverImage = (image) => {
+    const serverImage = (image: any) => {
         if (!!image && typeof image == "object") {
             return image.value;
         }
@@ -99,6 +99,41 @@ const ServerReview: React.FC<Props> = ({ specification, loading, elevation, onNa
                                         <ReviewItemKeyWrapper>Machine Type</ReviewItemKeyWrapper>
                                         <ReviewItemValueOrSkeleton
                                             value={server.machine_type}
+                                            loading={loading}/>
+                                    </NestedReviewListItem>
+
+                                    <NestedReviewListItem>
+                                        <ReviewItemKeyWrapper>Community Server</ReviewItemKeyWrapper>
+                                        <ReviewItemValueOrSkeleton
+                                            value={server.community_server ? 'Yes' : 'No'}
+                                            loading={loading}/>
+                                    </NestedReviewListItem>
+
+                                    <NestedReviewListItem>
+                                        <ReviewItemKeyWrapper>WireGuard Gateway</ReviewItemKeyWrapper>
+                                        <ReviewItemValueOrSkeleton
+                                            value={server.wireguard_gateway ? 'Yes' : 'No'}
+                                            loading={loading}/>
+                                    </NestedReviewListItem>
+
+                                    <NestedReviewListItem>
+                                        <ReviewItemKeyWrapper>IP Forwarding</ReviewItemKeyWrapper>
+                                        <ReviewItemValueOrSkeleton
+                                            value={server.can_ip_forward ? 'Enabled' : 'Disabled'}
+                                            loading={loading}/>
+                                    </NestedReviewListItem>
+
+                                    <NestedReviewListItem>
+                                        <ReviewItemKeyWrapper>Network Tags</ReviewItemKeyWrapper>
+                                        <ReviewItemValueOrSkeleton
+                                            value={<ChipListView values={server.tags?.length ? server.tags : ['No Tags']}/>}
+                                            loading={loading}/>
+                                    </NestedReviewListItem>
+
+                                    <NestedReviewListItem>
+                                        <ReviewItemKeyWrapper>Static Routes</ReviewItemKeyWrapper>
+                                        <ReviewItemValueOrSkeleton
+                                            value={server.routes?.length ? JSON.stringify(server.routes) : 'None'}
                                             loading={loading}/>
                                     </NestedReviewListItem>
 

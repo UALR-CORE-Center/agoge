@@ -106,12 +106,13 @@ export const SettingsField: React.FC<Props> = (props) => {
                     />
                 );
             } else if (inputType === "number") {
+                const isWireGuardPort = name === 'wireguard_port';
                 return (
                     <NumberInputField
-                        min={10}
-                        max={300}
+                        min={isWireGuardPort ? 1 : 10}
+                        max={isWireGuardPort ? 65535 : 1000}
                         onChange={handleLocalChange}
-                        value={editValue ?? 10}
+                        value={editValue ?? (isWireGuardPort ? 51820 : 10)}
                         size={"small"}
                     />
                 );
@@ -171,6 +172,12 @@ export const SettingsField: React.FC<Props> = (props) => {
             return <Typography variant={"subtitle1"} color={"textDisabled"}>Storage bucket for build specifications</Typography>;
         } else if (name == 'student_workout_firewall') {
             return <Typography variant={"subtitle1"}color={"textDisabled"}>Whether IP-based student workout firewall is enabled</Typography>
+        } else if (name == 'wireguard_dns_prefix') {
+            return <Typography variant={"subtitle1"} color={"textDisabled"}>DNS label prefix used for WireGuard endpoints. The GCP project ID is added automatically to keep shared parent zones collision-free. Defaults to wg.</Typography>
+        } else if (name == 'wireguard_dns_suffix') {
+            return <Typography variant={"subtitle1"} color={"textDisabled"}>Public DNS suffix used for WireGuard gateways. Defaults to the parent DNS suffix.</Typography>
+        } else if (name == 'wireguard_port') {
+            return <Typography variant={"subtitle1"} color={"textDisabled"}>Public UDP listener port advertised for WireGuard gateways. Defaults to 51820.</Typography>
         }
     }
 

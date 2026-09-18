@@ -63,3 +63,5 @@ class DbCollections(str, Enum):
     LLM_AGENT = 'llm_agent'
     RUBRIC = 'rubric'
     PROJECT_INFO = 'project-info'
+    WIREGUARD_ENDPOINT = 'wireguard-endpoint'
+    WIREGUARD_ENDPOINT_CLAIM = 'wireguard-endpoint-claim'

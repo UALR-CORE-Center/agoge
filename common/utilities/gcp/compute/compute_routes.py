@@ -127,7 +127,7 @@ class ComputeRoutesAPI(BaseComputeAPI):
         request = DeleteRouteRequest(project=project, route=resource_name)
         return self._make_request(
             client_request=client.delete,
-            resource_name=resource_name,
+            resource=resource_name,
             action='delete',
             wait=wait,
             request=request,
