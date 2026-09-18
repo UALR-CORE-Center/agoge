@@ -185,6 +185,7 @@ export interface Summary {
 
 export interface SpecificationEdit {
     assessment?: Assessment,
+    rubric_support?: boolean;
     lms_quiz?: LMSQuiz;
 
     build_type: string;

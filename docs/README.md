@@ -11,6 +11,8 @@ Agoge documentation is organized by audience. These pages describe the current i
 
 ## Project documentation
 
+- [Register existing GCP server images](operations/import-server-images.md)
+- [Optional rubric support and troubleshooting](troubleshooting/rubric-generation.md)
 - [Project overview and deployment](../README.md)
 - [Shared project setup and API secrets](operations/shared-project-setup.md)
 - [Firebase authentication setup and troubleshooting](operations/firebase-authentication.md)

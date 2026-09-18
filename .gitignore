@@ -41,3 +41,6 @@ frontend/.env*
 venv
 *.log
 api/.env.bak
+CLAUDE.md
+.vscode/
+bugReport.md

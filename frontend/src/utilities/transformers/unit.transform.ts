@@ -6,6 +6,7 @@ export const transformToUnit = (data: any): Unit => {
     return {
         id: data.id,
         assessment: data.assessment,
+        rubric_support: data.rubric_support === true,
         build_type: data.build_type,
         creation_timestamp: data.creation_timestamp,
         firewall_rules: data.firewall_rules,
@@ -49,11 +50,10 @@ export const transformToUnitRoster = (data:any): UnitRoster =>{
 };
 
 export const transformToFullUnit = (data: any): UnitFull => {
-    const { unit, workouts, roster, rubric_support } = data;
+    const { unit, workouts, roster } = data;
     return {
         ...transformToUnit(unit),
         workouts: workouts.map(transformToWorkout),
         roster: Number(roster),
-        rubric_support: rubric_support
     };
 };

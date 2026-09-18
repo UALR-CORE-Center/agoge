@@ -243,6 +243,7 @@ export interface Unit {
     firewalls?: Firewall[];
     firewall_rules?: FirewallRule[];
     assessment?: Assessment;
+    rubric_support?: boolean;
     lms_integration?: LMSIntegration;
     escape_room?: EscapeRoom;
     test?: boolean;
