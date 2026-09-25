@@ -119,6 +119,10 @@ class BuildConstants:
         VERY_LARGE = 4
         ROUTER = 5
 
+    # Upper bound on the machine types offered by the API and accepted by the build path.
+    # Must stay >= the largest option in the server creator UI (currently 32GB).
+    MAX_MACHINE_TYPE_MEMORY_MB = 32768
+
     class GoogleMachineTypes(Enum):
         E2_MICRO = 'e2-micro'
         E2_MEDIUM = 'e2-medium'
@@ -130,13 +134,15 @@ class BuildConstants:
         N1_STANDARD_4 = 'n1-standard-4'
         N2_STANDARD_2 = 'n2-standard-2'
         N2_STANDARD_4 = 'n2-standard-4'
+        N2_STANDARD_8 = 'n2-standard-8'
 
         ALL = [
             E2_MICRO, E2_MEDIUM,
             E2_STANDARD_2, E2_STANDARD_4,
             E2_STANDARD_8, N1_STANDARD_1,
             N1_STANDARD_2, N1_STANDARD_4,
-            N2_STANDARD_2, N2_STANDARD_4
+            N2_STANDARD_2, N2_STANDARD_4,
+            N2_STANDARD_8
         ]
 
     class MachineImages:

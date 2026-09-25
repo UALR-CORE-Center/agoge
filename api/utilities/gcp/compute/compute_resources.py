@@ -3,6 +3,7 @@ from googleapiclient import discovery
 from google.cloud import compute_v1
 from typing import List, Union
 
+from common.constants.build_constants import BuildConstants
 from common.constants.database import DbCollections, DATABASE_NAME, DatabaseTypes
 from common.document_database import DocumentDatabaseFactory
 from common.models.google import MachineTypeModel
@@ -12,6 +13,7 @@ from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 
 class ComputeResources:
     ALLOWED_M_TYPES = ["n1", "n2", "e2"]
+    MAX_MEMORY_MB = BuildConstants.MAX_MACHINE_TYPE_MEMORY_MB
     IGNORE = {
         'guacamole-ssl',
         'image-cyberarena-labentry-ssl',
@@ -94,7 +96,7 @@ class ComputeResources:
     ) -> Union[MachineTypeModel, None]:
         name = request.name
         if (name.split("-")[0] in self.ALLOWED_M_TYPES
-                and request.memory_mb <= 17000):
+                and request.memory_mb <= self.MAX_MEMORY_MB):
             return MachineTypeModel(
                 id=name,
                 name=name,

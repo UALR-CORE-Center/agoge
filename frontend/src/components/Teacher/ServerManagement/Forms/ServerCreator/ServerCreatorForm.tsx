@@ -296,11 +296,11 @@ const ServerCreatorForm: React.FC = () => {
                                 To learn more about machine types, refer to official documentation here:
                                 <Link
                                     marginLeft={1}
-                                    href="https://cloud.google.com/compute/docs/general-purpose-machines#e2_machine_types_table"
+                                    href="https://cloud.google.com/compute/docs/general-purpose-machines"
                                     target="_blank"
                                     color={"inherit"}
                                 >
-                                    Google Cloud Docs: E2 Machine Types
+                                    Google Cloud Docs: General-Purpose Machine Types
                                 </Link>.
                             </Typography>
                         </FormControl>

@@ -143,7 +143,7 @@ class ComputeMachineTypesAPI(BaseComputeAPI):
     ) -> Union[MachineTypeModel, None]:
         name = m_type.name
         if (name.split("-")[0] in self.ALLOWED_GOOGLE_MACHINE_TYPES
-                and m_type.memory_mb <= 17000):
+                and m_type.memory_mb <= self.MAX_MACHINE_TYPE_MEMORY_MB):
             return MachineTypeModel(
                 id=name,
                 name=name,

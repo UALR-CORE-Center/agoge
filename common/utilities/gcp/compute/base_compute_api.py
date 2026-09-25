@@ -25,6 +25,7 @@ class BaseComputeAPI:
     """
 
     ALLOWED_GOOGLE_MACHINE_TYPES = ["n1", "n2", "e2"]
+    MAX_MACHINE_TYPE_MEMORY_MB = BuildConstants.MAX_MACHINE_TYPE_MEMORY_MB
     GOOGLE_MACHINE_TYPES = BuildConstants.GoogleMachineTypes.ALL.value
     SOURCE_IMAGE_PROJECT = "ualr-cybersecurity"
     INITIAL_TIMESTAMP = '2000-01-01T00:00:00.000'

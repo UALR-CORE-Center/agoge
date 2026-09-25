@@ -16,6 +16,7 @@ const machineTypes = [
     { value: 'e2-standard-2', description: 'e2-standard-2 - 2vCPU, 8GB Memory' },
     { value: 'e2-standard-4', description: ' e2-standard-4 - 4vCPU, 16GB Memory' },
     { value: 'e2-standard-8', description: 'e2-standard-8 - 8vCPU, 32GB Memory' },
+    { value: 'n2-standard-8', description: 'n2-standard-8 - 8vCPU, 32GB Memory' },
 ];
 
 const MachineTypeSelector: React.FC<MachineTypeSelectorProps> = (
