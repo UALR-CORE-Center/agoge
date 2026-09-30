@@ -52,15 +52,25 @@ Debian's `libvirt-daemon-driver-secret` package generates `/var/lib/libvirt/secr
 
 Capturing an image after that point bakes in a key sealed to the build VM's vTPM. Every clone inherits the file, the condition skips regeneration, and `libvirtd` can never decrypt it.
 
-### Preparing the image
+### What Agoge does about it
 
-Delete the key before capturing the image, as part of the same pass that clears machine-specific state:
+Checking a Linux template server out installs a small unit, `libvirt-secret-key-heal.service`, whose job is to make this self-correcting. It is ordered ahead of `virt-secret-init-encryption.service` and `libvirtd.service`, and on each boot it tries to decrypt the existing key. A key it can decrypt is left alone; one it cannot is deleted, so the stock generator makes a new one sealed to the current TPM. It always exits 0, so it can never be the reason a lab server fails to boot, and it is guarded on libvirt's secret driver being installed, so it is inert on the images that never run a hypervisor in the guest.
+
+This is installed at check-out rather than check-in because `create_production_image` stops the server before it snapshots — by check-in time nothing can run in the guest. See `ImageHygieneStartupScript`.
+
+An image that predates this carries no such unit. Those need either a re-capture or the manual repair below.
+
+### Preparing the image by hand
+
+If you are building an image outside the check-out flow, delete the key before capturing, as part of the same pass that clears machine-specific state:
 
 ```bash
 sudo rm -f /var/lib/libvirt/secrets/secrets-encryption-key
 ```
 
 `virt-secret-init-encryption.service` then regenerates it on each new VM's first boot, sealed to that VM's own TPM.
+
+A convenient way to do this without an interactive session is to boot a VM from the image with a startup script that removes the key and then runs `shutdown -h now`, and capture the image from that disk once the instance reports `TERMINATED`.
 
 ### Repairing a running server
 

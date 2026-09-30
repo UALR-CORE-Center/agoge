@@ -18,6 +18,7 @@ from common.utilities.gcp.compute.resources.image_resource import ImageResource
 
 from cloud_fn_utilities.gcp.dns_manager import DnsManager
 from cloud_fn_utilities.server_specific.agoge_user_startup_script import AgogeUserStartupScript, MetadataKey
+from cloud_fn_utilities.server_specific.image_hygiene_startup_script import ImageHygieneStartupScript
 
 from .base_compute_manager import BaseComputeManager
 from .snapshot_manager import SnapshotManager
@@ -472,6 +473,12 @@ class ImageTemplateManager(BaseComputeManager):
                 script.extend(startup_script.get_windows_script())
             elif script_key == MetadataKey.LINUX:
                 script.extend(startup_script.get_unix_script())
+
+        # Runs last, so a failure here cannot stop the connection accounts from being created.
+        # This is what keeps the image the instructor checks in safe to clone; see
+        # ImageHygieneStartupScript for why it cannot be done at check-in instead.
+        if script_key == MetadataKey.LINUX:
+            script.extend(ImageHygieneStartupScript.get_unix_script())
 
         if script:
             return script_key, "\n".join(script)
