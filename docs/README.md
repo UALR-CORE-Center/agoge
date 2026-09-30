@@ -13,6 +13,7 @@ Agoge documentation is organized by audience. These pages describe the current i
 
 - [Register existing GCP server images](operations/import-server-images.md)
 - [Optional rubric support and troubleshooting](troubleshooting/rubric-generation.md)
+- [Labs that run their own virtual machines](troubleshooting/nested-virtualization.md)
 - [Project overview and deployment](../README.md)
 - [Contributing](../CONTRIBUTING.md)
 - [Security policy](../SECURITY.md)

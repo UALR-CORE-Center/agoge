@@ -59,6 +59,7 @@ export interface Server {
     sshkey?: string;
     can_ip_forward?: boolean;
     min_cpu_platform?: string;
+    nested_virtualization?: boolean;
     nics?: Nic[];
     human_interaction?: HumanInteraction[];
     community_server?: boolean;

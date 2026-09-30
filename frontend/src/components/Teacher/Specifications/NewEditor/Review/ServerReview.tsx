@@ -103,6 +103,13 @@ const ServerReview: React.FC<Props> = ({ specification, loading, elevation, onNa
                                     </NestedReviewListItem>
 
                                     <NestedReviewListItem>
+                                        <ReviewItemKeyWrapper>Nested Virtualization</ReviewItemKeyWrapper>
+                                        <ReviewItemValueOrSkeleton
+                                            value={server.nested_virtualization ? 'Enabled' : 'Disabled'}
+                                            loading={loading}/>
+                                    </NestedReviewListItem>
+
+                                    <NestedReviewListItem>
                                         <ReviewItemKeyWrapper>Nics</ReviewItemKeyWrapper>
                                         <ReviewItemValueOrSkeleton
                                             value={JSON.stringify(server.nics)}

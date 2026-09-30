@@ -14,6 +14,7 @@ export enum ServerFormKeys {
     serverNicIpAliases,
     serverNicEnableExternalNat,
     serverEnableDirectConnections,
+    serverSettingNestedVirtualization,
 }
 
 
@@ -38,6 +39,7 @@ export interface IServerForm {
     [ServerFormKeys.serverSettingsDiskSizeGb]: IServerFormField;
     [ServerFormKeys.serverSettingsMachineType]: IServerFormField;
     [ServerFormKeys.serverSettingDeny]: IServerFormField;
+    [ServerFormKeys.serverSettingNestedVirtualization]: IServerFormField;
     [ServerFormKeys.serverNetworks]: IServerFormNetworks[];
 }
 

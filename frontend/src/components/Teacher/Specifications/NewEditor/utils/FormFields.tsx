@@ -532,9 +532,9 @@ export const FormCheckBox = (props: IFormCheckBoxProps) => {
                 }
             />
             {
-                props.helpText &&
-                <FormHelperText>
-                    {props.helpText}
+                (field.error || props.helpText) &&
+                <FormHelperText error={!!field.error}>
+                    {field.error || props.helpText}
                 </FormHelperText>
             }
         </FormControl>

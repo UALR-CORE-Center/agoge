@@ -44,6 +44,20 @@ class ServersValidator:
                                            f"\n\t- Starts with a lowercase letter"
                                            f"\n\t- Followed by up to 62 lowercase letters, numbers or hyphens"
                                            f"\n\t- Cannot end with a hyphen")
+
+            # Catch this here rather than at build time. Google refuses the flag on E2, and a server
+            # that quietly builds without /dev/kvm looks healthy right up until the lab is run.
+            nested_virtualization = (
+                server.get('nested_virtualization', False)
+                or any(nic.get('ip_aliases') for nic in server['nics'])
+            )
+            machine_type = server.get('machine_type')
+            if nested_virtualization and not BuildConstants.NestedVirtualization.is_supported(machine_type):
+                raise AgogeValidationError(
+                    f"{server['name']} requests nested virtualization, which machine type "
+                    f"{machine_type or '(unset)'} does not support. Choose an n1 or n2 machine type."
+                )
+
             for nic in server['nics']:
                 network_name = nic['network']
                 ip = nic['internal_ip']

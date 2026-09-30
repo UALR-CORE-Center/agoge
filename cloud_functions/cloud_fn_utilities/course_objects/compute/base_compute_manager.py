@@ -67,6 +67,7 @@ class BaseComputeManager:
         hostname: Optional[str] = None
         human_interaction: Optional[list[dict]] = None
         machine_image: Optional[str] = None
+        nested_virtualization: bool = False
         network_interfaces: Optional[list] = None
         os: Optional[str] = None
         service_accounts: Optional[list] = None
@@ -202,6 +203,7 @@ class BaseComputeManager:
         self.server_spec.ssh_keys = []  # SSH keys are stripped from the server before being used for the workout
         self.server_spec.metadata = server_spec.get('metadata', None)
         self.server_spec.min_cpu_platform = server_spec.get('min_cpu_platform', None)
+        self.server_spec.nested_virtualization = bool(server_spec.get('nested_virtualization', False))
         self.server_spec.network_prefix = network_prefix if network_prefix else server_spec['parent_id']
         self.server_spec.nics = server_spec.get('nics', [])
         self.server_spec.parent_build_type = server_spec.get('parent_build_type', None)
@@ -241,6 +243,7 @@ class BaseComputeManager:
         )
         self.server_spec.metadata = server_spec.get('metadata', None)
         self.server_spec.min_cpu_platform = server_spec.get('min_cpu_platform', None)
+        self.server_spec.nested_virtualization = bool(server_spec.get('nested_virtualization', False))
         self.server_spec.nics = server_spec.get('nics', [])
         self.server_spec.network_prefix = None
         self.server_spec.os = server_spec.get('os')
@@ -259,21 +262,29 @@ class BaseComputeManager:
         self._add_nics()
 
         advanced_machine_features = None
-        min_cpu_platform = None
         machine_type = self._lookup_machine_type(self.server_spec.machine_type)
         service_account = self.server_spec.service_accounts or self.compute_instance.SERVICE_ACCOUNT_CONFIG
         tags = {'items': self.server_spec.tags} if self.server_spec.tags else {'items': []}
 
-        if self.server_spec.min_cpu_platform and self.server_spec.min_cpu_platform != "":
-            min_cpu_platform = self.server_spec.min_cpu_platform
-        if self.ip_aliases:
+        min_cpu_platform = self.server_spec.min_cpu_platform or None
+
+        # ip_aliases has always turned nested virtualization on as a side effect. nested_virtualization
+        # now asks for it outright, so a lab that runs its own hypervisor no longer has to invent alias
+        # addresses it never uses. Check the resolved machine type, not the requested one: an
+        # unrecognized request silently falls back to e2-medium, which cannot do this at all.
+        if self.ip_aliases or self.server_spec.nested_virtualization:
+            if not BuildConstants.NestedVirtualization.is_supported(machine_type):
+                msg = (f'{self.class_name}:{self.server_name} - Nested virtualization was requested, but machine '
+                       f'type {machine_type} does not support it. Use an n1 or n2 machine type.')
+                self.logger.error(msg)
+                self.state_manager.state_transition(self.s.BROKEN)
+                raise BadRequest(msg)
+
             advanced_machine_features = {"enable_nested_virtualization": True}
-            if self.server_spec.min_cpu_platform is None:
-                machine_type_prefix = self.server_spec.machine_type[:2]
-                if machine_type_prefix == 'n1':
-                    self.server_spec.min_cpu_platform = "Intel Haswell"
-                elif machine_type_prefix == "n2":
-                    self.server_spec.min_cpu_platform = "Intel Cascade Lake"
+            # Note this assigns to the local. The previous version wrote the floor back onto
+            # server_spec, which had already been read above, so it never reached the instance.
+            if not min_cpu_platform:
+                min_cpu_platform = BuildConstants.NestedVirtualization.min_cpu_platform_for(machine_type)
 
         instance = (
             InstanceResource(zone=self.env.zone)

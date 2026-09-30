@@ -137,6 +137,7 @@ export interface Server {
     community_server?: boolean;
     deny_outbound?: boolean;
     disk_size?: number;
+    nested_virtualization?: boolean;
 }
 
 export interface WebApplication {

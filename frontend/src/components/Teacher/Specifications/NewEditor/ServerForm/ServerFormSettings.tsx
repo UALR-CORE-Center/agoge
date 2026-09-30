@@ -77,6 +77,22 @@ const ServerFormSettings: React.FC<Props> = ({serverForm, serverIndex, disableFo
                             'the server outwards. Does not block traffic directed towards attached local networks.'
                         }
                     />
+
+                    <FormCheckBox
+                        formKey={ServerFormKeys.serverSettingNestedVirtualization}
+                        fieldFn={(key) => serverForm.getField(key, serverIndex)}
+                        disabled={disableForm}
+                        onInputChange={(field, value) => {
+                            serverForm.handleServerValueChange(field, value, serverIndex)
+                        }}
+                        size={'small'}
+                        label={"Nested Virtualization"}
+                        helpText={
+                            'Exposes /dev/kvm so this server can run its own virtual machines, as labs that ' +
+                            'ship their own targets require. Needs an n1 or n2 machine type; E2 machines ' +
+                            'cannot provide it.'
+                        }
+                    />
                 </Box>
             </AccordionDetails>
         </Accordion>

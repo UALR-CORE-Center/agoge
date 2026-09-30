@@ -145,6 +145,32 @@ class BuildConstants:
             N2_STANDARD_8
         ]
 
+    class NestedVirtualization:
+        """Requirements for running a hypervisor (KVM) inside a lab server.
+
+        Google exposes /dev/kvm to a guest only when the instance is created with
+        advanced_machine_features.enable_nested_virtualization. The flag is not accepted at all on
+        the E2 family, so a spec that asks for nested virtualization on an E2 is rejected during
+        validation rather than building a VM that boots fine and then cannot start a single target.
+        """
+        # Machine family prefixes that accept the flag.
+        SUPPORTED_FAMILIES = ('n1', 'n2')
+
+        # N1 predates VMX exposure and can land on Sandy/Ivy Bridge, so it needs a floor. Every N2
+        # is Cascade Lake or newer, but state it anyway so the requirement survives a family change.
+        MIN_CPU_PLATFORM = {
+            'n1': 'Intel Haswell',
+            'n2': 'Intel Cascade Lake',
+        }
+
+        @classmethod
+        def is_supported(cls, machine_type: str) -> bool:
+            return bool(machine_type) and str(machine_type)[:2].lower() in cls.SUPPORTED_FAMILIES
+
+        @classmethod
+        def min_cpu_platform_for(cls, machine_type: str) -> str | None:
+            return cls.MIN_CPU_PLATFORM.get(str(machine_type)[:2].lower()) if machine_type else None
+
     class MachineImages:
         GUACAMOLE_SSL = "image-guac-{project}"
         FORTIMANAGER = "image-fortimanager"

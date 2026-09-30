@@ -415,6 +415,7 @@ class SpecEditManager(LabSpecBase):
                 'hidden': bool(server.get('hidden', False)),
                 'community_server': bool(server.get('community_server', False)),
                 'machine_type': processed_machine_type,
+                'nested_virtualization': bool(server.get('nested_virtualization', False)),
                 'details': {
                     "os": image.get('os'),
                     "description": image.get("description", "Agoge managed server"),

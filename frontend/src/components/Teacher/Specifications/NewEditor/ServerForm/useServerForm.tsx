@@ -88,6 +88,9 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
             [ServerFormKeys.serverSettingDeny]: {
                 ...createDefaultFormFieldMeta(server?.tags?.includes("deny-outbound") || false, [])
             },
+            [ServerFormKeys.serverSettingNestedVirtualization]: {
+                ...createDefaultFormFieldMeta(server?.nested_virtualization || false, [serverNestedVirtualizationValidator])
+            },
             [ServerFormKeys.serverNetworks]: []
         }
 
@@ -173,6 +176,16 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
             }
 
             validateFormField(key, copy[key], forms[idx], idx, -1);
+
+            // Nested virtualization is only legal on some machine types, so picking a new machine
+            // type can invalidate a box that was ticked while a different one was selected. Validate
+            // against `copy`, which already carries the new machine type.
+            if (key === ServerFormKeys.serverSettingsMachineType) {
+                const nestedKey = ServerFormKeys.serverSettingNestedVirtualization;
+                copy[nestedKey] = {...copy[nestedKey]};
+                validateFormField(nestedKey, copy[nestedKey], copy, idx, -1);
+            }
+
             copyOfForms[idx] = copy;
             setForms(copyOfForms)
         }
@@ -331,6 +344,21 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
         return null;
     }
 
+    const serverNestedVirtualizationValidator = (v: boolean, k: keyof IServerForm, form: IServerForm): string | null => {
+        if (!v) {
+            return null;
+        }
+
+        // Mirrors BuildConstants.NestedVirtualization.SUPPORTED_FAMILIES. Google refuses
+        // enable_nested_virtualization outright on the E2 family.
+        const machineType: string = form[ServerFormKeys.serverSettingsMachineType]?.value || '';
+        const supported = ['n1-', 'n2-'].some(family => machineType.startsWith(family));
+
+        return supported
+            ? null
+            : 'Nested virtualization requires an n1 or n2 machine type. E2 machines cannot provide /dev/kvm.';
+    }
+
     const requiredValidator = (value: any, k: keyof IServerForm, form: IServerForm, forms: IServerForm[], formIndex: number, nicIndex: number): string | null => {
         if (!(!!value)) {
             return 'Required';
@@ -451,6 +479,7 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
                 tags: image?.tags || [],
                 can_ip_forward: form[ServerFormKeys.serverSettingDeny].value,
                 machine_type: form[ServerFormKeys.serverSettingsMachineType].value || image?.machine_type,
+                nested_virtualization: form[ServerFormKeys.serverSettingNestedVirtualization].value,
                 human_interaction: image?.human_interaction ? image.human_interaction : [],
                 nics: [],
             };

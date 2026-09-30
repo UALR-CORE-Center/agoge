@@ -143,6 +143,7 @@ class ServerModel(BaseModel):
     startup_scripts: Optional[List[str]] = Field(default=None, description="Optional startup scripts to pass into server")  # TODO: Consider using this replace guacamole_startup_script
     min_cpu_platform: Optional[str] = Field(default="", description="Minimum CPU platform of the server")
     name: str = Field(..., description="Name of server.")
+    nested_virtualization: Optional[bool] = Field(default=False, description="Expose /dev/kvm so the server can run its own virtual machines. Requires an n1 or n2 machine type; the E2 family does not support it.")
     nics: Optional[List[NicModel]] = Field(default=None)
     parent_build_type: Optional[str] = Field(default=None, description="Build type of parent object (i.e. workout, unit, etc.).")
     parent_id: Optional[str] = Field(default=None, description="ID of parent object to associate with server.")
