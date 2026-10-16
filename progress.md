@@ -100,7 +100,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [ ] **I4b** (list route done in iteration 57; only the dashboard route remains) Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route. Also verify in the browser that `Create CTF Event` is absent on a non-CTF unit's `TeacherUnit` page (I6 done-when).
 - [x] **I5** Events list page — spec + done-when at PRD.md:1055 (the list route is in; the browser check is carried by I4b)
 - [x] **I6** Create from unit — spec + done-when at PRD.md:1057 (the browser check that the button is absent on a non-CTF unit is carried by I4b)
-- [ ] **I7** Action confirm dialog — spec + done-when at PRD.md:1059
+- [x] **I7** Action confirm dialog — spec + done-when at PRD.md:1059
 - [ ] **I8** CTF state chip — spec + done-when at PRD.md:1060
 - [ ] **I9** Dashboard shell — spec + done-when at PRD.md:1061
 - [ ] **I10** Event Control panel — spec + done-when at PRD.md:1063
@@ -729,3 +729,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `GET /unit/{id}/full/` already returns `unit.ctf`, because `UnitModel.ctf` exists, so no API change was needed. Gates: api 1100, cloud_functions 449, build_files 304 passed; frontend 9 files / 64 tests. The CTF eslint gate exits 0 on the existing paths. tsc reports no CTF, TeacherUnit or unit-transform/model errors. The `unit.service.ts` TS7053 errors were already there.
 - **Blockers:** I did not do the browser check (it needs a signed-in instructor and a live API). It moves to I4b.
 - **Next:** I7 Action confirm dialog (PRD.md:1059).
+
+### Iteration 59 — 2026-10-16
+- **Completed:** I7. New `frontend/src/components/Common/Dialogs/ActionConfirmDialog/ActionConfirmDialog.tsx` (default export) takes the props `{open, title, message, confirmLabel, onConfirm, onClose, loading}`. Like `ConfirmCancelDialog`, it is a plain MUI `Dialog` with Cancel and a contained `LoadingButton` labelled `confirmLabel`. `message` is a `ReactNode`, so J4 can bold the hint cost. Title and message are wired through `useId` to `aria-labelledby`/`aria-describedby`. While `loading` is true, Cancel is disabled and backdrop/Escape closes are ignored, so the dialog stays up until the request settles. `ActionConfirmDialog.test.tsx` has 6 tests: the accessible name and description, closed renders nothing, confirm calls only `onConfirm`, Cancel and Escape call `onClose`, while loading both buttons are disabled and Escape is ignored, and rich message content.
+- **Learned:** The callers own the request state: I10 and J4 should set `loading` while their call runs and close the dialog themselves on success. Gates: frontend 10 files / 70 tests. ESLint is clean (exit 0) on the gate paths that exist (`src/components/Student/Ctf` does not exist yet), and tsc reports no CTF errors. No Python changed.
+- **Blockers:** none.
+- **Next:** I8 CTF state chip (PRD.md:1060).
