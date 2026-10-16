@@ -9,8 +9,7 @@ export const GlobalImageManager: React.FC = () => {
             <Container maxWidth={"lg"}>
                 <Paper
                     sx={{
-                        mt: 10,
-                        height: "auto",
+                            height: "auto",
                         display: "flex",
                         flexDirection: "column",
                         overflow: "hidden",

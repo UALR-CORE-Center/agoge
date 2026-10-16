@@ -69,7 +69,7 @@ const ServerFormNic: React.FC<Props> = ({
         <FormGroupOutline showOverlay={disableForm} sx={{padding: theme.spacing(1)}}>
             <Stack sx={{cursor: 'pointer'}} onClick={() => setOpened(!opened)} direction={'row'} alignItems={'center'}>
 
-                <Stack direction={'row'} alignItems={'center'} gap={1}>
+                <Stack direction={'row'} alignItems={'center'} gap={1} sx={{minWidth: 0}}>
                     <IconButton
                         color={'primary'}
                         size={'small'}
@@ -77,9 +77,9 @@ const ServerFormNic: React.FC<Props> = ({
                         {opened ? <ExpandLessIcon/> : <ExpandMoreIcon/>}
                     </IconButton>
 
-                    <Stack direction={'row'} alignItems={'center'} gap={1}>
+                    <Stack direction={'row'} alignItems={'center'} gap={1} flexWrap={'wrap'} sx={{minWidth: 0}}>
                         <StyledFormFieldLabel>NIC {nicIndex}</StyledFormFieldLabel>
-                        <Typography variant={'subtitle1'}
+                        <Typography variant={'subtitle1'} sx={{overflowWrap: 'anywhere'}}
                                     color={'text.secondary'}>{formatSelectedNicName()}</Typography>
                         {
                             serverForm.doesNicHaveErrors(serverForm.forms[serverIndex][ServerFormKeys.serverNetworks][nicIndex]) &&

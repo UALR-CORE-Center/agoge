@@ -31,7 +31,7 @@ const SummaryReview: React.FC<Props> = ({specification, elevation, loading, onNa
             {
                 includeHeader &&
             <Stack sx={{paddingY: theme.spacing(1)}} direction={'row'} alignItems={'center'}
-                   justifyContent={'space-between'}>
+                   justifyContent={'space-between'} flexWrap={'wrap'} gap={1}>
                 <ReviewSectionLabel variant={'h6'}>Summary Review</ReviewSectionLabel>
                 <Button onClick={() => onNavigateToStep(EditorForms.Summary)}
                         size={'small'}

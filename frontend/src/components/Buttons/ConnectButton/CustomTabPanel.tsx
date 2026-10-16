@@ -41,11 +41,14 @@ export const CustomTabPanel: React.FC<Props> = (props) => {
     const hostname = item.dns_record || item.hostname;
 
     return (
-        <Box sx={{ maxHeight: "70vh", overflowY: "auto", p: 2 }}>
+        <Box sx={{ maxHeight: "70vh", overflowY: "auto", p: { xs: 0, sm: 2 }, pt: { xs: 1, sm: 2 } }}>
             <Tabs
                 key={item.protocol}
                 value={selectedProtocol}
                 onChange={handleProtocolChange}
+                variant="scrollable"
+                scrollButtons="auto"
+                allowScrollButtonsMobile
                 aria-label="Connection methods"
             >
                 {fullInteractions.map((interaction, index) => (

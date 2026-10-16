@@ -152,6 +152,7 @@ export const SelectMachineTypeTable: React.FC<Props> = (props) => {
             field: 'name',
             headerName: 'Name',
             flex: 1,
+            minWidth: 160,
             filterable: true,
             renderCell: (params: any) => (
                 <Button
@@ -167,6 +168,7 @@ export const SelectMachineTypeTable: React.FC<Props> = (props) => {
             field: 'description',
             headerName: "Description",
             flex: 1,
+            minWidth: 200,
             filterable: true,
             sortable: false,
             renderCell: (params: any) => (
@@ -182,6 +184,7 @@ export const SelectMachineTypeTable: React.FC<Props> = (props) => {
             field: 'is_shared_core',
             headerName: "Shared Core",
             flex: 1,
+            minWidth: 110,
             filterable: true,
             sortable: false,
             renderCell: (params: any) => (
@@ -201,13 +204,16 @@ export const SelectMachineTypeTable: React.FC<Props> = (props) => {
                     expandIcon={<ExpandMoreIcon />}
                     aria-controls={"image-select-accordion"}
                     id={`${props.index}-image-select-accordion-header`}
-                    sx={{background: theme.palette.action.hover}}
+                    sx={{
+                        background: theme.palette.action.hover,
+                        '& .MuiAccordionSummary-content': {flexWrap: 'wrap', alignItems: 'center', minWidth: 0},
+                    }}
                 >
                     <>
                         {props.loading ? <CircularProgress size={18} sx={{mr: 1}} /> : <Layers sx={{mr: 1}}/>}
                         <Typography mr={1}>Machine Type</Typography>
                         (
-                            <Typography color={props.formField.value.trim() != "" ? "info" : "error"}>
+                            <Typography color={props.formField.value.trim() != "" ? "info" : "error"} sx={{overflowWrap: 'anywhere'}}>
                                 {getMType()?.id || "No machine type selected"}
                             </Typography>
                         )
@@ -218,7 +224,7 @@ export const SelectMachineTypeTable: React.FC<Props> = (props) => {
                         sx={{
                             border: "1px solid gray",
                             borderRadius: "4px",
-                            p: 2,
+                            p: {xs: 1, sm: 2},
                             background: buttonBackground()
                         }}
                     >
@@ -233,7 +239,7 @@ export const SelectMachineTypeTable: React.FC<Props> = (props) => {
                             itemPadding={0}
                         />
                     </Box>
-                    <Box style={{ width: "100%", marginBottom: 5 }}>
+                    <Box style={{ width: "100%", minWidth: 0, marginBottom: 5 }}>
                         <StyledDataGrid
                             data={flattened}
                             columns={columns}

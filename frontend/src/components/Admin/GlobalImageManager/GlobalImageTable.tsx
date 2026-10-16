@@ -171,6 +171,7 @@ export const GlobalImageTable: React.FC = () => {
             field: 'name',
             headerName: 'Name',
             flex: 1,
+            minWidth: 180,
             filterable: true,
             sortable: true,
             renderCell: (params: any) => (
@@ -186,6 +187,7 @@ export const GlobalImageTable: React.FC = () => {
             field: 'description',
             headerName: "Description",
             flex: 1,
+            minWidth: 200,
             filterable: true,
             sortable: false,
             renderCell: (params: any) => (
@@ -201,6 +203,7 @@ export const GlobalImageTable: React.FC = () => {
             field: 'project',
             headerName: 'Project',
             flex: 1,
+            minWidth: 140,
             filterable: true,
             sortable: true,
             renderCell: (params: GridRenderCellParams) => (
@@ -215,6 +218,7 @@ export const GlobalImageTable: React.FC = () => {
             field: 'is_enabled',
             headerName: 'Enabled',
             flex: 1,
+            minWidth: 100,
             filterable: true,
             sortable: true,
             renderCell: (params: GridRenderCellParams) => (

@@ -1,9 +1,11 @@
 import {
+    AccountCircle,
     AdminPanelSettings,
     Lightbulb,
     LoginRounded,
     ManageAccounts,
     Memory,
+    School,
     Science,
 } from "@mui/icons-material";
 import Brightness4Icon from '@mui/icons-material/Brightness4';
@@ -76,6 +78,7 @@ const AgogeAppBar: React.FC<AgogeAppBarProps> = ({ onSidebarToggle, toggleTheme,
                 <>
                     <AppBarMenu
                         iconText={`${Users.TEACHER.toString()}s`}
+                        icon={<School />}
                         textOverflow={false}
                         menuItems={[
                             {
@@ -99,6 +102,7 @@ const AgogeAppBar: React.FC<AgogeAppBarProps> = ({ onSidebarToggle, toggleTheme,
                     />
                     <AppBarMenu
                         iconText={firebaseUser.user?.displayName || firebaseUser.user.email!}
+                        icon={<AccountCircle />}
                         textOverflow={true}
                         menuItems={[
                             {
@@ -127,6 +131,7 @@ const AgogeAppBar: React.FC<AgogeAppBarProps> = ({ onSidebarToggle, toggleTheme,
                 <>
                     <AppBarMenu
                         iconText={`${Users.ADMIN.toString()}s`}
+                        icon={<AdminPanelSettings />}
                         textOverflow={false}
                         menuItems={[
                             {
@@ -163,7 +168,7 @@ const AgogeAppBar: React.FC<AgogeAppBarProps> = ({ onSidebarToggle, toggleTheme,
             component="nav"
             sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}
         >
-            <Toolbar>
+            <Toolbar sx={{ px: { xs: 1, sm: 2, md: 3 } }}>
                 <Typography
                     variant="h6"
                     noWrap
@@ -193,14 +198,15 @@ const AgogeAppBar: React.FC<AgogeAppBarProps> = ({ onSidebarToggle, toggleTheme,
                         edge="end"
                         color="inherit"
                         onClick={handleLogin}
+                        aria-label="Login"
                         sx={{
                             display: 'flex',
                             alignItems: 'center',
                             borderRadius: '4px',
                         }}
                     >
-                        <LoginRounded fontSize="small" sx={{ mr: 1 }} />
-                        <Typography variant="subtitle1" sx={{ mr: 1 }}>Login</Typography>
+                        <LoginRounded fontSize="small" sx={{ mr: { xs: 0, sm: 1 } }} />
+                        <Typography variant="subtitle1" sx={{ mr: 1, display: { xs: 'none', sm: 'block' } }}>Login</Typography>
                     </IconButton>
                 )}
                 {showDrawerButton && (

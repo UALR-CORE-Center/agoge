@@ -137,7 +137,7 @@ const NetworkForm: React.FC<Props> = ({formHooks, disableForm, specification, se
                                             }
                                         </Stack>
                                     </AccordionSummary>
-                                    <AccordionDetails id={`network-panel-${index}-content`} aria-labelledby={`network-panel-${index}-header`}>
+                                    <AccordionDetails id={`network-panel-${index}-content`} aria-labelledby={`network-panel-${index}-header`} sx={{ px: { xs: 1, sm: 2 } }}>
                                         <FormFields>
                                             <FormGroupOutline showOverlay={disableForm}> <FormGroup>
                                                 <StyledFormFieldLabel>Name</StyledFormFieldLabel>
@@ -196,7 +196,7 @@ const NetworkForm: React.FC<Props> = ({formHooks, disableForm, specification, se
             }
 
             <Button disabled={disableForm} onClick={addNetworkService} variant={'contained'} color={'secondary'}
-                sx={{ width: '70%'}}
+                sx={{ width: { xs: '100%', sm: '70%' } }}
                 endIcon={<Add />}>
                 Add Network
             </Button>

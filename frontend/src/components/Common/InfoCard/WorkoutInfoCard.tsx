@@ -53,12 +53,13 @@ export const WorkoutInfoCard: React.FC<WorkoutInfoCardProps> = (props) => {
             aria-labelledby="workout-info-h2"
             elevation={1}
             sx={{
-                padding: '16px',
+                padding: { xs: 1.5, sm: 2 },
                 marginBottom: '16px',
-                width: '100%'
+                width: '100%',
+                minWidth: 0,
             }}
         >
-            <Typography id="workout-info-h2" variant="h4" component="h2" gutterBottom>
+            <Typography id="workout-info-h2" variant="h4" component="h2" gutterBottom sx={{ overflowWrap: "anywhere" }}>
                 {summary.name}
             </Typography>
             <Divider sx={{my: 2}} />
@@ -75,7 +76,7 @@ export const WorkoutInfoCard: React.FC<WorkoutInfoCardProps> = (props) => {
                     Instructions
                 </Button>
             )}
-            <Typography variant="body1" component="p" gutterBottom>
+            <Typography variant="body1" component="p" gutterBottom sx={{ overflowWrap: "anywhere" }}>
                 {summary.description}
             </Typography>
             {currentState ? (

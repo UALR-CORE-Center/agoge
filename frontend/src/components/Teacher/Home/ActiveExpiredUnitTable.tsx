@@ -163,8 +163,8 @@ const ActiveExpiredUnitTable: React.FC = () => {
             ? "No active labs found"
             : "No expired labs found";
         return (
-            <Paper elevation={1} sx={{width:'100%',overflow:'hidden',p:2}}>
-                <Box sx={{width:'100%', minWidth:'1000px'}}>
+            <Paper elevation={1} sx={{width:'100%', minWidth: 0, overflow:'hidden', p:{xs: 1, sm: 2}}}>
+                <Box sx={{width:'100%', minWidth: 0}}>
                     <StyledDataGrid
                         data={processUnits(units)}
                         columns={newColumns}
@@ -337,7 +337,8 @@ const ActiveExpiredUnitTable: React.FC = () => {
         <Box
             sx={{
                 width: '100%',
-                p:2,
+                minWidth: 0,
+                p:{xs: 0, sm: 2},
                 mx: 'auto',
                 overflow: 'hidden',
             }}
@@ -352,7 +353,9 @@ const ActiveExpiredUnitTable: React.FC = () => {
             >
                 <Tabs
                     variant={"scrollable"}
+                    allowScrollButtonsMobile
                     value={selectedTab}
+                    sx={{ maxWidth: '100%' }}
                     onChange={handleTabChange}
                 >
                     <Tab
@@ -401,6 +404,7 @@ const ActiveExpiredUnitTable: React.FC = () => {
                 <Box
                     sx={{
                         width: '100%',
+                        minWidth: 0,
                         display: 'flex',
                         justifyContent: 'center',
                     }}

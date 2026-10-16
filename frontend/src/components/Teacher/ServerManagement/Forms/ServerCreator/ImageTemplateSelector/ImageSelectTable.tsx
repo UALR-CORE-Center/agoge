@@ -170,6 +170,7 @@ export const ImageSelectTable: React.FC<Props> = (props) => {
             field: 'name',
             headerName: 'Name',
             flex: 1,
+            minWidth: 160,
             filterable: true,
             renderCell: (params: any) => (
                 <Button
@@ -192,6 +193,7 @@ export const ImageSelectTable: React.FC<Props> = (props) => {
             field: 'description',
             headerName: "Description",
             flex: 1,
+            minWidth: 200,
             filterable: true,
             sortable: false,
             renderCell: (params: any) => (
@@ -207,6 +209,7 @@ export const ImageSelectTable: React.FC<Props> = (props) => {
             field: 'project',
             headerName: 'Project',
             flex: 1,
+            minWidth: 130,
             filterable: true,
             sortable: true,
             renderCell: (params: GridRenderCellParams) => (
@@ -221,6 +224,7 @@ export const ImageSelectTable: React.FC<Props> = (props) => {
             field: "disk_size",
             headerName: "Disk Size (GB)",
             flex: 1,
+            minWidth: 120,
             filterable: false,
             sortable: false,
         },
@@ -228,6 +232,7 @@ export const ImageSelectTable: React.FC<Props> = (props) => {
             field: "os",
             headerName: "Operating System",
             flex: 1,
+            minWidth: 150,
             filterable: true,
             sortable: true,
             renderCell: (params: GridRenderCellParams) => (
@@ -246,7 +251,7 @@ export const ImageSelectTable: React.FC<Props> = (props) => {
                 <Typography variant="body2" sx={{mb: 1}}>
                     The available E2 machines require AMD64 (x86-64) images. ARM64 images are listed but cannot be selected.
                 </Typography>
-                <Box sx={{ border: "1px solid gray", borderRadius: "4px", p: 2}}>
+                <Box sx={{ border: "1px solid gray", borderRadius: "4px", p: {xs: 1, sm: 2}}}>
                     <Stack direction={"row"} alignItems={"center"} p={1}>
                         <GridFilterListIcon />
                         <Typography>
@@ -259,7 +264,7 @@ export const ImageSelectTable: React.FC<Props> = (props) => {
                     />
                 </Box>
 
-                <Box style={{width: "100%", marginBottom: 5}}>
+                <Box style={{width: "100%", minWidth: 0, marginBottom: 5}}>
                     <StyledDataGrid
                         data={flattenedData}
                         isRowSelectable={(params) => !serverImageArchitectureError(params.row)}

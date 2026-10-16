@@ -84,7 +84,7 @@ export const SettingsField: React.FC<Props> = (props) => {
 
         if (!isEditing) {
             return (
-                <Typography variant={"body1"}>
+                <Typography variant={"body1"} sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
                     {hasValue ? String(editValue) : "Not configured"}
                 </Typography>
             )
@@ -192,7 +192,8 @@ export const SettingsField: React.FC<Props> = (props) => {
                         color: "white",
                         borderRadius: .9,
                         height: 25,
-                        ml: 1
+                        ml: 1,
+                        maxWidth: "100%",
                     }}
                 />
                 {getInputField()}
@@ -205,7 +206,11 @@ export const SettingsField: React.FC<Props> = (props) => {
     return (
         <>
             <Stack direction={"column"} gap={1}>
-                <Stack direction={"row"} gap={1}>
+                <Stack
+                    direction={"row"}
+                    gap={1}
+                    sx={{ flexWrap: { xs: "wrap", md: "nowrap" }, alignItems: { xs: "center", md: "stretch" }, minWidth: 0 }}
+                >
                     {
                         loading ?
                             <Skeleton
@@ -220,7 +225,7 @@ export const SettingsField: React.FC<Props> = (props) => {
                 </Stack>
                 {hasError && (
                     <Stack direction={"row"} gap={1} sx={{ml: 2}}>
-                        <Typography variant="body2" color="error">
+                        <Typography variant="body2" color="error" sx={{ overflowWrap: "anywhere" }}>
                             {hasError}
                         </Typography>
                     </Stack>

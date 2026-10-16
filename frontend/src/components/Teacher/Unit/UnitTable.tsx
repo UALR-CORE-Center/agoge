@@ -465,10 +465,12 @@ const UnitTable: React.FC<UnitTableProps> = (props) => {
                 display: 'flex',
                 flexDirection: 'column',
                 flexGrow: 1,
+                width: '100%',
+                minWidth: 0,
                 padding: "0 10px 10px 10px"
             }}
         >
-            <Box sx={{ width: "100%" }}>
+            <Box sx={{ width: "100%", minWidth: 0 }}>
                 <StyledDataGrid
                     data={props.workouts}
                     columns={columns}

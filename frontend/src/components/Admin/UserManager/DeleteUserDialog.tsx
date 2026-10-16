@@ -78,16 +78,15 @@ export const DeleteUserDialog: React.FC<DialogProps> = (props) => {
                                 <Person />
                             </ListItemIcon>
                             <ListItemText>
-                                <em>{selectedUser?.email}</em>
+                                <em style={{ overflowWrap: 'anywhere' }}>{selectedUser?.email}</em>
                             </ListItemText>
                         </ListItem>
                     </List>
                 </DialogContent>
                 <DialogActions>
-                    <Box mt={1}>
+                    <Box mt={1} sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, justifyContent: 'flex-end' }}>
                         <Button
                             onClick={handleClose}
-                            sx={{ mr: 2}}
                             autoFocus
                             variant={"outlined"}
                             color={"inherit"}

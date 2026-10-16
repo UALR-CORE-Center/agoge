@@ -100,7 +100,7 @@ const AssessmentForm: React.FC<Props> = (
 
             <FormGroupOutline showOverlay={disableForm} sx={{width: '100%'}}>
                 <FormGroup>
-                    <Stack direction={'row'} alignItems={'center'} justifyContent={'space-between'}>
+                    <Stack direction={'row'} alignItems={'center'} justifyContent={'space-between'} flexWrap={'wrap'} gap={1}>
                         <StyledFormFieldLabel>Assessment Script</StyledFormFieldLabel>
                         <Button
                             disabled={disableForm}
@@ -218,7 +218,7 @@ const AssessmentForm: React.FC<Props> = (
                                             </IconButton>
                                         </Stack>
                                     </AccordionSummary>
-                                    <AccordionDetails>
+                                    <AccordionDetails sx={{px: {xs: 1, sm: 2}}}>
                                         <FormFields>
 
                                             {
@@ -258,7 +258,7 @@ const AssessmentForm: React.FC<Props> = (
 
 
             <Button disabled={disableForm} onClick={addQuestion} variant={'contained'}
-                    sx={{width: '70%', backgroundColor:'secondary.dark'}}
+                    sx={{width: {xs: '100%', sm: '70%'}, backgroundColor:'secondary.dark'}}
                     endIcon={<Add/>}>
                 Add Question
             </Button>

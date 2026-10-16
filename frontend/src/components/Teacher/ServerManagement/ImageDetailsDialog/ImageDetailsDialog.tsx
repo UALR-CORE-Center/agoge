@@ -54,12 +54,12 @@ export const ImageDetailsDialog: React.FC<ImageDetails> = (props) => {
                     <Dialog
                         open={props.open}
                         onClose={handleOnClose}
-                        maxWidth={"lg"}
-                        sx={{minWidth: "60vw"}}
+                        maxWidth={"md"}
+                        fullWidth
                     >
                         <DialogTitle justifyContent={"center"}>
-                            <Stack direction={'row'} alignItems={'center'} justifyContent={'space-between'}>
-                                {`${image.name} details`}
+                            <Stack direction={'row'} alignItems={'center'} justifyContent={'space-between'} gap={1}>
+                                <span style={{minWidth: 0, overflowWrap: 'anywhere'}}>{`${image.name} details`}</span>
                                 <IconButton
                                     onClick={handleOnClose}
                                     aria-label={"close image details"}
@@ -71,13 +71,13 @@ export const ImageDetailsDialog: React.FC<ImageDetails> = (props) => {
                                 </IconButton>
                             </Stack>
                         </DialogTitle>
-                        <DialogContent>
+                        <DialogContent sx={{px: {xs: 1, sm: 3}}}>
                             {image.is_shared && <Alert severity="warning" sx={{mb: 2}}>
                                 This server image is shared across multiple sites and applications. Only administrators can edit it directly.
                             </Alert>}
-                            <Stack sx={{padding:2}} component={Paper} elevation={1}>
+                            <Stack sx={{padding: {xs: 1, sm: 2}}} component={Paper} elevation={1}>
                                 <Stack sx={{paddingY: theme.spacing(1)}} direction={'row'} alignItems={'center'}
-                                       justifyContent={'space-between'}>
+                                       justifyContent={'space-between'} flexWrap={'wrap'} gap={1}>
                                     <SectionLabel variant={'h6'}>Details</SectionLabel>
                                     <Button
                                         onClick={() => onNavigateToEdit()}

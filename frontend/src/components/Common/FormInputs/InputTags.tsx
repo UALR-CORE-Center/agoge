@@ -136,6 +136,7 @@ const InputTags: React.FC<Props> = (
                         key={index}
                         label={item}
                         onDelete={handleDelete(item)}
+                        sx={{ maxWidth: '100%' }}
                     />
                 ))}
             </Box>

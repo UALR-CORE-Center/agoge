@@ -30,22 +30,22 @@ const MarkdownViewer: React.FC = () => {
     }, [file_uid]);
 
     return (
-        <Box sx={{ display: 'flex', height: '100%', width: '100%', mt: 10, justifyContent: 'flex-center', flexDirection: 'column', alignItems: 'center' }}>
+        <Box sx={{ display: 'flex', height: '100%', width: '100%', minWidth: 0, justifyContent: 'center', flexDirection: 'column', alignItems: 'center' }}>
             {!fileContent ? (
-                <Box sx={{pl:10, pr:10, width:'100%', height:'100%'}}>
+                <Box sx={{px: { xs: 0, md: 10 }, width:'100%', height:'100%'}}>
                     <Skeleton
                         variant="rounded"
                         animation="wave"
-                        sx={{ width: '100%', minHeight: '600px'}}
+                        sx={{ width: '100%', minHeight: { xs: '400px', md: '600px' }}}
                     />
                 </Box>
             ) : (
                 <>
-                    <Typography variant="h2" component="div" sx={{ flexGrow: 1 }}>
+                    <Typography variant="h2" component="div" sx={{ flexGrow: 1, overflowWrap: 'anywhere', textAlign: 'center' }}>
                         {fileContent?.name} instructions
                     </Typography>
-                    <Box component="main" sx={{ pl: 10, pr: 10, width: '100%' }}>
-                        <Paper style={{ width: '80vw', minHeight: '400px', overflow: 'hidden', marginRight: '40px', position: 'relative' }}>
+                    <Box component="main" sx={{ px: { xs: 0, md: 10 }, width: '100%', minWidth: 0 }}>
+                        <Paper sx={{ width: '100%', minHeight: '400px', overflowX: 'auto', position: 'relative' }}>
                             <MDXEditor
                                 className={editorClassName}
                                 key={fileContent?.uid || "1"}

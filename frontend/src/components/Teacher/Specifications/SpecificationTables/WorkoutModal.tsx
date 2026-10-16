@@ -13,6 +13,8 @@ import {
     Checkbox,
     Typography,
     Divider,
+    useMediaQuery,
+    useTheme,
 } from '@mui/material';
 import Alert from "@mui/material/Alert";
 import DialogActions from "@mui/material/DialogActions";
@@ -37,6 +39,8 @@ interface WorkoutModalProps {
 export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
     const { open, onClose, onSubmit, selectedRow, user } = props;
     const hasMounted = useRef(false);
+    const theme = useTheme();
+    const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
     const [agogeUser, setSettingsData] = useState<any>();
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
     const [courses, setCourses] = useState<UserCourses>({});
@@ -183,8 +187,8 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
     };
 
     return (
-        <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
-            <DialogTitle>
+        <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth fullScreen={fullScreen}>
+            <DialogTitle sx={{ overflowWrap: 'anywhere' }}>
                 {summary.name}#{selectedRow.discriminator}
                 <Divider />
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1 }}>

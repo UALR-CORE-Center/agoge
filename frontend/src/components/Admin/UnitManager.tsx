@@ -294,17 +294,19 @@ const UnitManagerTab: React.FC<UnitManagerTabProps> = memo(({ viewType }) => {
     ];
 
     return (
-        <Box sx={{ height: '100%', p: 2 }}>
+        <Box sx={{ height: '100%', p: { xs: 1, sm: 2 }, minWidth: 0 }}>
             <Stack
                 alignItems={"center"}
                 direction={"row"}
                 gap={1}
                 paddingTop={1}
+                sx={{ minWidth: 0 }}
             >
                 <AssignmentIcon fontSize={"large"}/>
                 <Typography
                     variant={"h5"}
                     component={"h2"}
+                    sx={{ overflowWrap: "anywhere" }}
                 >
                     {
                         viewType === 'active'
@@ -313,7 +315,7 @@ const UnitManagerTab: React.FC<UnitManagerTabProps> = memo(({ viewType }) => {
                     }
                 </Typography>
             </Stack>
-            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', mt: 2 }}>
                 <Button
                     variant="outlined"
                     color="error"
@@ -329,7 +331,7 @@ const UnitManagerTab: React.FC<UnitManagerTabProps> = memo(({ viewType }) => {
                     <Skeleton variant="rectangular" width="100%" height="100%" />
                 </Box>
             ) : (
-                <Box sx={{ height: 500, width: '100%' }}>
+                <Box sx={{ height: 500, width: '100%', minWidth: 0 }}>
                     <DataGrid
                         rows={unitList}
                         columns={columns}

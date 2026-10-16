@@ -146,6 +146,7 @@ export const SelectImageTable: React.FC<Props> = (props) => {
             field: 'name',
             headerName: 'Name',
             flex: 1,
+            minWidth: 160,
             filterable: true,
             renderCell: (params: any) => (
                 <Button
@@ -162,6 +163,7 @@ export const SelectImageTable: React.FC<Props> = (props) => {
             field: 'description',
             headerName: "Description",
             flex: 1,
+            minWidth: 180,
             filterable: true,
             sortable: false,
             renderCell: (params: any) => (
@@ -177,6 +179,7 @@ export const SelectImageTable: React.FC<Props> = (props) => {
             field: "os",
             headerName: "Operating System",
             flex: 1,
+            minWidth: 140,
             filterable: true,
             sortable: true,
             renderCell: (params: GridRenderCellParams) => (
@@ -191,6 +194,7 @@ export const SelectImageTable: React.FC<Props> = (props) => {
             field: "add_disk",
             headerName: "Disk Size (GB)",
             flex: 1,
+            minWidth: 110,
             filterable: false,
             sortable: false,
         },
@@ -198,6 +202,7 @@ export const SelectImageTable: React.FC<Props> = (props) => {
             field: 'status',
             headerName: 'Status',
             flex: 1,
+            minWidth: 110,
             filterable: true,
             sortable: true,
             renderCell: (params: GridRenderCellParams) => (
@@ -213,18 +218,21 @@ export const SelectImageTable: React.FC<Props> = (props) => {
                     expandIcon={<ExpandMoreIcon />}
                     aria-controls={"image-select-accordion"}
                     id={`${props.index}-image-select-accordion-header`}
-                    sx={{background: theme.palette.action.hover}}
+                    sx={{
+                        background: theme.palette.action.hover,
+                        '& .MuiAccordionSummary-content': {flexWrap: 'wrap', alignItems: 'center', minWidth: 0},
+                    }}
                 >
                     <>
                         {props.loading ? <CircularProgress size={18} sx={{mr: 1}} /> : <Memory sx={{mr: 1}}/>}
                         <Typography mr={1}>Server Image *</Typography>
-                        (<Typography color={props.formField.value.trim() != "" ? "info" : "error"}>
+                        (<Typography color={props.formField.value.trim() != "" ? "info" : "error"} sx={{overflowWrap: 'anywhere'}}>
                             {getImage()?.image || "No image selected"}
                         </Typography>)
                     </>
                 </AccordionSummary>
                 <AccordionDetails>
-                    <Box style={{width: "100%", marginBottom: 5}}>
+                    <Box style={{width: "100%", minWidth: 0, marginBottom: 5}}>
                         <StyledDataGrid
                             data={flattened}
                             columns={columns}

@@ -1,4 +1,4 @@
-import { createTheme, darken } from "@mui/material/styles";
+import { createTheme, darken, responsiveFontSizes, Theme } from "@mui/material/styles";
 import "@mui/lab/themeAugmentation";
 
 declare module "@mui/material/styles" {
@@ -32,8 +32,18 @@ const infoDark = '#01579b';
 const containedErrorDark = '#D22D2D';
 const containedSuccessDark = '#2e7d32';
 
+// On phones, MUI's default 32px dialog margin wastes a fifth of the screen;
+// shrink it so dialog content gets the width it needs.
+const compactDialogPaper = (theme: Theme) => ({
+    [theme.breakpoints.down('sm')]: {
+        margin: theme.spacing(2),
+        width: `calc(100% - ${theme.spacing(4)})`,
+        maxHeight: `calc(100% - ${theme.spacing(4)})`,
+    },
+});
 
-export const darkTheme = createTheme({
+
+export const darkTheme = responsiveFontSizes(createTheme({
     palette: {
         mode: "dark",
         contrastThreshold: 4.5,
@@ -93,6 +103,7 @@ export const darkTheme = createTheme({
                             ? "#242424"
                             : theme.palette.background.paper,
                     backgroundImage: "none",
+                    ...compactDialogPaper(theme),
                 }),
             },
         },
@@ -267,9 +278,9 @@ export const darkTheme = createTheme({
             },
         },
     },
-});
+}));
 
-export const lightTheme = createTheme({
+export const lightTheme = responsiveFontSizes(createTheme({
     palette: {
         mode: "light",
         contrastThreshold: 4.5,
@@ -431,6 +442,7 @@ export const lightTheme = createTheme({
                             ? '#1a1a1a'
                             : theme.palette.background.default,
                     backgroundImage: 'none',
+                    ...compactDialogPaper(theme),
                 }),
             },
         },
@@ -467,4 +479,4 @@ export const lightTheme = createTheme({
             },
         },
     },
-});
+}));

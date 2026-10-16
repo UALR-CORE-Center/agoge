@@ -12,7 +12,7 @@ const transformedMarkdown$ = Cell<string>(
                 markdown$,
                 map((content) =>
                     content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, altText, imageUrl) => {
-                        return `<img src="${imageUrl}" alt="${altText}" width="500px" height="300px" />`;
+                        return `<img src="${imageUrl}" alt="${altText}" width="500" height="300" style="max-width: 100%; height: auto;" />`;
                     })
                 )
             ),

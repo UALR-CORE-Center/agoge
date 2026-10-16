@@ -16,7 +16,8 @@ import {
     TableCell,
     TableBody,
     DialogActions,
-    Skeleton, Typography, CircularProgress, styled, tableCellClasses
+    Skeleton, Typography, CircularProgress, styled, tableCellClasses,
+    useMediaQuery, useTheme
 } from "@mui/material";
 import React, { useState } from "react";
 import { useAuthContext } from "../../../context/AuthContext";
@@ -39,6 +40,8 @@ const UnitRubricEditor: React.FC<UnitRubricEditorProps> = (props) => {
     const [error, setError] = useState<string | null>(null);
     const [hasLoaded, setHasLoaded] = useState(false);
     const isBusy = isLoading || isGenerating || isSaving;
+    const theme = useTheme();
+    const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
 
     const handleClickOpen = () => {
         if (props.rubricEnabled !== true) return;
@@ -159,10 +162,10 @@ const UnitRubricEditor: React.FC<UnitRubricEditorProps> = (props) => {
                 </Button>
             </Box>
 
-            <Dialog open={open} onClose={handleClose} fullWidth maxWidth="xl">
-                <Paper elevation={2} sx={{ padding: 2 }}>
+            <Dialog open={open} onClose={handleClose} fullWidth maxWidth="xl" fullScreen={fullScreen}>
+                <Paper elevation={2} sx={{ padding: { xs: 0, sm: 2 }, minHeight: fullScreen ? '100%' : undefined }}>
                     <DialogTitle>Edit Rubric</DialogTitle>
-                    <DialogContent>
+                    <DialogContent sx={{ px: { xs: 1, sm: 3 } }}>
                         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
                         {isGenerating ? (
                             // This is displayed when a rubric is generating for the first time
@@ -189,7 +192,7 @@ const UnitRubricEditor: React.FC<UnitRubricEditorProps> = (props) => {
                             // General Loading while it is being fetched
                             <Skeleton variant="rectangular" width="100%" height={400} />
                         ) : rubric ? (
-                            <TableContainer component={Paper}>
+                            <TableContainer component={Paper} sx={{ overflowX: 'auto' }}>
                                 <Table sx={{ minWidth: 650 }} aria-label="rubric table">
                                     <TableHead>
                                         <TableRow>
@@ -243,7 +246,7 @@ const UnitRubricEditor: React.FC<UnitRubricEditorProps> = (props) => {
                             </>
                         ) : null}
                     </DialogContent>
-                    <DialogActions>
+                    <DialogActions sx={{ flexWrap: 'wrap', gap: 1, '& > :not(style) ~ :not(style)': { ml: 0 } }}>
                         {error && !hasLoaded && !isBusy && (
                             <Button variant="outlined" onClick={loadRubric}>
                                 Retry loading

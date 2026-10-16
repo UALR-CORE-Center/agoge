@@ -74,11 +74,14 @@ const JoinWorkout: React.FC = () => {
             aria-labelledby="join-h1"
             sx={{
                 backgroundColor: '#1c2538',
-                height: '100vh',
+                minHeight: '100vh',
                 display: 'flex',
                 justifyContent: 'center',
                 alignItems: 'center',
-                color: 'black'
+                color: 'black',
+                px: 2,
+                py: { xs: 2, sm: 4 },
+                boxSizing: 'border-box',
             }}
         >
             <Box id="main" sx={{
@@ -86,6 +89,7 @@ const JoinWorkout: React.FC = () => {
                 borderRadius: 4,
                 p: 2,
                 boxShadow: 3,
+                width: '100%',
                 maxWidth: 500,
             }}>
                 <AgogeLogo contained={false}/>
@@ -182,7 +186,7 @@ const JoinWorkout: React.FC = () => {
                                     variant="contained"
                                     sx={{
                                         mt: 3,
-                                        width: '50%',
+                                        width: { xs: '100%', sm: '50%' },
                                         backgroundColor: '#1c2538',
                                         color: 'white',
                                         '&:hover': { backgroundColor: '#39455e' },
@@ -200,7 +204,7 @@ const JoinWorkout: React.FC = () => {
                             variant="body1"
                             color="error"
                             id="error-msg"
-                            sx={{ mt: 2 }}
+                            sx={{ mt: 2, overflowWrap: 'anywhere' }}
                         >
                             {error}
                         </Typography>

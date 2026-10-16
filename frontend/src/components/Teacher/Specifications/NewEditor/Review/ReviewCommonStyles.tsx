@@ -64,6 +64,14 @@ export const ReviewListItem = styled(ListItem, {
     '&:nth-of-type(even)': {
         backgroundColor: !disableAlternatingColors ? theme.palette.background.default : undefined,
     },
+    // On phones stack the key above its value so neither column gets squeezed.
+    [theme.breakpoints.down('sm')]: {
+        flexDirection: 'column',
+        '& > .MuiListItemText-root': {
+            width: '100%',
+            borderLeft: 'none',
+        },
+    },
 }));
 
 export const NestedReviewListItem = styled(Stack, {
@@ -103,6 +111,9 @@ export const ReviewItemKeyWrapper = styled(ListItemText)(({theme}: {
     paddingLeft: theme.spacing(1),
     display: 'flex',
     alignItems: 'center',
+    [theme.breakpoints.down('sm')]: {
+        width: '40%',
+    },
 }));
 
 
@@ -119,6 +130,9 @@ export const ReviewItemValue = styled(ListItemText)(({theme}: {
         wordBreak: 'break-word',
         overflowWrap: 'break-word',
         whiteSpace: 'normal'
+    },
+    [theme.breakpoints.down('sm')]: {
+        width: '60%',
     },
 }));
 

@@ -169,11 +169,11 @@ export default function FileUploadDialog(props: Props) {
             <DialogContent>
                 <FormFields>
                     <FormGroup>
-                        <Stack direction={'row'} gap={1}>
+                        <Stack direction={'row'} gap={1} flexWrap={'wrap'} alignItems={'center'}>
                             <StyledFormFieldLabel id={"upload-lab-field-label"}>Lab Specification</StyledFormFieldLabel>
                             {selectedFileInput.value && (
                                 <>
-                                    <StyledFormFieldLabel sx={{color: theme.palette.success.main}}>
+                                    <StyledFormFieldLabel sx={{color: theme.palette.success.main, minWidth: 0, overflowWrap: 'anywhere'}}>
                                         ({selectedFileInput.value.name})
                                     </StyledFormFieldLabel>
                                     <Tooltip title="Clear selected file">
@@ -203,7 +203,7 @@ export default function FileUploadDialog(props: Props) {
                                      onDrop={(e: any) => handleDrop(e)}
                                      sx={{
                                          border: '2px dashed ' + (!selectedFileInput.error ? 'gray' : theme.palette.error.main),
-                                         width: '200px%',
+                                         width: '100%',
                                          height: '200px',
                                          cursor: "pointer",
                                          "&:hover": {
@@ -218,7 +218,7 @@ export default function FileUploadDialog(props: Props) {
                                      aria-description={"select a JSON file to upload into Agoge catalog"}
                                 >
                                     {selectedFileInput.value?.name ?
-                                        <Typography color={'text.secondary'} className={'overflow'}>
+                                        <Typography color={'text.secondary'} className={'overflow'} sx={{px: 1, minWidth: 0, overflowWrap: 'anywhere'}}>
                                             {selectedFileInput.value.name}
                                         </Typography> :
                                         <Typography color={'text.secondary'}>
@@ -248,7 +248,7 @@ export default function FileUploadDialog(props: Props) {
                                                 Copy Error
                                             </Button>
                                         }
-                                        <Typography sx={{ml: 1.5}} variant={'caption'} color={'text.secondary'}>
+                                        <Typography sx={{ml: 1.5, overflowWrap: 'anywhere'}} variant={'caption'} color={'text.secondary'}>
                                             {selectedFileInput.error}
                                         </Typography>
                                     </>

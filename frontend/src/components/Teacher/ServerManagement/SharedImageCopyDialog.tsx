@@ -48,7 +48,7 @@ export const SharedImageCopyDialog: React.FC<Props> = ({image, existingNames = [
 
     return (
         <Dialog open={!!image} onClose={copying ? undefined : onClose} maxWidth="sm" fullWidth aria-labelledby="copy-shared-image-title">
-            <DialogTitle id="copy-shared-image-title">{image?.name}: shared image</DialogTitle>
+            <DialogTitle id="copy-shared-image-title" sx={{overflowWrap: 'anywhere'}}>{image?.name}: shared image</DialogTitle>
             <DialogContent>
                 <Stack spacing={2} sx={{pt: 1}}>
                     <Alert severity="info">This server image is used by multiple sites. Only administrators can edit the shared image.</Alert>
@@ -76,7 +76,7 @@ export const SharedImageCopyDialog: React.FC<Props> = ({image, existingNames = [
                     </>}
                 </Stack>
             </DialogContent>
-            <DialogActions>
+            <DialogActions sx={{flexWrap: 'wrap', gap: 1, '& > :not(style) ~ :not(style)': {ml: 0}}}>
                 <Button onClick={onClose} disabled={copying}>Cancel</Button>
                 <LoadingButton onClick={handleCopy} loading={copying} disabled={!!nameError} startIcon={<ContentCopyIcon />} loadingPosition="start" variant="contained">
                     {action === 'checkOut' ? 'Copy for this site and check out' : 'Copy for this site and edit'}

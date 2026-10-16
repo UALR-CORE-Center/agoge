@@ -10,4 +10,5 @@ export const GridItem = styled(Paper)<GridItemProps>(({ theme, padding }) => ({
     padding: theme.spacing(padding ?? 1),
     textAlign: 'center',
     color: theme.palette.text.secondary,
+    overflowWrap: 'anywhere',
 }));

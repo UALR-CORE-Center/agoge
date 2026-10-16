@@ -9,10 +9,13 @@ const Login: React.FC = () => {
             id="homePage"
             sx={{
                 backgroundColor: '#1c2538',
-                height: '100vh',
+                minHeight: '100vh',
                 display: 'flex',
                 justifyContent: 'center',
                 alignItems: 'center',
+                px: 2,
+                py: { xs: 2, sm: 4 },
+                boxSizing: 'border-box',
             }}
         >
             <FirebaseAuthUI />

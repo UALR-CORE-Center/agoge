@@ -85,7 +85,7 @@ const LMSQuestionForm: React.FC<Props> = ({assessmentFormHook, disableForm, qInd
             {
                 assessmentFormHook.getFormField(AssessmentFormKeys.assessmentQuestionType, qIndex)!.value !== LMSAssessmentQuestionType.auto &&
                 <FormGroupOutline showOverlay={disableForm}>
-                    <Stack direction={'row'} alignItems={'center'}>
+                    <Stack direction={'row'} alignItems={'center'} flexWrap={'wrap'}>
                         <StyledFormFieldLabel>Question Answers</StyledFormFieldLabel>
                         <IconButton
                             color={'primary'}
@@ -106,7 +106,7 @@ const LMSQuestionForm: React.FC<Props> = ({assessmentFormHook, disableForm, qInd
                                 questionAnswers?.map((answer, aIdx) => {
                                     return (
                                         <FormRow key={aIdx} gap={2}>
-                                            <FormGroup width={'75%'}>
+                                            <FormGroup width={{xs: '100%', md: '75%'}}>
                                                 <StyledFormFieldLabel>Answer #{aIdx + 1}</StyledFormFieldLabel>
                                                 <FormTextField
                                                     disabled={disableForm}
@@ -117,7 +117,7 @@ const LMSQuestionForm: React.FC<Props> = ({assessmentFormHook, disableForm, qInd
 
                                             </FormGroup>
 
-                                            <FormGroup width={'20%'}>
+                                            <FormGroup width={{xs: '100%', md: '20%'}}>
                                                 <StyledFormFieldLabel>Weight</StyledFormFieldLabel>
                                                 <FormTextField
                                                     placeholder={"Weighted Points"}

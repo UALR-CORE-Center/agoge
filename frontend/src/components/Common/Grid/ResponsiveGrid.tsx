@@ -17,7 +17,7 @@ export const ResponsiveGrid: React.FC<ResponsiveGridProps> = (props) => {
                 columns={{ xs: 4, sm: 8, md: 12 }}
             >
                 {props.items.map((item, index) => (
-                    <Grid key={index} size={{ xs: 2, sm: 4, md: 4 }}>
+                    <Grid key={index} size={{ xs: 4, sm: 4, md: 4 }}>
                         <GridItem padding={props.itemPadding}>{item}</GridItem>
                     </Grid>
                 ))}

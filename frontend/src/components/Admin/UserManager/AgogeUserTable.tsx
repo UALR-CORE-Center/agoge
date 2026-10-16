@@ -197,6 +197,7 @@ const AgogeUserTable: React.FC = () => {
             field: 'email',
             headerName: 'User',
             width: 300,
+            minWidth: 220,
             sortable: true,
             filterable: true,
             flex: 1,
@@ -260,6 +261,7 @@ const AgogeUserTable: React.FC = () => {
             field: 'actions',
             headerName: 'Actions',
             flex: 1,
+            minWidth: 120,
             sortable: false,
             filterable: false,
             renderCell: (params: any) => (
@@ -292,9 +294,9 @@ const AgogeUserTable: React.FC = () => {
     ];
 
     return (
-        <Box sx={{ height: "auto", width: "100%" }}>
-            <Box sx={{ width: 'auto', m: 5 }}>
-                <Box sx={{ flexGrow: 1, minHeight: 0 }}>
+        <Box sx={{ height: "auto", width: "100%", minWidth: 0 }}>
+            <Box sx={{ width: 'auto', m: { xs: 1, sm: 3, md: 5 }, minWidth: 0 }}>
+                <Box sx={{ flexGrow: 1, minHeight: 0, minWidth: 0 }}>
                     <StyledDataGrid
                         data={filteredUsers}
                         columns={columns}

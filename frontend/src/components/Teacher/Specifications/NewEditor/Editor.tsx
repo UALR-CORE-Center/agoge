@@ -13,6 +13,7 @@ import {
     StepButton,
     Stepper, Tooltip,
     Typography,
+    useMediaQuery,
     useTheme
 } from "@mui/material";
 import {useModal} from "mui-modal-provider";
@@ -592,15 +593,22 @@ const Editor: React.FC = () => {
     };
 
     const theme = useTheme();
+    // Below md, stack step labels under their icons so six steps fit narrow screens.
+    const compactStepper = useMediaQuery(theme.breakpoints.down('md'));
     const steps = Object.values(EditorForms);
 
     const hasError = doesCurrentStepHaveErrors(steps[activeStep]);
     return (
-        <Container sx={{ width: "80%", overflow: "hidden", mt: theme.spacing(9) }}>
+        <Container sx={{ width: { xs: "100%", md: "80%" }, px: { xs: 0, md: 3 }, overflow: "hidden" }}>
             <Paper elevation={1} square={false} sx={{ width: "100%", paddingY: theme.spacing(1) }}>
-                <Stepper nonLinear activeStep={activeStep}>
+                <Stepper
+                    nonLinear
+                    activeStep={activeStep}
+                    alternativeLabel={compactStepper}
+                    sx={{ overflowX: { xs: "auto", sm: "visible" }, pb: { xs: 0.5, sm: 0 } }}
+                >
                     {steps.map((step, index) => (
-                        <Step key={index}>
+                        <Step key={index} sx={{ minWidth: { xs: 72, sm: 0 } }}>
                             <StepButton color="inherit" onClick={() => handleNavigateTo(step as EditorForms)}>
                                 {step}
                             </StepButton>
@@ -608,8 +616,8 @@ const Editor: React.FC = () => {
                     ))}
                 </Stepper>
 
-                <Stack sx={{ padding: theme.spacing(2), overflowY: "auto" }}>
-                    <Stack direction={"row"} alignItems={"center"} justifyContent={"space-between"}>
+                <Stack sx={{ padding: { xs: 1, sm: 2 }, overflowY: "auto" }}>
+                    <Stack direction={"row"} alignItems={"center"} justifyContent={"space-between"} flexWrap={"wrap"} gap={1}>
                         <Stack gap={1} direction={"row"} alignItems={"center"}>
                             <Typography variant={"h6"}>{steps[activeStep]}</Typography>
 
@@ -629,7 +637,7 @@ const Editor: React.FC = () => {
                                 <CircularProgress thickness={5} size={20} color="primary" />
                             )}
                         </Stack>
-                        <Stack direction="row" spacing={2}>
+                        <Stack direction="row" gap={{ xs: 1, sm: 2 }} flexWrap="wrap">
                             {dialogMessage !== "" && (
                                 <Button
                                     size="small"
@@ -738,7 +746,7 @@ const Editor: React.FC = () => {
                     </Box>
                 </Stack>
                 {activeStep !== steps.length - 1 && (
-                    <Stack direction={"row"} sx={{ pt: 2 }}>
+                    <Stack direction={"row"} flexWrap={"wrap"} rowGap={1} sx={{ pt: 2 }}>
                         <Button disabled={activeStep === 0} onClick={handleBack} sx={{ mr: 1 }}>
                             Back {activeStep !== 0 && "(" + steps[activeStep - 1] + ")"}
                         </Button>
@@ -761,10 +769,10 @@ const Editor: React.FC = () => {
                         top: '50%',
                         left: '50%',
                         transform: 'translate(-50%, -50%)',
-                        width: 400,
+                        width: { xs: 'calc(100% - 32px)', sm: 400 },
                         bgcolor: 'background.paper',
                         boxShadow: 24,
-                        p: 4,
+                        p: { xs: 2, sm: 4 },
                     }}
                 >
                     <Typography id="modal-title" variant="h6" component="h2">
@@ -773,7 +781,7 @@ const Editor: React.FC = () => {
                     <Typography id="modal-description" sx={{ mt: 2 }}>
                         Are you sure you want to cancel? This action cannot be undone.
                     </Typography>
-                    <Stack direction="row" spacing={2} justifyContent="flex-end" sx={{ mt: 2 }}>
+                    <Stack direction="row" gap={2} flexWrap="wrap" justifyContent="flex-end" sx={{ mt: 2 }}>
                         <Button onClick={handleCloseCancelModal} disabled={canceling}>
                             Cancel
                         </Button>

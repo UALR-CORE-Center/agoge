@@ -49,6 +49,10 @@ export const FormGroupOutline = styled(Paper, {
     background: 'transparent',
     border: '2px solid ' + theme.palette.divider,
     padding: theme.spacing(3),
+    [theme.breakpoints.down('sm')]: {
+        padding: theme.spacing(1.5),
+    },
+    minWidth: 0,
     opacity: showOverlay ? .25 : 1,
 }));
 
@@ -73,12 +77,9 @@ export const FormRow = styled(Stack, {
     shouldForwardProp: (prop) => prop !== 'theme' && prop !== 'gap' && prop !== 'alignItems',
 })<FormRowProps>(({theme, gap, alignItems}) => ({
     width: '100%',
-    flexDirection: 'column', // Set the default value to 'column'
-    '@media (min-width: 600px)': {
-        flexDirection: 'column', // Set the value for xs and sm screens
-    },
-    '@media (min-width: 960px)': {
-        flexDirection: 'row', // Set the value for md (medium) and larger screens
+    flexDirection: 'column', // Stack fields on xs and sm screens
+    [theme.breakpoints.up('md')]: {
+        flexDirection: 'row', // Side by side on md and larger screens
     },
     gap: theme.spacing(gap || 1),
     alignItems: alignItems || 'center'

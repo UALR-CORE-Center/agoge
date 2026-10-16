@@ -82,6 +82,7 @@ export const FirebaseAuthUI: React.FC = () => {
             borderRadius: 4,
             p: 2,
             boxShadow: 3,
+            width: '100%',
             maxWidth: 500,
         }}>
             <AgogeLogo contained={false} />
@@ -90,7 +91,7 @@ export const FirebaseAuthUI: React.FC = () => {
                 <Box id="loader" sx={{ display: 'none', textAlign: 'center' }}>
                     <CircularProgress />
                 </Box>
-                <Typography variant="body1" color="error" id="error-msg"></Typography>
+                <Typography variant="body1" color="error" id="error-msg" sx={{ overflowWrap: 'anywhere' }}></Typography>
             </Box>
         </Box>
     );

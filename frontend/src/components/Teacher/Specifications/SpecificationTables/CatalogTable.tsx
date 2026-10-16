@@ -181,6 +181,7 @@ const CatalogTable: React.FC = () => {
             field: 'name',
             headerName: 'Name',
             flex: 1,
+            minWidth: 180,
             filterable: true,
             sortable: true,
             renderCell: (params: any) => (
@@ -217,6 +218,7 @@ const CatalogTable: React.FC = () => {
             field: 'assessment_type',
             headerName: 'Assessment',
             flex: 1,
+            minWidth: 150,
             filterable: true,
             sortable: true,
             renderCell: (params: GridRenderCellParams) => (
@@ -354,10 +356,9 @@ const CatalogTable: React.FC = () => {
     };
     return (
         <>
-            <Container maxWidth={"lg"}>
+            <Container maxWidth={"lg"} sx={{ px: { xs: 0, md: 3 } }}>
                 <Paper
                     sx={{
-                        mt: 10,
                         height: "auto",
                         display: "flex",
                         flexDirection: "column",

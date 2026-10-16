@@ -39,6 +39,7 @@ export const TimezoneSelect: React.FC<TimezoneSelectProps> = ({
                 label="Timezone"
                 value={selectedTimezone}
                 onChange={handleChange}
+                sx={{ maxWidth: '100%' }}
             >
                 {options.map((option) => (
                     <MenuItem key={option.value} value={option.value}>

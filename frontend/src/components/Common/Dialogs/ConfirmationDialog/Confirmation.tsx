@@ -45,7 +45,7 @@ export default function ConfirmationDialog(props: Props) {
                 <DialogContentText sx={{ color: theme.palette.text.primary }}>
                     Are you sure you want to {action} the selected items? This action cannot be undone.
                 </DialogContentText>
-                <DialogContentText sx={{ color: theme.palette.text.primary }}>
+                <DialogContentText sx={{ color: theme.palette.text.primary, overflowWrap: 'anywhere' }}>
                     Please type <strong>{props.expectedText}</strong> to confirm.
                 </DialogContentText>
                 <TextField

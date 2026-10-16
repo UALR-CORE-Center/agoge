@@ -193,6 +193,7 @@ const WebApplicationForm: React.FC<Props> = ({formHooks, disableForm, specificat
                                     <AccordionDetails
                                         id={`web-application-panel-${index}-content`}
                                         aria-labelledby={`web-application-panel-${index}-header`}
+                                        sx={{px: {xs: 1, sm: 2}}}
                                     >
                                         <FormFields>
                                             <FormGroupOutline showOverlay={disableForm}> <FormGroup>
@@ -262,7 +263,7 @@ const WebApplicationForm: React.FC<Props> = ({formHooks, disableForm, specificat
 
 
             <Button disabled={disableForm} onClick={addWebApp} variant={'contained'}
-                    sx={{width: '70%', backgroundColor:'secondary.dark'}} endIcon={<Add/>}>
+                    sx={{width: {xs: '100%', sm: '70%'}, backgroundColor:'secondary.dark'}} endIcon={<Add/>}>
                 Add Web Application
             </Button>
         </FormFields>

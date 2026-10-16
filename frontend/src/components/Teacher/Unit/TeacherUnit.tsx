@@ -109,18 +109,20 @@ const TeacherUnit: React.FC = () => {
             id="homePage"
             sx={{
                 height: '100%', width: '100%',
-                display: 'flex', flexDirection: 'row',
-                justifyContent: 'center', alignItems: 'flex-start',
-                mt: 10, pl: 2, pr: 2
+                display: 'flex', flexDirection: { xs: 'column', md: 'row' },
+                justifyContent: 'center', alignItems: { xs: 'stretch', md: 'flex-start' },
+                minWidth: 0
             }}
         >
             <Box
                 sx={{
-                    width: '25%',
+                    width: { xs: '100%', md: '25%' },
+                    minWidth: 0,
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
-                    mr: 4
+                    mr: { xs: 0, md: 4 },
+                    mb: { xs: 2, md: 0 }
                 }}
             >
                 {isLoading || !unitFull.value ? (
@@ -146,7 +148,7 @@ const TeacherUnit: React.FC = () => {
                     </Box>
                 )}
             </Box>
-            <Box sx={{ width: '75%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <Box sx={{ width: { xs: '100%', md: '75%' }, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                 {isLoading || !unitFull.value ? (
                     <>
                         <Skeleton

@@ -56,11 +56,23 @@ export const BaseConnectButton: React.FC<BaseConnectButtonProps> = ({ item, isDi
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        height: '100vh'
+                        height: '100vh',
+                        p: 2,
+                        boxSizing: 'border-box',
                     }}
                 >
-                    <Paper sx={{ padding: 4, minWidth: 300 }}>
-                        <Typography id="connect-modal-title" variant="h4" component="h2">
+                    <Paper
+                        sx={{
+                            padding: { xs: 2, sm: 4 },
+                            minWidth: { xs: 0, sm: 300 },
+                            width: { xs: '100%', sm: 'auto' },
+                            maxWidth: '100%',
+                            maxHeight: '100%',
+                            overflowY: 'auto',
+                            boxSizing: 'border-box',
+                        }}
+                    >
+                        <Typography id="connect-modal-title" variant="h4" component="h2" sx={{ overflowWrap: 'anywhere' }}>
                             Connect to {item.name}
                         </Typography>
                         {renderDetails(item)}

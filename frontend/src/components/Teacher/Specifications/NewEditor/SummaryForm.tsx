@@ -184,7 +184,7 @@ const SummaryForm: React.FC<Props> = (props: Props) => {
                                 onInputChange={(field, value) => {
                                     props.formHook.handleInputChange(field, value);
                                 }}
-                                sx={{ flexGrow: 1 }}
+                                sx={{ flexGrow: 1, minWidth: 0 }}
                             />
                             {props.formHook.getFormField(SummaryFormKeys.summaryTeacherInstructions)?.value && (
                                 <Tooltip title={"Edit"} placement={"top"}>
@@ -223,7 +223,7 @@ const SummaryForm: React.FC<Props> = (props: Props) => {
                                 onInputChange={(field, value) => {
                                     props.formHook.handleInputChange(field, value);
                                 }}
-                                sx={{ flexGrow: 1 }}
+                                sx={{ flexGrow: 1, minWidth: 0 }}
                             />
                             {props.formHook.getFormField(SummaryFormKeys.summaryStudentInstructions)?.value && (
                                 <Tooltip title={"Edit"} placement={"top"}>

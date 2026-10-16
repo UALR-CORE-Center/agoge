@@ -167,7 +167,7 @@ export const ConfigureAccess = ({ buildId, safeToConfigure, currentState }: Comp
                         variant="body1"
                         color={error ? 'secondary' : 'text.secondary'}
                         role={error ? 'alert' : undefined}
-                        sx={{ overflow: 'auto' }}
+                        sx={{ overflow: 'auto', overflowWrap: 'anywhere' }}
                     >
                         {error || helpText()}
                     </Typography>

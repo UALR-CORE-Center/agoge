@@ -1,4 +1,5 @@
-import {Typography, Link, Box, Container, styled, Grid2} from "@mui/material";
+import {Typography, Link, Box, Container, styled, useMediaQuery} from "@mui/material";
+import {useTheme} from "@mui/material/styles";
 import React from 'react';
 import { Outlet } from 'react-router-dom';
 import {useDrawer} from "./InfoDrawer/InfoDrawerContext";
@@ -33,13 +34,10 @@ const Footer = ({ backgroundColor = 'background.paper' }: FooterProps) => {
             id={"agoge-footer"}
             component="footer"
             role="contentinfo"
-            marginTop={10}
             sx={{
                 py: 3,
                 px: 2,
                 mt: 'auto',
-                bottom: 0,
-                padding: 'fixed',
             }}
         >
             <Container maxWidth="sm">
@@ -52,10 +50,17 @@ const Footer = ({ backgroundColor = 'background.paper' }: FooterProps) => {
     );
 }
 
+// Reserves the height of the fixed AppBar so page content starts below it.
 const Offset = styled('div')(({ theme }) => theme.mixins.toolbar);
+
+// Keep in sync with the paper width in InfoDrawer.
+export const INFO_DRAWER_WIDTH = 'min(25%, 350px)';
 
 const Layout: React.FC<LayoutProps> = ({ toggleTheme, isDarkMode, onSidebarToggle }) => {
     const { isOpen } = useDrawer();
+    const theme = useTheme();
+    // Below md the info drawer overlays the page instead of pushing it aside.
+    const isDesktop = useMediaQuery(theme.breakpoints.up('md'));
 
     return (
         <Box
@@ -64,7 +69,9 @@ const Layout: React.FC<LayoutProps> = ({ toggleTheme, isDarkMode, onSidebarToggl
                 flexDirection: 'column',
                 transition: 'margin-right 0.3s ease',
                 minHeight: '100vh',
-                marginRight: isOpen ? 'min(25%, 350px)' : 0,
+                // dvh tracks the mobile browser chrome; 100vh above is the fallback.
+                '@supports (min-height: 100dvh)': { minHeight: '100dvh' },
+                marginRight: isOpen && isDesktop ? INFO_DRAWER_WIDTH : 0,
             }}
         >
             <Link
@@ -98,17 +105,27 @@ const Layout: React.FC<LayoutProps> = ({ toggleTheme, isDarkMode, onSidebarToggl
                 />
             </Box>
 
-            <Grid2
+            <Offset />
+            <Box
                 id="main-content"
                 component="main"
                 role="main"
-                container
-                justifyContent="center"
-                alignItems="center"
                 tabIndex={-1}
+                sx={{
+                    flex: '1 0 auto',
+                    width: '100%',
+                    // Lets wide children (data grids, code blocks) scroll inside
+                    // themselves rather than stretching the page past the viewport.
+                    minWidth: 0,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    pt: { xs: 2, md: 3 },
+                    px: { xs: 1, sm: 2, md: 3 },
+                }}
             >
                 <Outlet />
-            </Grid2>
+            </Box>
             <Footer />
         </Box>
     );

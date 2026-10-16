@@ -116,30 +116,28 @@ const StudentWorkout: React.FC = () => {
 
     return (
         <Box
-            component="main"
             id="homePage"
             aria-label="Student Workout"
             sx={{
                 height: '100%',
                 display: 'flex',
                 width: '100%',
-                flexDirection: 'row',
+                flexDirection: { xs: 'column', md: 'row' },
                 justifyContent: 'center',
-                alignItems: 'start',
-                mt: 10,
-                pl: 2,
-                pr: 2
+                alignItems: { xs: 'stretch', md: 'start' },
+                minWidth: 0,
             }}
         >
             <Box
                 component="aside"
                 aria-label="Workout session controls"
                 sx={{
-                    width: '25%',
+                    width: { xs: '100%', md: '25%' },
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
-                    mr: 4
+                    mr: { xs: 0, md: 4 },
+                    mb: { xs: 3, md: 0 },
                 }}
             >
                 {isLoading ? (
@@ -195,7 +193,8 @@ const StudentWorkout: React.FC = () => {
             </Box>
             <Box
                 sx={{
-                    width: '75%',
+                    width: { xs: '100%', md: '75%' },
+                    minWidth: 0,
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center'

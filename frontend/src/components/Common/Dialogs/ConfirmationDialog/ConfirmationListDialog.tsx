@@ -61,7 +61,17 @@ const ConfirmationListDialog: React.FC<ConfirmationDialogProps> = (props) => {
                 component="div"
                 disablePadding
             >
-                <ListItemText primary={`* ${props.items[index]},`} />
+                <ListItemText
+                    primary={`* ${props.items[index]},`}
+                    sx={{
+                        minWidth: 0,
+                        '& .MuiListItemText-primary': {
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                        },
+                    }}
+                />
             </ListItem>
         );
     }
@@ -112,7 +122,8 @@ const ConfirmationListDialog: React.FC<ConfirmationDialogProps> = (props) => {
                 <DialogContentText
                     sx={{
                         color: theme.palette.text.primary,
-                        my: 2
+                        my: 2,
+                        overflowWrap: 'anywhere'
                     }}
                 >
                     Please type <strong>{props.confirmText}</strong> to confirm.

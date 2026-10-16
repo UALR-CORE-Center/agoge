@@ -5,6 +5,7 @@ import {
     IconButton,
     Skeleton,
     Stack,
+    useMediaQuery,
     useTheme
 } from '@mui/material';
 import Button from '@mui/material/Button';
@@ -41,6 +42,7 @@ function a11yProps(index: number) {
 
 const SnapshotDialog: React.FC<Props> = (props) => {
     const theme = useTheme();
+    const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
     const {showModal} = useModal();
     const [value, setValue] = useState(0);
     const [snapshots, setSnapshots] = useState<{pending: boolean, value: SnapshotsModel[] | null}>({pending: true, value: null});
@@ -147,10 +149,11 @@ const SnapshotDialog: React.FC<Props> = (props) => {
             open={open}
             onClose={handleOnClose}
             fullWidth={true}
+            fullScreen={fullScreen}
             maxWidth={"lg"}
         >
             <DialogTitle sx={{ color: theme.palette.text.primary }}>
-                <Stack direction={'row'} alignItems={'center'} justifyContent={'space-between'}>
+                <Stack direction={'row'} alignItems={'center'} justifyContent={'space-between'} gap={1}>
                     {capitalizeString(buildId)} {courseObjectTitle} Snapshot Manager
                     <IconButton
                         onClick={handleOnClose}
@@ -162,8 +165,8 @@ const SnapshotDialog: React.FC<Props> = (props) => {
                     </IconButton>
                 </Stack>
             </DialogTitle>
-            <DialogContent>
-                <Box>
+            <DialogContent sx={{ px: { xs: 1, sm: 3 } }}>
+                <Box sx={{ minWidth: 0 }}>
                     {
                         dialogState.loading ? (
                             <>

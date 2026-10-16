@@ -46,9 +46,9 @@ const Review: React.FC<Props> = ({specification, onNavigateToStep}) => {
     const theme = useTheme();
     const elevation = 8;
     const loading = specification == undefined;
-    const defaultSX = {padding: 2};
+    const defaultSX = {padding: {xs: 1, sm: 2}};
     return (
-        <Stack sx={{padding: theme.spacing(1)}} gap={2}>
+        <Stack sx={{padding: {xs: 0, sm: 1}}} gap={2}>
             <Accordion disabled={loading} expanded={jsonExpanded} elevation={elevation}>
                 <AccordionSummary
                     id={`json-panel-header`}
@@ -60,7 +60,7 @@ const Review: React.FC<Props> = ({specification, onNavigateToStep}) => {
                     onClick={() => setJsonExpanded((prev) => !prev)}
                 >
                     <Stack sx={{width: '100%'}} direction={'row'} alignItems={'center'}
-                           justifyContent={'space-between'}>
+                           justifyContent={'space-between'} flexWrap={'wrap'} gap={1}>
                         <Stack direction={'row'} alignItems={'center'} gap={1}>
                             <ReviewSectionLabel variant={'h6'}>JSON</ReviewSectionLabel>
                             <IconButton disabled={loading} color={'primary'}>

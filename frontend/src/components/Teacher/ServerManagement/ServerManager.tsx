@@ -36,9 +36,9 @@ const ServerManager: React.FC = () => {
     return (
         <>
             <Box
-                width={"95%"}
+                width={"100%"}
                 height={"auto"}
-                sx={{marginTop: "100px"}}
+                sx={{minWidth: 0}}
             >
                 { firebaseUser.user ? (
                     <ImageListTable />

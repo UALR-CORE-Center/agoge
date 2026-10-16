@@ -1,5 +1,5 @@
 import {Close} from "@mui/icons-material";
-import {Dialog, DialogContent, DialogTitle, IconButton, List, Paper, Stack} from "@mui/material";
+import {Dialog, DialogContent, DialogTitle, IconButton, List, Paper, Stack, useMediaQuery, useTheme} from "@mui/material";
 import React, {useState} from "react";
 import {Specification} from "../../../../services/Specification/specification.model";
 import {SpecificationEdit, TeachingConcept} from "../../../../services/Specification/specificationEdit.model";
@@ -23,6 +23,8 @@ interface Props {
 export default function CatalogDetailsDialog(props: Props) {
     const {specification} = props;
     const [open, setOpen] = useState(true);
+    const theme = useTheme();
+    const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
 
     const catalogTags = (): TeachingConcept[] => {
         if (!specification.summary.tags || specification.summary.tags?.length == 0) {
@@ -41,10 +43,11 @@ export default function CatalogDetailsDialog(props: Props) {
             onClose={() => setOpen(false)}
             maxWidth={"md"}
             fullWidth
+            fullScreen={fullScreen}
         >
             <DialogTitle justifyContent={"center"}>
-                <Stack direction={'row'} alignItems={'center'} justifyContent={'space-between'}>
-                    {`${specification.summary.name} details`}
+                <Stack direction={'row'} alignItems={'center'} justifyContent={'space-between'} gap={1}>
+                    <span style={{minWidth: 0, overflowWrap: 'anywhere'}}>{`${specification.summary.name} details`}</span>
                     <IconButton
                         onClick={() => setOpen(false)}
                         aria-label={"close catalog details"}
@@ -56,8 +59,8 @@ export default function CatalogDetailsDialog(props: Props) {
                     </IconButton>
                 </Stack>
             </DialogTitle>
-            <DialogContent sx={{maxHeight: "80vh"}}>
-                <Stack sx={{padding:2}} gap={1} component={Paper} elevation={1}>
+            <DialogContent sx={{maxHeight: {sm: "80vh"}, px: {xs: 1, sm: 3}}}>
+                <Stack sx={{padding: {xs: 1, sm: 2}}} gap={1} component={Paper} elevation={1}>
                     {/*<List  sx={{padding: 0}} component={Paper} variant={'outlined'}>*/}
 
                     <List sx={{padding: 0}} component={Paper} variant={'outlined'}>

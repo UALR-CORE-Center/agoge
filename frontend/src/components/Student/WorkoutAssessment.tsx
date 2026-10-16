@@ -100,7 +100,7 @@ const StudentAssessment: React.FC<AssessmentProps> = ({ workout }) => {
     };
 
     return (
-        <Box component="section" aria-labelledby="assessment-h2" sx={{ p: 3, width: '100%' }}>
+        <Box component="section" aria-labelledby="assessment-h2" sx={{ p: { xs: 1, sm: 3 }, width: '100%' }}>
             <Typography id="assessment-h2" component="h2" variant="h5">
                 Assessment Questions
             </Typography>

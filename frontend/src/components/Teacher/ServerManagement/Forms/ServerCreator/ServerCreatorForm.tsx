@@ -173,11 +173,11 @@ const ServerCreatorForm: React.FC = () => {
     };
 
     return (
-        <Container sx={{mt: 10}}>
+        <Container sx={{width: '100%', px: {xs: 0, sm: 3}}}>
             <Box
-                style={{
+                sx={{
                     border: "none",
-                    padding: "15px"
+                    padding: {xs: 1, sm: "15px"}
                 }}
             >
                 <Button
@@ -209,9 +209,9 @@ const ServerCreatorForm: React.FC = () => {
             <Paper
                 elevation={1}
                 square={false}
-                style={{
-                    margin: "0 10px",
-                    padding: "15px",
+                sx={{
+                    mx: {xs: 0, sm: "10px"},
+                    padding: {xs: 1, sm: "15px"},
                 }}
             >
                 <Form onSubmit={handleSubmit}>
@@ -267,17 +267,18 @@ const ServerCreatorForm: React.FC = () => {
                                     expandIcon={<ExpandMoreIcon />}
                                     aria-controls={"image-select-accordion"}
                                     id={"image-select-accordion-header"}
+                                    sx={{'& .MuiAccordionSummary-content': {flexWrap: 'wrap', alignItems: 'center', minWidth: 0}}}
                                 >
                                     <>
                                         <Memory sx={{mr: 1}}/>
                                         <Typography mr={1}>Server Image *</Typography>
-                                        (<Typography color={selectedImageName ? "info" : "error"}>
+                                        (<Typography color={selectedImageName ? "info" : "error"} sx={{overflowWrap: 'anywhere'}}>
                                             {selectedImageName ? selectedImageName : "No image selected"}
                                         </Typography>)
                                     </>
 
                                 </AccordionSummary>
-                                <AccordionDetails>
+                                <AccordionDetails sx={{px: {xs: 1, sm: 2}}}>
                                     <ImageSelectTable onSelect={handleImageSelect} hasError={selectImageError}/>
                                 </AccordionDetails>
                             </Accordion>

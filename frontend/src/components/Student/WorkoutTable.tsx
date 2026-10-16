@@ -71,7 +71,8 @@ const WorkoutTable: React.FC<WorkoutTableProps> = ({ workoutFull }) => {
             field: 'hostname',
             headerName: 'Host',
             headerAlign: 'center',
-            minWidth: 350,
+            minWidth: 200,
+            flex: 1,
             renderCell: (params: any) => (
                 <ExpandableCell
                     {...params}
@@ -94,8 +95,8 @@ const WorkoutTable: React.FC<WorkoutTableProps> = ({ workoutFull }) => {
         }
     ];
     return (
-        <Box sx={{ width:"100%", display: 'flex', flexDirection: 'row'}}>
-            <Box sx={{ width: workoutFull.workout.web_applications ? "65%": "100%" }}>
+        <Box sx={{ width:"100%", display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: { xs: 2, md: 0 } }}>
+            <Box sx={{ width: { xs: "100%", md: workoutFull.workout.web_applications ? "65%": "100%" }, minWidth: 0 }}>
                 <Paper
                     elevation={1}
                     component="section"
@@ -116,7 +117,7 @@ const WorkoutTable: React.FC<WorkoutTableProps> = ({ workoutFull }) => {
                 </Paper>
             </Box>
             {workoutFull.workout?.web_applications && (
-                <Box sx={{ width: "35%", justifyContent: "center", display: "flex", ml: 2, mr: 2 }}>
+                <Box sx={{ width: { xs: "100%", md: "35%" }, justifyContent: "center", display: "flex", ml: { xs: 0, md: 2 }, mr: { xs: 0, md: 2 } }}>
                     <Paper
                         component="section"
                         aria-labelledby="web-apps-h2"
@@ -141,6 +142,7 @@ const WorkoutTable: React.FC<WorkoutTableProps> = ({ workoutFull }) => {
 
                         {workoutFull.workout.web_applications.map((app, index) => (
                             <Button
+                                key={`${app.name}-${index}`}
                                 component="a"
                                 variant="contained"
                                 color="primary"

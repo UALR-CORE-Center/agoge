@@ -39,7 +39,7 @@ const BuildWaitDialog: React.FC<BuildWaitDialogModalProps> = ({ open, onClose })
         >
             <DialogTitle id="waiting-message-dialog-title">
                 <Box display="flex" justifyContent="center" alignItems="center">
-                    <Typography variant="h5" align="center">
+                    <Typography variant="h5" align="center" sx={{ minWidth: 0 }}>
                         Please wait while your {AppUiObjectNames.UNIT.toLowerCase()} is created...
                     </Typography>
                     <FloatingIcon className="pl-2" />

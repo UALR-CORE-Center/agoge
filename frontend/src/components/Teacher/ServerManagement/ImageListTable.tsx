@@ -634,7 +634,7 @@ const ImageListTable: React.FC = () => {
             <Paper
                 elevation={1}
                 square={false}
-                sx={{ padding: "10px" }}
+                sx={{ padding: "10px", width: '100%', minWidth: 0 }}
             >
                 {activeImages.some(image => image.is_shared) && <Alert severity="info" sx={{mb: 2}}>
                     Images marked <strong>Shared across sites</strong> are used by multiple sites and applications.

@@ -23,12 +23,13 @@ export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
                 component="section"
                 aria-labelledby="unit-info-h2"
                 sx={{
-                    padding: '16px',
+                    padding: { xs: 1.5, sm: 2 },
                     marginBottom: '16px',
-                    width: '100%'
+                    width: '100%',
+                    minWidth: 0,
                 }}
             >
-                <Typography id="unit-info-h2" variant="h4" component="h2" gutterBottom>
+                <Typography id="unit-info-h2" variant="h4" component="h2" gutterBottom sx={{ overflowWrap: "anywhere" }}>
                     {summary.name}
                 </Typography>
 
@@ -48,7 +49,7 @@ export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
                     </Button>
                 )}
 
-                <Typography variant="body1" component="p" gutterBottom>
+                <Typography variant="body1" component="p" gutterBottom sx={{ overflowWrap: "anywhere" }}>
                     {summary.description}
                 </Typography>
 
@@ -102,14 +103,14 @@ export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
                                 href={joinUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                sx={{ mx: 0.5 }}
+                                sx={{ mx: 0.5, overflowWrap: 'anywhere' }}
                             >
                                 {joinUrl}
                             </Link>{' '}
                             and entering the code below:
                         </Typography>
 
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
                             <Typography component="p" sx={{ fontWeight: 800, m: 0 }}>
                                 Join Code:
                             </Typography>
@@ -155,16 +156,16 @@ export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
                             WireGuard Gateway
                         </Typography>
 
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
                             <Typography component="p" sx={{ fontWeight: 800, m: 0 }}>
                                 Endpoint ID:
                             </Typography>
                             <Paper
                                 variant="outlined"
-                                sx={{ display: 'flex', alignItems: 'center', px: 1 }}
+                                sx={{ display: 'flex', alignItems: 'center', px: 1, minWidth: 0, maxWidth: '100%' }}
                                 aria-label="WireGuard endpoint ID container"
                             >
-                                <Typography component="span" sx={{ fontFamily: 'monospace' }}>
+                                <Typography component="span" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere', minWidth: 0 }}>
                                     {wireguard_endpoint.id}
                                 </Typography>
                                 <Tooltip title="Copy WireGuard Endpoint ID" leaveDelay={200} arrow describeChild>
@@ -185,11 +186,11 @@ export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
                             />
                         </Box>
 
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
                             <Typography component="p" sx={{ fontWeight: 800, m: 0 }}>
                                 Endpoint:
                             </Typography>
-                            <Typography component="span" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>
+                            <Typography component="span" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere', minWidth: 0 }}>
                                 {wireguard_endpoint.hostname}:{wireguard_endpoint.port}
                             </Typography>
                             <Tooltip title="Copy WireGuard Endpoint" leaveDelay={200} arrow describeChild>

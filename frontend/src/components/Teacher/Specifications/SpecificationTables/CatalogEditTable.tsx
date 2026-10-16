@@ -271,10 +271,9 @@ const CatalogEditTable: React.FC = () => {
 
     return  (
         <>
-            <Container maxWidth={"lg"}>
+            <Container maxWidth={"lg"} sx={{ px: { xs: 0, md: 3 } }}>
                 <Paper
                     sx={{
-                        mt: 10,
                         height: "auto",
                         display: "flex",
                         flexDirection: "column",

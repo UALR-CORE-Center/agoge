@@ -240,7 +240,7 @@ export const HumanInteractionForm: React.FC<Props> = (props) => {
                                                 </Tooltip>
                                             </span>
                                         </AccordionSummary>
-                                        <AccordionDetails>
+                                        <AccordionDetails sx={{ px: { xs: 1, sm: 2 } }}>
                                             <FormFields>
                                                 <FormGroupOutline showOverlay={props.disableForm}>
                                                     <FormGroup>
@@ -404,7 +404,7 @@ export const HumanInteractionForm: React.FC<Props> = (props) => {
                     onClick={addInteraction}
                     color={'secondary'}
                     variant={'contained'}
-                    sx={{ width: '70%', mb: 2}}
+                    sx={{ width: { xs: '100%', sm: '70%' }, mb: 2}}
                     endIcon={<Add />}
                 >
                     Add Human Interaction

@@ -34,7 +34,7 @@ export default function AssessmentDialog (props: Props) {
                 onClose={handleCloseModal}
                 fullWidth
             >
-                <DialogTitle>
+                <DialogTitle sx={{ overflowWrap: 'anywhere' }}>
                     Assessment for {currentStudent?.student_name || currentStudent?.student_email || "Unknown Student"}
                 </DialogTitle>
                 <DialogContent dividers>
@@ -55,7 +55,7 @@ export default function AssessmentDialog (props: Props) {
                                     {question.complete && (
                                         <CheckCircleIcon sx={{ color: 'green', mr: 1 }} />
                                     )}
-                                    <ListItemText primary={question.question} />
+                                    <ListItemText primary={question.question} sx={{ overflowWrap: 'anywhere' }} />
                                 </ListItem>
                             ))}
                         </List>

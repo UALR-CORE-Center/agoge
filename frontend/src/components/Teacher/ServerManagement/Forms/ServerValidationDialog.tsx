@@ -31,7 +31,7 @@ const ValidationDialog: React.FC<Props> = (
 
     return (
         <Dialog open={open} onClose={onClose} disableEnforceFocus>
-            <DialogTitle color={"error"}>
+            <DialogTitle color={"error"} sx={{overflowWrap: 'anywhere'}}>
                 {title}
                 <IconButton onClick={() => copy(textContent)} sx={{ ml: 1 }}>
                     <ContentCopyIcon />
@@ -43,7 +43,7 @@ const ValidationDialog: React.FC<Props> = (
                     elevation={1}
                     sx={{p: 1}}
                 >
-                    <Typography>{textContent}</Typography>
+                    <Typography sx={{overflowWrap: 'anywhere'}}>{textContent}</Typography>
                 </Paper>
             </DialogContent>
             <DialogActions>

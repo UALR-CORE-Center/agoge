@@ -201,7 +201,7 @@ export default function PuzzleQuestionPage() {
 
     if (loading) {
         return (
-            <Stack spacing={3} sx={{ maxWidth: 720, mx: "auto", mt: 4 }}>
+            <Stack spacing={3} sx={{ maxWidth: 720, mx: "auto", mt: 4, px: 2, pb: 4 }}>
                 <Skeleton variant="text" width={280} height={48} />
                 <Skeleton variant="rectangular" height={56} />
                 <Skeleton variant="rectangular" height={56} width={160} />
@@ -211,7 +211,7 @@ export default function PuzzleQuestionPage() {
 
     if (!test) {
         return (
-            <Stack spacing={2} sx={{ maxWidth: 720, mx: "auto", mt: 4 }}>
+            <Stack spacing={2} sx={{ maxWidth: 720, mx: "auto", mt: 4, px: 2, pb: 4 }}>
                 <Alert severity="error">Unable to load test.</Alert>
             </Stack>
         );
@@ -222,8 +222,8 @@ export default function PuzzleQuestionPage() {
             {LampSelectionModal}
 
             {!showLampModal && selectedLamp && (
-                <Stack spacing={3} sx={{ maxWidth: 720, mx: "auto", mt: 4 }}>
-                    <Typography variant="h4">{test.title}</Typography>
+                <Stack spacing={3} sx={{ maxWidth: 720, mx: "auto", mt: 4, px: 2, pb: 4 }}>
+                    <Typography variant="h4" sx={{ overflowWrap: "anywhere" }}>{test.title}</Typography>
                     {test.questions.map((q, i) => {
                         const qid = q.id || String(i);
                         const isDone = !!completed[qid];

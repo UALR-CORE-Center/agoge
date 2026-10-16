@@ -24,12 +24,12 @@ export const SharedImageWarningDialog: React.FC<Props> = ({open, imageName, acti
 
     return (
         <Dialog open={open} onClose={loading ? undefined : onClose} maxWidth="sm" fullWidth aria-labelledby="shared-image-warning-title">
-            <DialogTitle id="shared-image-warning-title">{actionLabels[action]}?</DialogTitle>
+            <DialogTitle id="shared-image-warning-title" sx={{overflowWrap: 'anywhere'}}>{actionLabels[action]}?</DialogTitle>
             <DialogContent>
                 <Stack spacing={2}>
                     <Alert severity="warning">This image is shared across multiple sites.</Alert>
                     <Typography>
-                        Checking in server changes to <strong>{imageName}</strong> updates the shared image used by other sites and applications.
+                        Checking in server changes to <strong style={{overflowWrap: 'anywhere'}}>{imageName}</strong> updates the shared image used by other sites and applications.
                         Labs that use this image may receive those changes when their servers are built or rebuilt.
                     </Typography>
                     {(action === 'edit' || action === 'save') && <Typography variant="body2">
@@ -42,7 +42,7 @@ export const SharedImageWarningDialog: React.FC<Props> = ({open, imageName, acti
                     />
                 </Stack>
             </DialogContent>
-            <DialogActions>
+            <DialogActions sx={{flexWrap: 'wrap', gap: 1, '& > :not(style) ~ :not(style)': {ml: 0}}}>
                 <Button onClick={onClose} disabled={loading}>Cancel</Button>
                 <LoadingButton color="warning" variant="contained" disabled={!acknowledged} loading={loading} onClick={onConfirm}>
                     {actionLabels[action]}

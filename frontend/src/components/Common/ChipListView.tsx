@@ -36,11 +36,13 @@ const ChipListView = <T, >({values, onRemove, renderLabel}: Props<T>): React.Rea
                     <ListItem disableGutters sx={{
                         display: 'inline',
                         width: 'auto',
+                        maxWidth: '100%',
                         pl: 0,
                         paddingX: .25
                     }} key={index}>
                         <Chip
                             size={'small'}
+                            sx={{ maxWidth: '100%' }}
                             label={thisRenderLabel(data)}
                             onDelete={onRemove ? () => onRemove(data) : undefined}
                         />

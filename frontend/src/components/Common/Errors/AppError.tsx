@@ -52,10 +52,13 @@ const AppError: React.FC = () => {
             id="homePage"
             sx={{
                 backgroundColor: '#1c2538',
-                height: '100vh',
+                minHeight: '100vh',
                 display: 'flex',
                 justifyContent: 'center',
                 alignItems: 'center',
+                px: 2,
+                py: 2,
+                boxSizing: 'border-box',
             }}
         >
             <Box
@@ -65,6 +68,7 @@ const AppError: React.FC = () => {
                     borderRadius: 4,
                     p: 2,
                     boxShadow: 3,
+                    width: '100%',
                     maxWidth: 500,
                 }}
             >
@@ -82,11 +86,14 @@ const AppError: React.FC = () => {
                     variant={"body1"}
                     textAlign={"center"}
                     color={"black"}
+                    sx={{ overflowWrap: "anywhere" }}
                 >
                     {message}
                 </Typography>
                 <Box
                     display={"flex"}
+                    flexDirection={{ xs: "column", sm: "row" }}
+                    gap={2}
                     justifyContent={"space-between"}
                     mt={2}
                 >
@@ -97,7 +104,7 @@ const AppError: React.FC = () => {
                         sx={{
                             color: "black",
                             borderColor: "black",
-                            width: "200px"
+                            width: { xs: "100%", sm: "200px" }
                         }}
                     >
                         Go back
@@ -109,7 +116,7 @@ const AppError: React.FC = () => {
                         sx={{
                             color: "white",
                             backgroundColor: "#1c2538",
-                            width: "200px"
+                            width: { xs: "100%", sm: "200px" }
                         }}
                     >
                         Go home

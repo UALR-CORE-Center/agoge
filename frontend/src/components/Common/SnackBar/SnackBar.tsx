@@ -73,7 +73,8 @@ export default function SimpleSnackbar(props: SnackbarProps) {
                         background: lighten(theme.palette.background.paper, .15),
                         borderLeft: `3px solid ${theme.palette.info.main}`,
                         display: 'flex',
-                        alignItems: 'center'
+                        alignItems: 'center',
+                        overflowWrap: 'anywhere'
                     }}
                     severity={props.severity ? props.severity : 'info'}
                 >

@@ -32,7 +32,7 @@ const AssessmentReview: React.FC<Props> = ({specification, loading, elevation, o
             {
                 includeHeader &&
                 <Stack sx={{paddingY: theme.spacing(1)}} direction={'row'} alignItems={'center'}
-                       justifyContent={'space-between'}>
+                       justifyContent={'space-between'} flexWrap={'wrap'} gap={1}>
                     <ReviewSectionLabel variant={'h6'}>Assessment Review</ReviewSectionLabel>
                     <Button onClick={() => onNavigateToStep(EditorForms.Assessment)}
                             color={"info"}

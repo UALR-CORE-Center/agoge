@@ -30,7 +30,7 @@ const ServerFormNetwork: React.FC<Props> = ({
         <Accordion defaultExpanded={true} elevation={3}>
             <AccordionSummary expandIcon={<ExpandMoreIcon/>}
                               sx={{background: theme.palette.action.hover}}>
-                <Stack gap={1} direction={'row'} alignItems={'center'}>
+                <Stack gap={1} direction={'row'} alignItems={'center'} flexWrap={'wrap'}>
                     <StyledFormFieldLabel>Network Interface</StyledFormFieldLabel>
                     <Typography
                         color={'text.secondary'}>({server[ServerFormKeys.serverNetworks].length} NICs)</Typography>
@@ -40,7 +40,7 @@ const ServerFormNetwork: React.FC<Props> = ({
                     }
                 </Stack>
             </AccordionSummary>
-            <AccordionDetails>
+            <AccordionDetails sx={{px: {xs: 1, sm: 2}}}>
 
                 <FormFields gap={.5}>
                     {

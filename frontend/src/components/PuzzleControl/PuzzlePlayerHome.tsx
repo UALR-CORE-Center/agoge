@@ -46,7 +46,7 @@ export default function PlayerHomePage() {
     };
 
     return (
-        <Stack spacing={2} sx={{ maxWidth: 720, mx: "auto", mt: 4 }}>
+        <Stack spacing={2} sx={{ maxWidth: 720, mx: "auto", mt: 4, px: 2, pb: 4 }}>
             <Typography variant="h5">Choose a puzzle</Typography>
 
             <Stack direction="row" spacing={2} alignItems="center">

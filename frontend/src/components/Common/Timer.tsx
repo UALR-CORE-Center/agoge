@@ -144,7 +144,7 @@ const TimerBox: React.FC<TimerBoxProps> = ({ type, build_id, workoutData, expire
     const renderUnitTimer = () => {
         return (
             <>
-                <Typography component="p" variant="body1" gutterBottom sx={{ fontSize: '1.25rem', fontWeight: 500 }}>
+                <Typography component="p" variant="body1" gutterBottom sx={{ fontSize: '1.25rem', fontWeight: 500, overflowWrap: 'anywhere' }}>
                     {!isExpired ? 'Expires' : `${AppUiObjectNames.UNIT}`}: {formattedDate}
                 </Typography>
                 {!isExpired && (
@@ -179,7 +179,7 @@ const TimerBox: React.FC<TimerBoxProps> = ({ type, build_id, workoutData, expire
                     component="p"
                     variant="body1"
                     gutterBottom
-                    sx={{ fontSize: '1.5rem', fontWeight: 700 }}
+                    sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' }, fontWeight: 700, overflowWrap: 'anywhere' }}
                 >
                     {!isExpired ? 'Expires' : `${AppUiObjectNames.WORKOUT}`}: {formattedDate}
                 </Typography>
@@ -296,8 +296,9 @@ const TimerBox: React.FC<TimerBoxProps> = ({ type, build_id, workoutData, expire
             aria-label={type === 'unit' ? 'Unit Timer' : 'Workout Timer'}
             elevation={1}
             sx={{
-                padding: '16px',
+                padding: { xs: 1.5, sm: 2 },
                 marginBottom: '16px',
+                minWidth: 0,
                 backgroundColor: 'background.paper',
                 color: 'text.primary'
             }}

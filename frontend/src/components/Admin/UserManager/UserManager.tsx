@@ -13,7 +13,6 @@ const UserManager: React.FC = () => {
         <Container>
             <Paper
                 sx={{
-                    mt: 10,
                     height: "auto",
                     display: "flex",
                     flexDirection: "column",
@@ -25,7 +24,7 @@ const UserManager: React.FC = () => {
                     <Typography
                         variant={"h4"}
                         component={"h2"}
-                        sx={{ mb: 1 }}
+                        sx={{ mb: 1, overflowWrap: "anywhere" }}
                     >
                         <ManageAccountsIcon
                             fontSize={"large"}

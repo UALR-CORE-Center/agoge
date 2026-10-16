@@ -51,8 +51,7 @@ export const ProjectSettings: React.FC = () => {
             <Container>
                 <Paper
                     sx={{
-                        mt: 10,
-                        height: "auto",
+                            height: "auto",
                         display: "flex",
                         flexDirection: "column",
                         overflow: "hidden"
@@ -60,7 +59,7 @@ export const ProjectSettings: React.FC = () => {
                     square={false}
                 >
                     <Box sx={{ height: "auto", width: "100%" }}>
-                        <Box sx={{ width: 'auto', m: 5 }}>
+                        <Box sx={{ width: 'auto', m: { xs: 2, sm: 3, md: 5 } }}>
                             <Typography variant={"h4"} component={"h2"}>Project Settings</Typography>
 
                             {   formData ?

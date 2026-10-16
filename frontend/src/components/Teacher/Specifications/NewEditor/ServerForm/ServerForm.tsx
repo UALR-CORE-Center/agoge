@@ -263,6 +263,7 @@ const ServerForm: React.FC<Props> = ({
                                     <AccordionDetails
                                         id={`server-panel-${index}-content`}
                                         aria-labelledby={`server-panel-${index}-header`}
+                                        sx={{ px: { xs: 1, sm: 2 } }}
                                     >
                                         <FormFields>
                                             <FormGroupOutline showOverlay={disableForm}>
@@ -361,7 +362,7 @@ const ServerForm: React.FC<Props> = ({
             }
 
             <Button disabled={disableForm} onClick={addServer} variant={'contained'}
-                sx={{ width: '70%', backgroundColor:'secondary.dark' }} endIcon={<Add />}>
+                sx={{ width: { xs: '100%', sm: '70%' }, backgroundColor:'secondary.dark' }} endIcon={<Add />}>
                 Add Server
             </Button>
         </FormFields>

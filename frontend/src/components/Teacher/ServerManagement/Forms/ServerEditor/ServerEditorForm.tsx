@@ -178,7 +178,7 @@ const ServerEditor: React.FC = () => {
 
     if (image.pending || !image.data) {
         return (
-            <Container sx={{mt: theme.spacing(9)}}>
+            <Container sx={{width: '100%', px: {xs: 0, sm: 3}}}>
                 {image.pending ? <CircularProgress aria-label="Loading image details" /> : <Alert severity="error">Could not load image details. Return to Manage Servers and try again.</Alert>}
                 <Button onClick={handleCancel}>Back to Manage Servers</Button>
             </Container>
@@ -187,15 +187,15 @@ const ServerEditor: React.FC = () => {
 
     if (image.data.is_shared && (!image.data.can_edit_shared || !sharedEditAcknowledged)) {
         return (
-            <Container sx={{mt: theme.spacing(9)}}>
-                <Paper sx={{p: 3}}>
+            <Container sx={{width: '100%', px: {xs: 0, sm: 3}}}>
+                <Paper sx={{p: {xs: 2, sm: 3}}}>
                     <Stack spacing={2}>
-                        <Typography variant="h5" component="h1">{image.data.name}</Typography>
+                        <Typography variant="h5" component="h1" sx={{overflowWrap: 'anywhere'}}>{image.data.name}</Typography>
                         <Alert severity="info">
                             This server image is shared across multiple sites and applications.
                             {' '}Only administrators can edit it directly. Create a copy for this site to customize it under a new name.
                         </Alert>
-                        <Stack direction="row" spacing={2}>
+                        <Stack direction={{xs: 'column', sm: 'row'}} spacing={2} useFlexGap flexWrap="wrap">
                             <Button onClick={handleCancel}>Back to Manage Servers</Button>
                             <Button variant="contained" onClick={() => setCopyOpen(true)}>Copy for this site and edit</Button>
                             {image.data.can_edit_shared && <Button color="warning" variant="outlined" onClick={() => setSharedWarning('edit')}>Edit shared image</Button>}
@@ -224,16 +224,16 @@ const ServerEditor: React.FC = () => {
 
     return (
         <>
-            <Container sx={{ width: "80%", overflow: "hidden", mt: theme.spacing(9) }}>
+            <Container sx={{ width: { xs: "100%", md: "80%" }, overflow: "hidden", px: { xs: 0, sm: 3 } }}>
                 <Paper elevation={1} square={false} sx={{ width: "100%", paddingY: theme.spacing(1) }}>
-                    <Stack sx={{ padding: theme.spacing(2), overflowY: "auto" }}>
+                    <Stack sx={{ padding: { xs: 1, sm: 2 }, overflowY: "auto", minWidth: 0 }}>
                         {image.data.is_shared && <Alert severity="warning" sx={{mb: 2}}>
                             <strong>This image is shared across sites.</strong> Checking in server changes updates the image used by other sites and applications.
                             {' '}The template settings below apply to this site.
                         </Alert>}
-                        <Stack direction={"row"} alignItems={"center"} justifyContent={"space-between"}>
-                            <Stack gap={1} direction={"row"} alignItems={"center"}>
-                                <Typography variant={"h5"} component={"h1"}>Edit {image_id} </Typography>
+                        <Stack direction={"row"} alignItems={"center"} justifyContent={"space-between"} flexWrap={"wrap"} gap={1}>
+                            <Stack gap={1} direction={"row"} alignItems={"center"} sx={{ minWidth: 0 }}>
+                                <Typography variant={"h5"} component={"h1"} sx={{ overflowWrap: "anywhere" }}>Edit {image_id} </Typography>
                                 {
                                     formErrors && (
                                         <ErrorOutline color={'error'} fontSize={'small'}/>
@@ -285,7 +285,7 @@ const ServerEditor: React.FC = () => {
                                 interactionsForm={hInteractionsForm}
                             />
 
-                            <Stack gap={1} direction={"row"} alignItems={"center"} justifyContent={"end"}>
+                            <Stack gap={1} direction={"row"} alignItems={"center"} justifyContent={"end"} flexWrap={"wrap"}>
                                 <LoadingButton
                                     onClick={handleCancel}
                                     variant="outlined"

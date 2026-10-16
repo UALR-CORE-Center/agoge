@@ -29,6 +29,7 @@ export const LoadingState: React.FC<LoadingStateProps> = (props) => {
                         letterSpacing: 2
                     },
                     p: 2,
+                    maxWidth: '100%',
                     width: props.width
                 }}
             />

@@ -5,7 +5,7 @@ import ActiveExpiredUnitTable from "../Home/ActiveExpiredUnitTable";
 
 const TeacherHome: React.FC = () => {
     return (
-        <Box id="homePage" sx={{mt: 10}}>
+        <Box id="homePage" sx={{width: '100%', minWidth: 0}}>
             <ActiveExpiredUnitTable />
         </Box>
     );

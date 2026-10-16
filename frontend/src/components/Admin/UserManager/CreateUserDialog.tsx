@@ -149,6 +149,8 @@ export const CreateUserDialog: React.FC<DialogProps> = (props) => {
                     <Box
                         sx={{
                             display: 'flex',
+                            flexWrap: 'wrap',
+                            gap: 2,
                             justifyContent: 'space-between',
                             mt: 2
                         }}
@@ -158,7 +160,6 @@ export const CreateUserDialog: React.FC<DialogProps> = (props) => {
                             variant="contained"
                             startIcon={<Cancel />}
                             color="error"
-                            sx={{mr:2}}
                         >
                             Cancel
                         </Button>

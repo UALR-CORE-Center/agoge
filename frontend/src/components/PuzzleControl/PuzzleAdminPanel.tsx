@@ -147,7 +147,7 @@ export default function PuzzleAdminPanel() {
     }, [selectedLamp]);
 
     return (
-        <Stack spacing={2} sx={{ maxWidth: 720, mx: "auto", mt: 4 }}>
+        <Stack spacing={2} sx={{ maxWidth: 720, mx: "auto", mt: 4, px: 2, pb: 4 }}>
             <Typography variant="h5">Create puzzle</Typography>
             <TextField
                 label="Test Title"
@@ -166,6 +166,9 @@ export default function PuzzleAdminPanel() {
                             direction="row"
                             justifyContent="space-between"
                             alignItems="center"
+                            flexWrap="wrap"
+                            useFlexGap
+                            gap={1}
                             sx={{
                                 p: 1.5,
                                 borderRadius: 2,
@@ -173,7 +176,7 @@ export default function PuzzleAdminPanel() {
                                 boxShadow: 1,
                             }}
                         >
-                            <Stack spacing={0.5}>
+                            <Stack spacing={0.5} sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
                                 <Typography fontWeight="bold">{q.title}</Typography>
                                 <Typography variant="body2" color="text.secondary">
                                     Answer: {q.answer}
@@ -210,7 +213,7 @@ export default function PuzzleAdminPanel() {
 
             <Divider />
 
-            <Stack spacing={2} sx={{mx: "auto"}}>
+            <Stack spacing={2} sx={{mx: "auto", width: "100%"}}>
                 <TextField
                     label="Question"
                     value={questionTitle}
@@ -229,7 +232,7 @@ export default function PuzzleAdminPanel() {
                     onChange={(e) => setQuestionHint(e.target.value)}
                     fullWidth
                 />
-                <Stack direction="row" spacing={2} alignItems="center" justifyContent="space-between">
+                <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" useFlexGap gap={2}>
                     <FormControlLabel
                         control={<Switch checked={fuzzy} onChange={(e) => setFuzzy(e.target.checked)} />}
                         label="Fuzzy match (handles minor typos)"

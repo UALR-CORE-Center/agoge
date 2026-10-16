@@ -86,7 +86,9 @@ const SessionWaitDialog: React.FC = () => {
                 minHeight: "100vh",
                 display: 'flex',
                 justifyContent: 'center',
-                alignItems: 'center'
+                alignItems: 'center',
+                padding: 16,
+                boxSizing: 'border-box'
             }}
         >
             <Box
@@ -96,6 +98,7 @@ const SessionWaitDialog: React.FC = () => {
                     borderRadius: 1,
                     padding: 2,
                     boxShadow: 3,
+                    width: '100%',
                     maxWidth: '600px',
                     margin: 'auto',
                     textAlign: 'center'
@@ -126,7 +129,7 @@ const SessionWaitDialog: React.FC = () => {
                 </Box>
                 <Box id="claim-workout-div" sx={{ display: loading ? 'none' : 'block' }}>
                     {errorMessage && (
-                        <Typography variant="h6" color="error" align="center" sx={{ p: 3 }}>
+                        <Typography variant="h6" color="error" align="center" sx={{ p: { xs: 1, sm: 3 }, overflowWrap: 'anywhere' }}>
                             {errorMessage}
                         </Typography>
                     )}

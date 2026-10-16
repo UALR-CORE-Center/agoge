@@ -37,7 +37,7 @@ export default function ErrorDialog(props: DialogProps) {
             <DialogTitle id="error-alert-dialog-title">{props.title}</DialogTitle>
 
             <DialogContent>
-                <Typography id="error-alert-dialog-description" color={"textPrimary"}>
+                <Typography id="error-alert-dialog-description" color={"textPrimary"} sx={{ overflowWrap: 'anywhere' }}>
                     {props.message}
                 </Typography>
                 <IconButton onClick={() => copy(props.message)} aria-label="copy" color="info">

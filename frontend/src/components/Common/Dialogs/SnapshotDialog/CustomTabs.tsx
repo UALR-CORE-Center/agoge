@@ -91,7 +91,7 @@ export const StyledTabPanel = (props: TabPanelProps) => {
             }}
         >
             {value === index && (
-                <Box sx={{ p: 3 }}>
+                <Box sx={{ p: { xs: 1, sm: 3 } }}>
                     {children}
                 </Box>
             )}

@@ -78,7 +78,11 @@ export const NestedListItem = styled(Stack, {
     '&:nth-of-type(even)': {
         backgroundColor: !disableAlternatingColors ? theme.palette.background.default : undefined,
     },
-    border: '1px solid ' + theme.palette.divider
+    border: '1px solid ' + theme.palette.divider,
+    // Stack key above value on phones so neither column gets squeezed to a few characters.
+    [theme.breakpoints.down('sm')]: {
+        flexDirection: 'column',
+    },
 }));
 
 
@@ -101,6 +105,9 @@ export const ItemKeyWrapper = styled(ListItemText)(({theme}: {
     paddingLeft: theme.spacing(1),
     display: 'flex',
     alignItems: 'center',
+    [theme.breakpoints.down('sm')]: {
+        width: 'auto',
+    },
 }));
 
 
@@ -109,10 +116,11 @@ export const ItemValue = styled(ListItemText)(({theme}: {
     theme: Theme
 }) => ({
     width: '70%',
+    minWidth: 0,
     '& .MuiTypography-root': {
         fontSize: theme.typography.body2.fontSize,
         wordBreak: 'break-word',
-        overflowWrap: 'break-word',
+        overflowWrap: 'anywhere',
         whiteSpace: 'normal'
     },
     margin: 0,

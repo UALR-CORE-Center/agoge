@@ -1,10 +1,12 @@
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
-import { Menu, MenuItem, IconButton, ListItemIcon, MenuProps, Typography } from '@mui/material';
+import { Box, Menu, MenuItem, IconButton, ListItemIcon, MenuProps, Typography } from '@mui/material';
 import React, { useState, MouseEvent } from 'react';
 import { Link } from "react-router-dom";
 
 interface AppBarMenuProps {
     iconText: string;
+    /** Shown in place of iconText on phone-width screens, where the label doesn't fit. */
+    icon?: React.ReactNode;
     textOverflow: boolean;
     menuItems: {
         label: string;
@@ -21,6 +23,7 @@ interface AppBarMenuProps {
 const AppBarMenu: React.FC<AppBarMenuProps> = (
     {
         iconText,
+        icon,
         textOverflow,
         menuItems,
         edge = 'end',
@@ -44,10 +47,11 @@ const AppBarMenu: React.FC<AppBarMenuProps> = (
             variant="body1"
             noWrap={textOverflow}
             sx={{
+                display: icon ? { xs: 'none', sm: 'block' } : 'block',
                 overflow: textOverflow ? 'hidden' : 'visible',
                 textOverflow: textOverflow ? 'ellipsis' : 'clip',
                 whiteSpace: textOverflow ? 'nowrap' : 'normal',
-                maxWidth: textOverflow ? '150px' : 'none',
+                maxWidth: textOverflow ? { sm: '120px', md: '150px' } : 'none',
                 marginRight: '2px'
             }}
         >
@@ -61,14 +65,24 @@ const AppBarMenu: React.FC<AppBarMenuProps> = (
                 edge={edge}
                 color={color}
                 onClick={handleMenuOpen}
+                aria-label={iconText}
+                aria-haspopup="true"
+                aria-expanded={Boolean(anchorEl)}
                 sx={{
                     display: 'flex',
                     alignItems: 'center',
-                    width: width || '200px',
+                    width: width ?? 'auto',
+                    flexShrink: 0,
+                    px: { xs: 0.5, sm: 1 },
                     borderRadius: '4px',
                     margin: '2px'
                 }}
             >
+                {icon && (
+                    <Box component="span" sx={{ display: { xs: 'inline-flex', sm: 'none' } }}>
+                        {icon}
+                    </Box>
+                )}
                 {renderIconText(iconText, textOverflow)}
                 <ArrowDropDownIcon fontSize="small" />
             </IconButton>
@@ -96,7 +110,7 @@ const AppBarMenu: React.FC<AppBarMenuProps> = (
                         component={item.to ? Link : "div"}
                         to={item.to}
                         sx={{
-                            width: "200px"
+                            minWidth: "200px"
                         }}
                     >
                         {item.icon && <ListItemIcon>{item.icon}</ListItemIcon>}

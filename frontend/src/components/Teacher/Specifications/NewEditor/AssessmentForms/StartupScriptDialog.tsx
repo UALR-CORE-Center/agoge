@@ -173,7 +173,7 @@ const StartupScriptDialog: React.FC<Props> = ({onClose}) => {
                     </FormGroup>
 
                     <FormGroup>
-                        <Stack direction={'row'} gap={1}>
+                        <Stack direction={'row'} gap={1} flexWrap={'wrap'}>
                             <StyledFormFieldLabel>Startup Script</StyledFormFieldLabel>
 
                             {
@@ -206,7 +206,7 @@ const StartupScriptDialog: React.FC<Props> = ({onClose}) => {
 
                                      sx={{
                                          border: '2px dashed ' + (!(!!selectedFileInput.error) ? 'gray' : theme.palette.error.main),
-                                         width: '200px%',
+                                         width: '100%',
                                          height: '200px',
                                          cursor: 'pointer',
                                          '&:hover': {
@@ -219,7 +219,7 @@ const StartupScriptDialog: React.FC<Props> = ({onClose}) => {
                                      }}
                                 >
                                     {selectedFileInput.value?.name ?
-                                        <Typography color={'text.secondary'} className={'overflow'}>
+                                        <Typography color={'text.secondary'} className={'overflow'} sx={{px: 1, minWidth: 0, overflowWrap: 'anywhere'}}>
                                             {selectedFileInput.value.name}
                                         </Typography> :
                                         <Typography color={'text.secondary'}>
@@ -237,7 +237,7 @@ const StartupScriptDialog: React.FC<Props> = ({onClose}) => {
                             </Paper>
                             {
                                 !!selectedFileInput?.error &&
-                                <Typography sx={{ml: 1.5}} variant={'caption'} color={'text.secondary'}>
+                                <Typography sx={{ml: 1.5, overflowWrap: 'anywhere'}} variant={'caption'} color={'text.secondary'}>
                                     {selectedFileInput.error}
                                 </Typography>
                             }

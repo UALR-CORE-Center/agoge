@@ -107,7 +107,8 @@ const StyledDataGrid: React.FC<DataGridProps> = ({
                     flexWrap: 'wrap',
                     gap: 2,
                     justifyContent: 'flex-start',
-                    width: '100%',
+                    flex: '1 1 auto',
+                    minWidth: 0,
                 }}
             >
                 {props.buttonsConfig?.map((button, index) => {
@@ -219,7 +220,7 @@ const StyledDataGrid: React.FC<DataGridProps> = ({
             return null;
         } else {
             return (
-                <Stack alignItems="center" direction="row" gap={1} paddingTop={1}>
+                <Stack alignItems="center" direction="row" gap={1} paddingTop={1} sx={{ minWidth: 0 }}>
                     {props.labelProps?.icon ?? <AssignmentIcon fontSize="large" />}
                     <Typography
                         id={props.labelProps?.text ? headingId : undefined}
@@ -227,7 +228,8 @@ const StyledDataGrid: React.FC<DataGridProps> = ({
                         component="h2"
                         sx={{
                             fontFamily: "monospace",
-                            letterSpacing: 2,
+                            letterSpacing: { xs: 1, sm: 2 },
+                            overflowWrap: "anywhere",
                             ...(props.labelProps?.sx ?? {}),
                         }}
                     >
@@ -241,10 +243,12 @@ const StyledDataGrid: React.FC<DataGridProps> = ({
 
     const theme = useTheme();
     return (
-        <>
+        // minWidth: 0 lets the grid shrink inside flex parents; columns wider than
+        // the screen then scroll horizontally within the grid, not the page.
+        <Box sx={{ width: '100%', minWidth: 0 }}>
             {renderLabel()}
             <Box sx={{ py: 2 }}>
-                <Stack direction={'row'} alignItems={'center'} justifyContent={'space-between'}>
+                <Stack direction={'row'} alignItems={'center'} justifyContent={'space-between'} flexWrap={'wrap'} gap={1}>
                     {
                         renderButtons()
                     }
@@ -261,7 +265,7 @@ const StyledDataGrid: React.FC<DataGridProps> = ({
                 </Stack>
             </Box>
             {render()}
-        </>
+        </Box>
     );
 };
 

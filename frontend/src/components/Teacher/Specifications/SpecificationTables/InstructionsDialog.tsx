@@ -59,7 +59,7 @@ export function InstructionsDialog (props: Props) {
                     <Divider sx={{ mt: 1 }}/>
                 </DialogTitle>
                 <DialogContent>
-                    <Box sx={{ display: 'flex', flexDirection: 'row', gap: 3 }}>
+                    <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: { xs: 2, sm: 3 } }}>
                         {instructionUrls.teacher && (
                             <Button
                                 endIcon={<EditIcon />}

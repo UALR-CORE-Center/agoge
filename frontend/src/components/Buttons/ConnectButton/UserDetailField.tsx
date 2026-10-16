@@ -59,9 +59,10 @@ export const UserDetailField: React.FC<UserDetailFieldProps> = ({ label, value }
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "space-between",
+                    gap: 1,
                 }}
             >
-                <Typography sx={{ wordBreak: "break-all" }}>
+                <Typography sx={{ wordBreak: "break-all", minWidth: 0 }}>
                     <em>{value || "—"}</em>
                 </Typography>
 

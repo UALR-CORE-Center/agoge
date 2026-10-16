@@ -130,7 +130,11 @@ export const FormGroupOutline = styled(Paper, {
     border: '2px solid ' + theme.palette.divider,
     padding: theme.spacing(3),
     opacity: showOverlay ? .25 : 1,
-    width: '100%'
+    width: '100%',
+    minWidth: 0,
+    [theme.breakpoints.down('sm')]: {
+        padding: theme.spacing(1.5),
+    },
 }));
 
 export const FormFields = styled(Stack, {

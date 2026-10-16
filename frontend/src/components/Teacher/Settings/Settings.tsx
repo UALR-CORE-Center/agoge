@@ -8,11 +8,11 @@ const TeacherSettings: React.FC = () => {
     const { firebaseUser } = useAuthContext();
 
     return (
-        <Container>
+        <Container disableGutters sx={{width: '100%'}}>
             <Paper
                 id="settings-page"
                 elevation={1}
-                sx={{m: 10}}
+                sx={{my: {xs: 0, md: 4}, mx: {xs: 0, md: 10}}}
                 style={{
                     padding: "15px",
                 }}

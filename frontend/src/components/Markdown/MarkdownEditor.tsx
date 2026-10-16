@@ -120,23 +120,26 @@ const MarkdownEditor: React.FC = () => {
     }, []);
 
     return (
-        <Box sx={{ display: 'flex', height: '100%', mt: 10, justifyContent:'flex-center'}}>
-            <Box component="main" sx={{ ml: 5 }}>
+        <Box sx={{ display: 'flex', height: '100%', width: '100%', justifyContent:'center', minWidth: 0 }}>
+            <Box component="main" sx={{ width: '100%', minWidth: 0 }}>
                 {file && (
                     <Box
                         sx={{
                             display: 'flex',
                             alignItems: 'center',
+                            flexWrap: 'wrap',
+                            gap: 1,
+                            mb: 1,
                         }}
                     >
-                        <Typography variant="h4">{file.name}</Typography>
+                        <Typography variant="h4" sx={{ overflowWrap: 'anywhere', minWidth: 0 }}>{file.name}</Typography>
                         {file && (
                             <LoadingButton
                                 onClick={handleSave}
                                 variant="contained"
                                 color="success"
                                 loading={isLoadingSave}
-                                sx={{ml:2}}
+                                sx={{ml:{ xs: 0, sm: 2 }}}
                                 endIcon={<Save />}
                             >
                                 Save
@@ -145,11 +148,12 @@ const MarkdownEditor: React.FC = () => {
                     </Box>
                 )}
                 <Paper
-                    style={{
-                        minHeight: "600px",
-                        marginRight: "40px",
+                    sx={{
+                        minHeight: { xs: '400px', md: '600px' },
                         position: "relative",
-                        width: '80vw'
+                        width: '100%',
+                        minWidth: 0,
+                        overflowX: 'auto',
                     }}
                 >
                     {!file ? (
