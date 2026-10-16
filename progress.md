@@ -71,7 +71,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **G2** Host rows — spec + done-when at PRD.md:1016
 - [x] **G3** Reset publish — spec + done-when at PRD.md:1017
 - [x] **G4** Reset dispatcher — spec + done-when at PRD.md:1018
-- [ ] **G4b** Route `CTF_HOST_RESET` → the `host_reset` dispatcher (with `SERVER_NAME`, `RESET_MODE`) in `CtfHandler.action_map`, with a test showing it reaches it (E3 done-when, PRD.md:992)
+- [x] **G4b** Route `CTF_HOST_RESET` → the `host_reset` dispatcher (with `SERVER_NAME`, `RESET_MODE`) in `CtfHandler.action_map`, with a test showing it reaches it (E3 done-when, PRD.md:992)
 - [x] **G5** Reset `replant` — spec + done-when at PRD.md:1020
 - [x] **G6** Reset `restart` — spec + done-when at PRD.md:1021
 - [x] **G7** Reset `rebuild` — spec + done-when at PRD.md:1022
@@ -503,3 +503,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - ESLint gate: "No files matching the pattern "src/components/Teacher/Ctf" were found". This is expected because no Group I/J task is done.
   - tsc gate: 0 errors name a CTF file.
 - **Reopened:** none.
+
+### Iteration 41 — 2026-10-16
+- **Completed:** G4b — `CtfHandler.action_map` now routes `CTF_HOST_RESET` to `_host_reset`, which calls `HostReset(env_dict, db).run(ctf_id, workout_id, server_name, reset_mode)`. The placeholder comment is gone. The handler reads nothing itself and passes a missing server or mode through as None, so HostReset's `ValueError` guard decides. `cloud_functions/tests/test_ctf_handler.py` has 6 new tests: each mode reaches HostReset with no db read, plant or arm; missing attributes are passed through; HostReset errors propagate; CTF_PLANT does not reach HostReset; and unknown actions reach none of the three classes.
+- **Learned:** All three CTF actions are now routed, so the E3 done-when is fully met. Gates now: api 664, cloud_functions 449, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** H1 Submission resolve (PRD.md:1026).
