@@ -4,7 +4,7 @@ from typing import AbstractSet, List, Optional, Tuple
 
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections, DbOperators
 from common.constants.states import CtfStates
-from common.exceptions.agoge import Conflict, NotFound, RateLimitExceeded
+from common.exceptions.agoge import BadRequest, Conflict, NotFound, RateLimitExceeded
 from common.models.agoge import (
     CtfBoardModel,
     CtfDigestModel,
@@ -27,18 +27,20 @@ from common.models.users import AgogeUser
 from common.utilities.ctf_flags import flag_digest, parse_flag_id
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.id_generator import IdGenerator
+from core.ctf.audit import DEFAULT_FLAG_PREFIX, CtfAudit
 from core.ctf.event import CtfEvent
 
 SUBMISSIONS_CLOSED_MESSAGE = "Submissions are closed."
 HINTS_CLOSED_MESSAGE = "Hints can only be taken while the event is running."
 HINT_NOT_FOUND_MESSAGE = "Hint not found"
+ADJUST_REASON_FLAG_MESSAGE = "The reason must not contain a flag value."
 RATE_LIMIT_WINDOW_SECONDS = 60
 UNPARSED_BUCKET = "unparsed"
 
 
 class CtfScoring:
     """Scoring for a CTF event: the student board read, flag submission (PRD Submission Algorithm),
-    hints, and the instructor and public scoreboards."""
+    hints, the instructor and public scoreboards, and manual score adjustment."""
     MESSAGES = {
         'correct': "Correct! Flag accepted.",
         'incorrect': "Incorrect flag.",
@@ -63,6 +65,7 @@ class CtfScoring:
         self.db = db
         # CtfEvent owns event authorization and the board query in board_ids order; reuse them.
         self.events = CtfEvent(env_dict=env_dict, db=db)
+        self.audit = CtfAudit(env_dict=env_dict, db=db)
 
     def board(self, workout_id: str) -> CtfStudentBoardResponse:
         """The team's view of its board. It never carries a flag's server, path, location type,
@@ -194,6 +197,51 @@ class CtfScoring:
             key=lambda i: (-standings[i][0], standings[i][1] is None, standings[i][1] or 0.0),
         )
         return [(position + 1, index) for position, index in enumerate(order)]
+
+    def adjust(self, ctf_id: str, workout_id: str, delta: int, reason: str, user: AgogeUser) -> int:
+        """Add `delta` (negative to deduct) to one board's score and return the new score.
+
+        Writes its own SCORE_ADJUST audit row, the only place the reason is kept, so the router
+        must not wrap this call in `CtfAudit` again (SC-18: exactly one row per action). Allowed in
+        every state but ARCHIVED, so a game master can correct scores after the event ends.
+        """
+        with self.audit.action(ctf_id, 'SCORE_ADJUST', user.email, target=workout_id, detail={'delta': delta}) as entry:
+            previous, score = self.db.transaction(
+                lambda transaction: self._adjust_in_transaction(transaction, ctf_id, workout_id, delta, reason, user)
+            )
+            # Added only once the transaction has screened it, so a refused reason never reaches a log row.
+            entry.add_detail(reason=reason, previous_score=previous, score=score)
+        self.logger.info(f"{self.class_name}:{ctf_id} - Adjusted score", workout_id=workout_id,
+                         delta=delta, score=score, actor=user.email)
+        return score
+
+    def _adjust_in_transaction(
+        self, transaction, ctf_id: str, workout_id: str, delta: int, reason: str, user: AgogeUser
+    ) -> Tuple[int, int]:
+        """Read the event and the board inside the transaction, so a concurrent archive or a concurrent
+        solve is not overrun. Returns (previous score, new score)."""
+        event_ref = self.db.db.collection(DbCollections.CTF.value).document(ctf_id)
+        event_snapshot = event_ref.get(transaction=transaction)
+        if not event_snapshot.exists:
+            raise NotFound(message="CTF event not found")
+        event = ModelValidator(CtfEventModel, log_location=self.log_name).load(event_snapshot.to_dict())
+        self.events._authorize(event.instructor_id, user)
+        if event.state == CtfStates.ARCHIVED.value:
+            raise Conflict(message="CTF event is ARCHIVED and read-only")
+        # The same screen CtfAudit applies to detail, done here so a flag pasted into the reason is the
+        # caller's error (DENIED) and refused before any write, not an ERROR after the score moved.
+        if any(f"{prefix}{{" in reason.lower() for prefix in (DEFAULT_FLAG_PREFIX, event.spec.scoring.flag_prefix)):
+            raise BadRequest(message=ADJUST_REASON_FLAG_MESSAGE)
+        if workout_id not in event.board_ids:
+            raise NotFound(message="CTF board not found")
+        board_ref = self.db.db.collection(DbCollections.CTF_BOARD.value).document(f"{ctf_id}-{workout_id}")
+        board_snapshot = board_ref.get(transaction=transaction)
+        if not board_snapshot.exists:
+            raise NotFound(message="CTF board not found")
+        board = ModelValidator(CtfBoardModel, log_location=self.log_name).load(board_snapshot.to_dict())
+        score = board.score + delta
+        transaction.update(board_ref, {'score': score})
+        return board.score, score
 
     def submit(self, workout_id: str, flag: str, origin_ip: Optional[str] = None) -> CtfSubmitResponse:
         """Resolve one submitted flag against the workout's active board and record it.

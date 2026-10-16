@@ -83,7 +83,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **H4** Hints — spec + done-when at PRD.md:1032
 - [x] **H5** Student board read — spec + done-when at PRD.md:1033
 - [x] **H6** Scoreboards — spec + done-when at PRD.md:1035
-- [ ] **H7** Score adjustment — spec + done-when at PRD.md:1037
+- [x] **H7** Score adjustment — spec + done-when at PRD.md:1037
 
 ### Group R — Routers
 - [ ] **R1** Instructor router — spec + done-when at PRD.md:1041
@@ -570,3 +570,15 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Only solves are frozen, as SC-16 states. Decoy penalties, hint costs and adjustments made after the freeze still show, because the board stores no timestamps for decoys or adjustments. Gates now: api 767, cloud_functions 449, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** H7 Score adjustment (PRD.md:1037), `CtfScoring.adjust(ctf_id, workout_id, delta, reason, user)` writing `SCORE_ADJUST` through `CtfAudit`.
+
+### Iteration 47 — 2026-10-16
+- **Completed:** H7 — `CtfScoring.adjust(ctf_id, workout_id, delta, reason, user) -> int` (new score) in `api/core/ctf/scoring.py`. It writes its own `SCORE_ADJUST` row through `CtfAudit` (`self.audit`), with actor = user email, target = workout_id, detail `delta` and, on OK only, `reason`/`previous_score`/`score`. Inside one transaction (`_adjust_in_transaction`) it re-reads the event and the board, then:
+  - authorizes the caller (`Unauthorized` → DENIED);
+  - refuses ARCHIVED (`Conflict`); every other state is allowed, so scores can be corrected after ENDED;
+  - refuses a reason containing `agoge{` or `<event flag_prefix>{` (case-insensitive) with `BadRequest`, before any write, so a flag never reaches the log;
+  - checks the workout is in `board_ids` and that the board doc exists (`NotFound` → ERROR);
+  - writes only `score` (it may go negative).
+  - `api/unit_tests/test_ctf_scoring_adjust.py` has 23 tests.
+- **Learned:** **R1 must NOT wrap `adjust` in `CtfAudit`.** It audits itself because the reason lives only in the audit row, and a second wrap would break SC-18's one-row rule. The route should call `adjust` and map errors with `to_http_exception`. Gates now: api 790, cloud_functions 449, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** R1 Instructor router (PRD.md:1041).
