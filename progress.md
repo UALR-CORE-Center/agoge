@@ -539,3 +539,22 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** The `ctf_enabled` → `enrolled: false` rule (SC-19) is still left to the R2 router, as with the other core classes. The board read lists challenges in every state, DRAFT included; the PRD gives no rule to hide them before start. Gates now: api 747, cloud_functions 449, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** H6 Scoreboards (PRD.md:1035): instructor ranking (score desc, then earliest `last_solve_at`) and public ranking (anonymized "Team <n>" by board order, `is_you`, freeze-aware using `solved_at <= scoreboard_frozen_at`; SC-16).
+
+### Verification — 2026-10-16 — PASS
+- **Checked:** G4b, H1, H2, H3, H4 and H5, the `[x]` tasks changed since the last verification. I read all of `api/core/ctf/scoring.py`, `FirestoreDatabase.transaction` (it wraps the callback in `firestore.transactional` and returns its result), `ModelValidator.load`, and the `FakeDb` transaction and barrier in `test_ctf_scoring_submit.py`. A subagent read `cloud_functions/handlers/ctf_handler.py`, the CTF branch in `main.py`, `HostReset.run`'s signature and `test_ctf_handler.py`. I compared all of it with PRD.md:1024-1034, the Submission Algorithm (PRD.md:904-920), the response models and SC-4/10/11/12/17.
+  - G4b: `action_map` routes `CTF_HOST_RESET` to `_host_reset`, which calls `HostReset(env_dict, db).run(ctf_id, workout_id, server_name, reset_mode)` (ctf_handler.py:96-102). The argument order matches `host_reset.py:42`. All three CTF actions route to real classes, and an unknown action raises `ValueError`. Tests assert the exact `run` arguments for each mode.
+  - H1: steps run in the PRD order. A non-RUNNING event records `closed` and then raises `Conflict("Submissions are closed.")`. A missing digest or another `ctf_id` gives `incorrect`. Another workout gives `cross_submission` with `matched_workout_id`, answered to the student as `incorrect` (SC-10 test at :166). Exactly one `CtfSubmissionModel` is appended, holding the digest and never the value.
+  - H2: step 6 re-reads the board inside one `db.transaction`. The outcomes are duplicate, decoy (points and `decoy_count += 1`, never solved) or correct (`solved`, `solved_at`, score, `solve_count`, `last_solve_at`). `attempts` is incremented on the parsed flag. The fake serializes transactions under a lock behind a 2-thread barrier, so the SC-12 test (:207) exercises a real race and asserts one correct, one duplicate and the score raised once.
+  - H3: one transaction on `agoge-ctf-rate-limit/{ctf_id}-{workout_id}-{bucket}`, with bucket = parsed id or `"unparsed"`. A window ≥ 60 s old is reset. At `count >= submission_rate_limit` it records `rate_limited` and raises `RateLimitExceeded`, with the PRD message and retry seconds. With the default limit of 10, the 11th submission is refused (SC-11 test :354, new-window test :392).
+  - H4: deducts `hint_cost` once inside a board transaction. A second call returns the hint without a write (test :142), and two concurrent first calls deduct once (:154).
+  - H5: `board()` drops decoys and flags whose `unlocks_after` are unsolved, through the shared `_is_locked`. `CtfChallenge` has no location, digest or access fields. The SC-17 test (:194) runs for every CtfStates value.
+  - No TODO, stub, `NotImplemented` or hardcoded test-only value in the new code. (`NotImplemented` in `document_database.py` is the pre-existing abstract base.)
+  - Non-blocking: in `test_concurrent_correct_submissions_award_once`, the barrier now also gates the H3 rate-limit transaction, not only the board transaction. Both threads still reach step 6 under the lock, so the test still holds.
+- **Gate results:**
+  - api/unit_tests: 747 passed.
+  - cloud_functions/tests: 449 passed.
+  - build_files/cloud_deployment/tests: 304 passed.
+  - frontend `npm test`: 4 files, 28 tests passed.
+  - ESLint gate: "No files matching the pattern "src/components/Teacher/Ctf" were found". This is expected because no Group I/J task is done.
+  - tsc gate: 0 errors name a CTF file.
+- **Reopened:** none.
