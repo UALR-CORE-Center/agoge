@@ -123,6 +123,12 @@ try {{
 """
 
 
+def board_servers(event: CtfEventModel, board: CtfBoardModel) -> List[str]:
+    """Spec servers carrying at least one of the board's flags, in spec flag order."""
+    board_flag_ids = {flag.flag_id for flag in board.flags}
+    return list(dict.fromkeys(f.server for f in event.spec.flags if f.id in board_flag_ids))
+
+
 class FlagPlanter:
     """
     Plants one CTF event's flags on a board's servers through the agoge-ctf-plant metadata key
