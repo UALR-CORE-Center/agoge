@@ -17,6 +17,8 @@ export interface Unit {
     creation_timestamp: number;
     lms_integration?: Dictionary;
     rubric_support?: boolean;
+    // True when the unit carries a `ctf` block; the block itself stays server-side.
+    ctf_capable?: boolean;
     wireguard_endpoint?: WireGuardEndpoint | null;
 }
 

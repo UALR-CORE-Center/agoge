@@ -7,6 +7,7 @@ export const transformToUnit = (data: any): Unit => {
         id: data.id,
         assessment: data.assessment,
         rubric_support: data.rubric_support === true,
+        ctf_capable: data.ctf !== null && typeof data.ctf === 'object',
         build_type: data.build_type,
         creation_timestamp: data.creation_timestamp,
         firewall_rules: data.firewall_rules,
