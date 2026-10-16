@@ -32,7 +32,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **B1** Derivation module — spec + done-when at PRD.md:962
 - [x] **B2** Seed property — spec + done-when at PRD.md:964
 - [x] **B3** Seed provisioning — spec + done-when at PRD.md:965
-- [ ] **B4** CTF state manager — spec + done-when at PRD.md:967
+- [x] **B4** CTF state manager — spec + done-when at PRD.md:967
 
 ### Group C — Specification validation
 - [ ] **C1** Flag validator — spec + done-when at PRD.md:972
@@ -218,3 +218,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `ctf_enabled` is deliberately not in `VARIABLES`, so the "All" setup path is unchanged; it is reachable from the "specific" path. The ruff hook reports two pre-existing F541s in `environment_variables.py` (lines ~57 and ~360). Gates now: api 239, cloud_functions 285, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** B4 CTF state manager (`common/utilities/ctf_state_manager.py`, PRD.md:967).
+
+### Iteration 13 — 2026-10-16
+- **Completed:** B4 — `common/utilities/ctf_state_manager.py` `CtfStateManager` (standalone; `db` injectable, lazy Firestore factory). `transition(ctf_id, new_state, **fields)` runs `transition_in_transaction` via `self.db.transaction`: reads through `self.db.db.collection(DbCollections.CTF.value)` (wireguard pattern), `NotFound`/`Conflict`, stamps UTC ISO `state_timestamp`, revalidates with `ModelValidator(CtfEventModel)`, `transaction.update` with only `state`/`state_timestamp`/extra fields. Unknown or protected (`id`/`state`/`state_timestamp`) extra fields raise `ValueError`. `api/unit_tests/test_ctf_state_manager.py` (80 tests, fake db/transaction) covers all 14 allowed pairs, every other pair including the named `(RUNNING, ARMING)`/`(ENDED, RUNNING)`, timestamp stamping, the field mask, and failed validation writing nothing.
+- **Learned:** E4's arm aggregation must read the event *before* writing its board and pass it as `event=` to `transition_in_transaction` (Firestore forbids reads after writes in a transaction). Self-transitions are Conflicts, not no-ops. Gates now: api 319, cloud_functions 285, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** C1 Flag validator (PRD.md:972).
