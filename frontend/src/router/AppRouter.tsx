@@ -23,6 +23,7 @@ import PlayerHomePage from "../components/PuzzleControl/PuzzlePlayerHome";
 import PuzzleQuestionPage from "../components/PuzzleControl/PuzzleQuestionPage";
 import JoinWorkout from "../components/Student/JoinWorkout";
 import StudentWorkout from "../components/Student/Workout";
+import CtfDashboard from "../components/Teacher/Ctf/CtfDashboard";
 import CtfEventList from "../components/Teacher/Ctf/CtfEventList";
 import TeacherHome from '../components/Teacher/Home/Home';
 import ServerCreatorForm from "../components/Teacher/ServerManagement/Forms/ServerCreator/ServerCreatorForm";
@@ -39,6 +40,7 @@ import {ProtectedRoute} from "./ProtectedRoute";
 import {
     URL_LOGIN,
     URL_TEACHER_CTF_BASE,
+    URL_TEACHER_CTF_EVENT,
     URL_LOGOUT,
     URL_TEACHER_HOME,
     URL_TEACHER_SETTINGS,
@@ -95,6 +97,7 @@ const AppRouter: React.FC = () => {
                     { path: `${URL_TEACHER_SPECIFICATION_EDIT}/:edit_id`, element: <ProtectedRoute element={<Editor />} level={"instructor"} /> },
                     { path: `${URL_TEACHER_UNIT}/:build_id`, element: <ProtectedRoute element={<TeacherUnit />} level={"instructor"} /> },
                     { path: URL_TEACHER_CTF_BASE, element: <ProtectedRoute element={<CtfEventList />} level={"instructor"} /> },
+                    { path: `${URL_TEACHER_CTF_EVENT}/:ctf_id`, element: <ProtectedRoute element={<CtfDashboard />} level={"instructor"} /> },
                     { path: URL_ADMIN_BASE, element: <ProtectedRoute element={<ProjectOverviewTabs />} level={"admin"} />},
                     { path: URL_ADMIN_MANAGE_USERS, element: <ProtectedRoute element={<UserManager />} level={"admin"} />},
                     { path: URL_ADMIN_MANAGE_IMAGES, element: <ProtectedRoute element={<GlobalImageManager />} level={"admin"} />},
