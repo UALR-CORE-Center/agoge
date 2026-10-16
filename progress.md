@@ -105,7 +105,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I9** Dashboard shell — spec + done-when at PRD.md:1061 (the browser check is carried by I4b)
 - [x] **I10** Event Control panel — spec + done-when at PRD.md:1063 (the browser check that illegal actions are disabled is carried by I4b)
 - [x] **I11** Scoreboard settings — spec + done-when at PRD.md:1065
-- [ ] **I12** Flags panel — spec + done-when at PRD.md:1066
+- [x] **I12** Flags panel — spec + done-when at PRD.md:1066
 - [ ] **I13** Flags bulk replant — spec + done-when at PRD.md:1067
 - [ ] **I14** Hosts panel — spec + done-when at PRD.md:1068
 - [ ] **I15** Scoreboard panel — spec + done-when at PRD.md:1069
@@ -805,3 +805,14 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - Gates: frontend 14 files / 110 tests. ESLint is clean on the CTF paths, and tsc reports no CTF errors. No Python changed. The `agoge-reviewer` found no defects.
 - **Blockers:** none. I4b is still open for a human to do the browser checks.
 - **Next:** I12 Flags panel (PRD.md:1066). Fill the Flags `tabpanel` slot in `CtfDashboard` with `ctfService.getFlags`.
+
+### Iteration 64 — 2026-10-16
+- **Completed:** I12.
+  - New `frontend/src/components/Teacher/Ctf/CtfFlagsPanel.tsx` is mounted in the dashboard's Flags `tabpanel`. It is a `StyledDataGrid` (Community) with these columns: Flag, Server, Slot, Points, Decoy, Status, "Plant status by team" (one coloured `Chip` per board, with `plant_error` in its tooltip and ✓ when solved), and a Replant button. Rows are keyed by `getRowId` on `flag_id`, and row height is `auto`.
+  - Status column: rows with `failed` or `stale` boards show `WarningAmberIcon` plus text such as "1 failed, 2 stale" (`flagProblems`). Other rows show "OK".
+  - Replant: the button is enabled only in `REPLANT_STATES` (ARMED, RUNNING, PAUSED, BROKEN), the same states as the API route. It confirms through `ActionConfirmDialog`, because a replant resets the VM (SC-7). It then sends `PUT /ctf/{id}/flags/` with `{servers: [row.server]}` for every board, because replant works per server, not per flag. It shows a success notice with the message count and re-reads the flags. A replant error has its own dismissible `Alert`, separate from the load error, so the next poll does not clear it.
+  - Polling: `usePolling` every `FLAGS_POLL_INTERVAL_MS = 15000`, only while the Flags tab is active and the event is not ARCHIVED. An ARCHIVED event gets one read from a `useEffect`; the first version never loaded at all, and a test caught it.
+  - Tests: `CtfFlagsPanel.test.tsx` (8): columns, the warning icon and text, replant confirm and re-read, cancel, the API error, the state matrix for all 8 states, and the load error. One added `CtfDashboard` test checks that the panel mounts and stops polling when another tab is selected (`getFlags` was added to that file's service mock).
+- **Learned:** The dashboard test's `ctfService` mock has to include every service function that a mounted panel calls. As I13-I17 fill their tabs, add each panel's getter there. Gates: frontend 15 files / 119 tests. ESLint is clean on the CTF paths, and tsc reports no CTF errors. No Python changed. `agoge-reviewer` found no defects; I applied its one minor note (separate replant error state).
+- **Blockers:** none. I4b is still open for a human to do the browser checks.
+- **Next:** I13 Flags bulk replant (PRD.md:1067). Turn on `checkboxSelection` in `CtfFlagsPanel` (drop `disableCheckBoxes`) and send one `PUT` with the union of the selected rows' `servers`.
