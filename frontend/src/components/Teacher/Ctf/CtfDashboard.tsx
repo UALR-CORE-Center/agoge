@@ -12,6 +12,7 @@ import CtfFlagsPanel from "./CtfFlagsPanel";
 import CtfHostsPanel from "./CtfHostsPanel";
 import CtfScoreboardPanel from "./CtfScoreboardPanel";
 import CtfStateChip from "./CtfStateChip";
+import CtfSubmissionLogPanel from "./CtfSubmissionLogPanel";
 import ScoreboardSettings from "./ScoreboardSettings";
 import {formatDuration, remainingSeconds} from "./ctfTime";
 
@@ -159,6 +160,14 @@ const CtfDashboard: React.FC = () => {
                             )}
                             {label === 'Event Log' && event !== null && (
                                 <CtfEventLogPanel ctfId={event.id} state={event.state} active={selectedTab === index} />
+                            )}
+                            {label === 'Submissions' && event !== null && (
+                                <CtfSubmissionLogPanel
+                                    ctfId={event.id}
+                                    state={event.state}
+                                    boards={event.boards}
+                                    active={selectedTab === index}
+                                />
                             )}
                         </Box>
                     ))}
