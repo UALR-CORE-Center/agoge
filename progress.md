@@ -29,7 +29,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **A6** Spec block wiring — spec + done-when at PRD.md:957
 
 ### Group B — Flag derivation and state
-- [ ] **B1** Derivation module — spec + done-when at PRD.md:962
+- [x] **B1** Derivation module — spec + done-when at PRD.md:962
 - [ ] **B2** Seed property — spec + done-when at PRD.md:964
 - [ ] **B3** Seed provisioning — spec + done-when at PRD.md:965
 - [ ] **B4** CTF state manager — spec + done-when at PRD.md:967
@@ -190,3 +190,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `Unit.build` only pops `discriminator`/`id`/`creation_timestamp` from the catalog dict, so new spec fields flow into the unit with no build-code change. Gates now: api 206, cloud_functions 285, build_files 293, frontend 28.
 - **Blockers:** none.
 - **Next:** B1 Derivation module (PRD.md:962).
+
+### Iteration 10 — 2026-10-16
+- **Completed:** B1 — `common/utilities/ctf_flags.py` with module-level `derive_flag_value`, `normalize_flag`, `flag_digest`, `flags_match`, `parse_flag_id` per PRD.md:755-785; `api/unit_tests/test_ctf_flag_derivation.py` (27 tests) pins the exact HMAC input, covers determinism, SC-3 (0 collisions over 1000 workout pairs × 4 flag ids), `seed_version`/seed/flag-id sensitivity, strip+lowercase-only normalization, `parse_flag_id` hits and 11 misses, and patches `ctf_flags.hmac.compare_digest` to prove `flags_match` uses it.
+- **Learned:** `parse_flag_id` lowercases and `re.escape`s the prefix, since the submission is lowercased before matching. Gates now: api 233, cloud_functions 285, build_files 293, frontend 28.
+- **Blockers:** none.
+- **Next:** B2 Seed property (`ctf_flag_seed` on `CloudEnv`, PRD.md:964).
