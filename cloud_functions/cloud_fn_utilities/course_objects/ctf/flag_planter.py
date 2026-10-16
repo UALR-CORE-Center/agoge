@@ -247,6 +247,21 @@ class FlagPlanter:
                     )
         return board
 
+    def mark_stale(self, board: CtfBoardModel, server: str) -> CtfBoardModel:
+        """
+        Marks the board's flags on one server `stale` (host rebuild: the instance was recreated from its
+        image, so the planted values are gone until a replant). Returns the board unchanged when it has none.
+        """
+        flag_ids = [f.id for f in self._board_flags_on(board, server)]
+        if not flag_ids:
+            return board
+        stale = {'plant_status': 'stale', 'planted_at': None, 'plant_error': None}
+        return self._record(board, {fid: dict(stale) for fid in flag_ids})
+
+    def _board_flags_on(self, board: CtfBoardModel, server: str) -> List[CtfFlagSpecModel]:
+        board_flag_ids = {flag.flag_id for flag in board.flags}
+        return [flag for flag in self.event.spec.flags if flag.server == server and flag.id in board_flag_ids]
+
     def _fail_unfinished(self, board: CtfBoardModel, targets: Dict[str, List[str]]) -> None:
         """Best effort on an unexpected error: no flag is left `planting` with nothing to finish it."""
         target_ids = {fid for ids in targets.values() for fid in ids}
@@ -399,8 +414,7 @@ class FlagPlanter:
         return self._linux_payload(planted, nonce)
 
     def _server_flags(self, board: CtfBoardModel, server: str) -> List[CtfFlagSpecModel]:
-        board_flag_ids = {flag.flag_id for flag in board.flags}
-        flags = [flag for flag in self.event.spec.flags if flag.server == server and flag.id in board_flag_ids]
+        flags = self._board_flags_on(board, server)
         if not flags:
             raise BadRequest(
                 f"{self.class_name}:{self.event.id} - Board {board.id} has no flags on server '{server}'"
