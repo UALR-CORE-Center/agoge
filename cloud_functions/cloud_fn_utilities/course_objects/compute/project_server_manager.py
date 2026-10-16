@@ -54,6 +54,8 @@ class ProjectServerManager(BaseComputeManager):
                         data={'state': validated.state}
                     )
                 )
+        # One write after the loop; inside it, the growing batch was rewritten once per image
+        if operations:
             self.db.batch_write(operations)
 
     def _add_nics(self) -> None:
