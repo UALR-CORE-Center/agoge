@@ -1,5 +1,6 @@
 """CtfEvent.process_action (PRD F6, the action map at PRD.md:709-720, SC-13 and SC-14)."""
 import copy
+from concurrent.futures import Future
 from unittest.mock import patch
 
 import pytest
@@ -80,14 +81,25 @@ class FakeDb:
 
 
 class FakePubSub:
-    def __init__(self, fail_after=None):
+    """`fail_after` raises in-line; `future_errors` maps a workout to the error its publish future
+    resolves with, which is how the real client reports network, permission and timeout failures."""
+
+    def __init__(self, fail_after=None, future_errors=None):
         self.messages = []
         self.fail_after = fail_after
+        self.future_errors = future_errors or {}
 
     def msg(self, **attrs):
         if self.fail_after is not None and len(self.messages) == self.fail_after:
             raise RuntimeError("publish failed")
         self.messages.append(attrs)
+        future = Future()
+        error = self.future_errors.get(attrs[PubSub.EventAttributes.WORKOUT_ID])
+        if error is None:
+            future.set_result("message-id")
+        else:
+            future.set_exception(error)
+        return future
 
 
 def user(email=GM, admin=False):
@@ -170,7 +182,7 @@ def test_arm_publishes_only_after_the_event_is_arming(db):
         def msg(self, **attrs):
             # An arm worker started by this message must find the event ARMING (it skips anything else).
             seen.append((event(db)["state"], event(db)["boards_pending"]))
-            super().msg(**attrs)
+            return super().msg(**attrs)
 
     act(db, Recording(), "arm")
     assert seen == [(CtfStates.ARMING.value, len(BOARDS))] * len(BOARDS)
@@ -221,8 +233,9 @@ def test_arm_publish_failure_after_an_armed_board_moves_the_event_to_armed(db):
 
     class FastWorker(FakePubSub):
         def msg(self, **attrs):
-            super().msg(**attrs)
+            future = super().msg(**attrs)
             finish_board(db, attrs[PubSub.EventAttributes.WORKOUT_ID], "armed")
+            return future
 
     with pytest.raises(RuntimeError):
         act(db, FastWorker(fail_after=1), "arm")
@@ -239,7 +252,7 @@ def test_arm_publish_failure_leaves_a_board_its_worker_already_finished(db):
         def msg(self, **attrs):
             if len(self.messages) == 1:
                 finish_board(db, attrs[PubSub.EventAttributes.WORKOUT_ID], "armed")
-            super().msg(**attrs)
+            return super().msg(**attrs)
 
     with pytest.raises(RuntimeError):
         act(db, DeliveredThenRaised(fail_after=1), "arm")
@@ -255,7 +268,7 @@ def test_arm_publish_failure_after_the_event_left_arming_only_marks_boards(db):
     class ArchivedMeanwhile(FakePubSub):
         def msg(self, **attrs):
             event(db)["state"] = CtfStates.BROKEN.value
-            super().msg(**attrs)
+            return super().msg(**attrs)
 
     with pytest.raises(RuntimeError):
         act(db, ArchivedMeanwhile(fail_after=0), "arm")
@@ -280,6 +293,53 @@ def test_arm_publish_failure_still_raises_the_publish_error_when_recovery_fails(
         act(db, FakePubSub(fail_after=1), "arm")
     assert len(calls) == 2
     assert event(db)["state"] == CtfStates.ARMING.value
+
+
+def test_arm_publish_future_failure_fails_only_that_board(db):
+    # The real client never raises from publish(); a failed publish surfaces through its future.
+    seed(db, CtfStates.DRAFT)
+    pubsub = FakePubSub(future_errors={BOARDS[1]: PermissionError("pubsub denied")})
+    with pytest.raises(PermissionError, match="pubsub denied"):
+        act(db, pubsub, "arm")
+    assert len(pubsub.messages) == len(BOARDS)
+    assert [b["arm_status"] for b in boards(db)] == ["pending", "failed", "pending"]
+    assert board(db, BOARDS[1])["arm_error"] == CtfEvent.ARM_PUBLISH_FAILED
+    assert event(db)["state"] == CtfStates.ARMING.value
+    assert event(db)["boards_pending"] == len(BOARDS) - 1
+
+
+def test_arm_publish_futures_all_failing_move_the_event_to_broken(db):
+    seed(db, CtfStates.DRAFT)
+    errors = {workout_id: OSError("network down") for workout_id in BOARDS}
+    with pytest.raises(OSError, match="network down"):
+        act(db, FakePubSub(future_errors=errors), "arm")
+    assert all(b["arm_status"] == "failed" for b in boards(db))
+    assert event(db)["state"] == CtfStates.BROKEN.value
+    assert event(db)["boards_pending"] == 0
+
+
+def test_arm_publish_future_that_never_resolves_counts_as_unpublished(db):
+    seed(db, CtfStates.DRAFT)
+
+    class Hanging(FakePubSub):
+        def msg(self, **attrs):
+            super().msg(**attrs)
+            return Future()  # never resolves
+
+    with patch.object(CtfEvent, "ARM_PUBLISH_TIMEOUT_SECONDS", 0), pytest.raises(TimeoutError):
+        act(db, Hanging(), "arm")
+    assert all(b["arm_status"] == "failed" for b in boards(db))
+    assert event(db)["state"] == CtfStates.BROKEN.value
+
+
+def test_arm_in_line_failure_still_checks_the_futures_already_returned(db):
+    seed(db, CtfStates.DRAFT)
+    pubsub = FakePubSub(fail_after=2, future_errors={BOARDS[0]: OSError("network down")})
+    with pytest.raises(RuntimeError, match="publish failed"):  # the in-line error is the one raised
+        act(db, pubsub, "arm")
+    assert [b["arm_status"] for b in boards(db)] == ["failed", "pending", "failed"]
+    assert event(db)["state"] == CtfStates.ARMING.value
+    assert event(db)["boards_pending"] == 1
 
 
 def test_arm_with_no_boards_is_refused_without_a_write(db, pubsub):

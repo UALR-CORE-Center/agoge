@@ -64,6 +64,8 @@ class CtfEvent:
     # Board arm statuses an arm worker has already aggregated into boards_pending.
     TERMINAL_ARM_STATUSES = ('armed', 'failed')
     ARM_PUBLISH_FAILED = "Arm message could not be published"
+    # Shared deadline for every arm publish future; the request is waiting on it.
+    ARM_PUBLISH_TIMEOUT_SECONDS = 30
 
     S = CtfStates
     # action -> (states it may start from, target state). The From sets are narrower than the
@@ -285,34 +287,54 @@ class CtfEvent:
         return updated
 
     def _publish_arm(self, event: CtfEventModel) -> None:
+        """Publish one CTF_ARM_BOARD per board and wait for each publish to resolve.
+
+        `PubSubManager.msg` returns the client's publish future, and the client reports real failures
+        (network, permission, a missing topic, a timeout) only through that future, so each one is
+        resolved here against one shared deadline. A board whose message raised, failed, or did not
+        resolve in time counts as unpublished. A timed-out message may still be delivered later; its
+        worker then finds the board already `failed` and skips it.
+        """
         attrs = PubSub.EventAttributes
-        published = 0
-        try:
-            for workout_id in event.board_ids:
-                self.pubsub.msg(**{
+        pending = []
+        unpublished = []
+        errors = []
+        for index, workout_id in enumerate(event.board_ids):
+            try:
+                pending.append((workout_id, self.pubsub.msg(**{
                     attrs.HANDLER: PubSub.Handlers.CTF.value,
                     attrs.ACTION: str(PubSub.Actions.CTF_ARM_BOARD.value),
                     attrs.CTF_ID: event.id,
                     attrs.WORKOUT_ID: workout_id,
-                })
-                published += 1
-        except Exception as e:
-            self.logger.error(
-                f"{self.class_name}:{event.id} - Arm publish failed",
-                error_type=type(e).__name__, published=published, boards=len(event.board_ids),
-            )
-            # The event is already ARMING and only arm workers count boards_pending down, so the boards
-            # that got no message are counted down here; otherwise the event would stay ARMING for good.
+                })))
+            except Exception as e:
+                # A synchronous raise means the client itself is unusable, so the rest are not tried.
+                errors.append(e)
+                unpublished.extend(event.board_ids[index:])
+                break
+        deadline = time.monotonic() + self.ARM_PUBLISH_TIMEOUT_SECONDS
+        for workout_id, future in pending:
             try:
-                self.db.transaction(
-                    lambda transaction: self._fail_unpublished(transaction, event.id, event.board_ids[published:])
-                )
-            except Exception as recovery_error:
-                self.logger.error(
-                    f"{self.class_name}:{event.id} - Could not fail unpublished boards; event may stay ARMING",
-                    error_type=type(recovery_error).__name__,
-                )
-            raise
+                future.result(timeout=max(deadline - time.monotonic(), 0))
+            except Exception as e:
+                errors.append(e)
+                unpublished.append(workout_id)
+        if not errors:
+            return
+        self.logger.error(
+            f"{self.class_name}:{event.id} - Arm publish failed",
+            error_type=type(errors[0]).__name__, unpublished=len(unpublished), boards=len(event.board_ids),
+        )
+        # The event is already ARMING and only arm workers count boards_pending down, so the boards
+        # that got no message are counted down here; otherwise the event would stay ARMING for good.
+        try:
+            self.db.transaction(lambda transaction: self._fail_unpublished(transaction, event.id, unpublished))
+        except Exception as recovery_error:
+            self.logger.error(
+                f"{self.class_name}:{event.id} - Could not fail unpublished boards; event may stay ARMING",
+                error_type=type(recovery_error).__name__,
+            )
+        raise errors[0]
 
     def _fail_unpublished(self, transaction, ctf_id: str, workout_ids: List[str]) -> None:
         """Mark boards whose arm message was never published `failed` and count them off boards_pending,
