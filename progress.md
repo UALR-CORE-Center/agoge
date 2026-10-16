@@ -615,3 +615,21 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `main` can be imported in unit tests if `firebase_admin.initialize_app` is patched; AppConfig needs no env. The test pops `main` from `sys.modules` before and after, so no other test sees a cached app. Gates now: api 883, cloud_functions 449, build_files 304, frontend 28; tsc has no CTF errors.
 - **Blockers:** none.
 - **Next:** R4 Router auth tests (PRD.md:1044), `test_ctf_router_auth.py`. It could use the real `main.app` the same way, overriding `get_current_user` per role.
+
+### Verification — 2026-10-16 — PASS
+- **Checked:** H6, H7, R1, R2 and R3, the `[x]` tasks changed since the last verification. I read all of `api/routers/ctf.py` and `api/routers/ctf_board.py`, the router imports and `include_router` lines in `api/main.py`, `CtfScoring.scoreboard`/`public_scoreboard`/`_frozen_standing`/`_rank`/`adjust`/`_adjust_in_transaction` in `api/core/ctf/scoring.py`, `CtfEvent.reveal`/`delete` in `api/core/ctf/event.py`, and the test names in `test_ctf_scoring_scoreboard.py`. I compared them with PRD.md:1035-1043, the API Endpoints tables (PRD.md:855-897), SC-16, SC-18 and SC-19.
+  - H6: the instructor ranking sorts by score descending, then the earliest `last_solve_at`. A team with no solve ranks after a tied team that has one, and the freeze is ignored. The public ranking uses "Team <n>" by `board_ids` index, sets `is_you`, and returns no team name or workout id. A disabled public scoreboard → `NotFound`. While frozen, `_frozen_standing` takes out the points and solve count of each solve with `solved_at > scoreboard_frozen_at` and recomputes `last_solve_at`. SC-16 tests are at :204, :218 and :227.
+  - H7: one transaction re-reads the event and the board, authorizes the caller, refuses ARCHIVED (`Conflict`), refuses a flag-shaped reason (`BadRequest`) before any write, and writes only `score`. It writes its own `SCORE_ADJUST` row through `CtfAudit`.
+  - R1: all 19 `/ctf` routes in the endpoint table are present. Every route except `GET /config/` has `ctf_enabled_required`. DELETE and reveal use `admin_required`, and `CtfEvent.reveal`/`delete` check `is_admin` again in core. The rest use `teacher_required`. Errors are mapped with `to_http_exception`. Each PUT/POST/DELETE and reveal is wrapped in exactly one `CtfAudit` row. Score is the one exception: it is not wrapped, because `adjust` writes its own row, so SC-18's one-row rule still holds. Collections return `{'items': [...]}`.
+  - R2: the 4 `/ctf-board` routes have no auth, as the PRD requires. `GET /{wid}/` is not gated and answers `enrolled: false` when the feature is disabled (SC-19). The other 3 are gated by `ctf_enabled_required`. Submit passes `request.client.host` as `origin_ip`. The scoreboard returns `{'items': [...]}`.
+  - R3: both routers are imported and `include_router`'d in `api/main.py:79-80`.
+  - No TODO, FIXME, stub or `NotImplemented` in `api/routers/ctf*.py` or `api/core/ctf/`.
+  - R4 and Groups I/J/K are correctly still `[ ]`.
+- **Gate results:**
+  - api/unit_tests: 883 passed.
+  - cloud_functions/tests: 449 passed.
+  - build_files/cloud_deployment/tests: 304 passed.
+  - frontend `npm test`: 4 files, 28 tests passed.
+  - ESLint gate: "No files matching the pattern "src/components/Teacher/Ctf" were found". This is expected because no Group I/J task is done.
+  - tsc gate: 0 errors name a CTF file (grep exit 1).
+- **Reopened:** none.
