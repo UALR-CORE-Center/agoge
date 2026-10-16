@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import {act, cleanup, render} from "@testing-library/react";
+import {act, cleanup, render, screen} from "@testing-library/react";
 import React from "react";
 import {MemoryRouter, Route, Routes} from "react-router-dom";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
@@ -91,5 +91,26 @@ describe("StudentWorkout CTF polling", () => {
 
         expect(ctfBoardService.getBoard).toHaveBeenCalledTimes(1);
         expect(vi.mocked(workoutService.get_full).mock.calls.length).toBeGreaterThan(4);
+    });
+
+    it("shows the CTF banner in the session aside for an enrolled workout", async () => {
+        vi.mocked(ctfBoardService.getBoard).mockResolvedValue(BOARD(true));
+        render(page());
+        await advance(0);
+
+        const aside = screen.getByRole("complementary", {name: "Workout session controls"});
+        const banner = screen.getByRole("region", {name: "Spring CTF"});
+        expect(aside.contains(banner)).toBe(true);
+        // The banner sits at the top of the aside, above the session controls (TimerBox).
+        expect(aside.firstElementChild).toBe(banner);
+    });
+
+    it("renders no CTF banner when the workout is not enrolled", async () => {
+        vi.mocked(ctfBoardService.getBoard).mockResolvedValue(BOARD(false));
+        render(page());
+        await advance(0);
+
+        expect(screen.queryByRole("region", {name: "Spring CTF"})).toBeNull();
+        expect(screen.queryByText("Time remaining")).toBeNull();
     });
 });

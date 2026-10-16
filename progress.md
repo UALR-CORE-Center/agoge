@@ -97,7 +97,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I2** CTF transformer and service — spec + done-when at PRD.md:1050
 - [x] **I3** Feature flag hook — spec + done-when at PRD.md:1052
 - [x] **I4** Routes and menu — spec + done-when at PRD.md:1053 (split: this slice is `URL_TEACHER_CTF_BASE`, `URL_TEACHER_CTF_EVENT` and the flag-gated **Teachers** menu item; the two routes are I4b)
-- [ ] **I4b** (both routes are in as of iteration 61; only the browser checks remain, including I9's dashboard check and I10's disabled-actions check) Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route. Also verify in the browser that `Create CTF Event` is absent on a non-CTF unit's `TeacherUnit` page (I6 done-when).
+- [ ] **I4b** (both routes are in as of iteration 61; only the browser checks remain, including I9's dashboard check and I10's disabled-actions check) Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route. Also verify in the browser that `Create CTF Event` is absent on a non-CTF unit's `TeacherUnit` page (I6 done-when), and that the student `CtfBanner` shows on an enrolled workout and is absent otherwise (J2 done-when).
 - [x] **I5** Events list page — spec + done-when at PRD.md:1055 (the list route is in; the browser check is carried by I4b)
 - [x] **I6** Create from unit — spec + done-when at PRD.md:1057 (the browser check that the button is absent on a non-CTF unit is carried by I4b)
 - [x] **I7** Action confirm dialog — spec + done-when at PRD.md:1059
@@ -116,7 +116,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 
 ### Group J — Student UI
 - [x] **J1** Student CTF polling — spec + done-when at PRD.md:1075
-- [ ] **J2** CTF banner — spec + done-when at PRD.md:1076
+- [x] **J2** CTF banner — spec + done-when at PRD.md:1076 (the browser check is carried by I4b)
 - [ ] **J3** Flag submission card — spec + done-when at PRD.md:1078
 - [ ] **J4** Challenge list — spec + done-when at PRD.md:1080
 
@@ -935,3 +935,14 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `usePolling` schedules its next tick in `finally`, before React commits a state change that sets `enabled: false`. So a state-only "stop" can still fire extra requests. A ref guard (`notEnrolledRef`) is what enforces "no further request", and a single-`act` test fails without it. Also, `advanceTimersByTimeAsync` inside one `act` never lets React commit, so the page's interval never changes. Advance time in separate acts when a test depends on re-renders. Gates: frontend 21 files / 172 tests. ESLint is clean on the CTF gate paths. `Workout.tsx` still has its 3 pre-existing lint problems and none new. tsc reports no CTF errors. No Python changed, so the Python suites were not re-run. `agoge-reviewer` found no defects. Its non-blocking note: a `build_id` change without a remount waits up to 15 s for the new board.
 - **Blockers:** none. I4b is still open for a human to do the browser checks.
 - **Next:** J2 CTF banner (PRD.md:1076). Destructure `board` from `useCtfBoard` in `Workout.tsx` and render `CtfBanner` above `TimerBox`.
+
+### Iteration 72 — 2026-10-16
+- **Completed:** J2.
+  - New `frontend/src/components/Student/Ctf/CtfBanner.tsx`: a `Paper component="section" aria-labelledby="ctf-banner-h2"` with the event name as its h2 (or "CTF event" when null), `CtfStateChip` (from `state_name` mapped through `CtfStates`), time remaining, and a "Rules of engagement" link that opens in a new tab.
+  - `Workout.tsx` now destructures `board` from `useCtfBoard` and renders `{board && <CtfBanner board={board} />}` as the first child of the aside, outside the `isLoading` branch, so it does not wait on the workout read. `board` is null when not enrolled, so the banner is absent then.
+  - Countdown: `remaining_seconds` is a 15 s snapshot. The banner ticks it locally only while `RUNNING`, restarts from each new board, holds while `PAUSED` (shown as "(paused)"), and never goes below 0. It reuses `formatDuration` from `Teacher/Ctf/ctfTime.ts`.
+  - `safeRulesUrl` renders only http(s) `rules_url` values, because the URL is instructor-authored spec text and a `javascript:` href must never be clickable.
+  - Tests: `CtfBanner.test.tsx` (9), plus 2 added to `WorkoutCtfPolling.test.tsx` (the banner is the aside's first child when enrolled; no banner when not enrolled).
+- **Learned:** An MUI icon needs `titleAccess`, not `aria-label`, to be announced; SvgIcon sets `aria-hidden` otherwise. Gates: frontend 22 files / 183 tests. ESLint is clean on the CTF paths. `Workout.tsx` still has its 3 pre-existing lint problems and none new. tsc reports no CTF errors. No Python changed, so the Python suites were not re-run. `agoge-reviewer` found no defects.
+- **Blockers:** none. I4b is still open for a human to do the browser checks, which now include J2: the banner shows on an enrolled workout and is absent otherwise.
+- **Next:** J3 Flag submission card (PRD.md:1078). Put `FlagSubmitCard.tsx` in the aside below `ConfigureAccess`, pass it `board` and `refresh` from `useCtfBoard`, show `flag_format` verbatim, show verdicts with `showModal(SimpleSnackbar, {severity})`, and show the server's message on a 429.
