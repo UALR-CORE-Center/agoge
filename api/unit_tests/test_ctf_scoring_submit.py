@@ -1,4 +1,4 @@
-"""CtfScoring.submit (PRD Submission Algorithm steps 1, 3-7; SC-4, SC-10, SC-12)."""
+"""CtfScoring.submit (PRD Submission Algorithm steps 1-7; SC-4, SC-10, SC-11, SC-12)."""
 import copy
 import re
 import threading
@@ -7,8 +7,9 @@ import pytest
 
 from common.constants.database import DbCollections
 from common.constants.states import CtfStates
-from common.exceptions.agoge import Conflict, NotFound
+from common.exceptions.agoge import Conflict, NotFound, RateLimitExceeded
 from common.utilities.ctf_flags import derive_flag_value, flag_digest
+from core.ctf import scoring
 from core.ctf.scoring import CtfScoring
 
 SEED = "test-seed"
@@ -45,6 +46,7 @@ class FakeDocRef:
     def get(self, transaction=None):
         # Reading outside the transaction would let two submissions both see the flag unsolved.
         assert transaction is not None, "the award must read the board inside its transaction"
+        transaction.read_collections.add(self.collection)
         return FakeSnapshot(self.store.get(self.collection, {}).get(self.id))
 
 
@@ -59,9 +61,13 @@ class FakeClient:
 class FakeTransaction:
     def __init__(self):
         self.writes = []
+        self.read_collections = set()
 
     def update(self, doc_ref, data):
-        self.writes.append((doc_ref, copy.deepcopy(dict(data))))
+        self.writes.append(("update", doc_ref, copy.deepcopy(dict(data))))
+
+    def set(self, doc_ref, data):
+        self.writes.append(("set", doc_ref, copy.deepcopy(dict(data))))
 
 
 class FakeDb:
@@ -71,7 +77,9 @@ class FakeDb:
         self.store = {}
         self.db = FakeClient(self.store)
         self.inserted = []
+        # Board transactions only: every open-event submission also runs one rate-limit transaction.
         self.transactions = 0
+        self.rate_limit_transactions = 0
         self._lock = threading.Lock()
         self._barrier = barrier
 
@@ -95,11 +103,19 @@ class FakeDb:
             # Both submitters have done their board query before either transaction starts.
             self._barrier.wait(timeout=5)
         with self._lock:
-            self.transactions += 1
             transaction = FakeTransaction()
             result = operation_func(transaction)
-            for doc_ref, data in transaction.writes:
-                self.store[doc_ref.collection][doc_ref.id].update(data)
+            if DbCollections.CTF_BOARD.value in transaction.read_collections:
+                self.transactions += 1
+            if DbCollections.CTF_RATE_LIMIT.value in transaction.read_collections:
+                self.rate_limit_transactions += 1
+            for kind, doc_ref, data in transaction.writes:
+                docs = self.store.setdefault(doc_ref.collection, {})
+                if kind == "set":
+                    docs[doc_ref.id] = data
+                else:
+                    # Firestore's update fails on a missing document.
+                    docs[doc_ref.id].update(data)
             return result
 
 
@@ -270,6 +286,8 @@ def test_closed_event_records_and_raises_conflict(state):
     [row] = submissions(db)
     assert row["verdict"] == "closed" and row["flag_id"] == "web1" and row["points_awarded"] == 0
     assert db.transactions == 0 and flag_state(db, "web1").get("solved", False) is False
+    # Step 1 precedes step 2: a closed event never touches the rate-limit counter.
+    assert db.rate_limit_transactions == 0 and not db.store.get(DbCollections.CTF_RATE_LIMIT.value)
 
 
 def test_no_active_board_is_not_found():
@@ -306,3 +324,127 @@ def test_no_written_document_contains_a_flag_value(db, value_of):
 
     written = repr(db.inserted) + repr(db.store[DbCollections.CTF_BOARD.value])
     assert not re.search(r"agoge\{", written, re.IGNORECASE)
+
+
+# SC-11 (step 2)
+class Clock:
+    def __init__(self, now=1_800_000_000.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    fake = Clock()
+    monkeypatch.setattr(scoring.time, "time", fake)
+    return fake
+
+
+def wrong(workout_id, flag_id):
+    # Well-formed for flag_id, so it parses into that flag's bucket, but matches no digest.
+    return flag(workout_id, flag_id, ctf_seed="other-seed")
+
+
+def rate_doc(db, bucket, workout_id=A):
+    return db.col(DbCollections.CTF_RATE_LIMIT).get(f"{CTF_ID}-{workout_id}-{bucket}")
+
+
+def test_eleventh_submission_for_one_flag_in_a_minute_is_rate_limited(db, clock):
+    for i in range(10):
+        clock.now += 5
+        assert submit(db, A, wrong(A, "web1")).verdict == "incorrect"
+
+    with pytest.raises(RateLimitExceeded, match=r"^Too many submissions for this challenge\. Try again in \d+ seconds\.$"):
+        submit(db, A, flag(A, "web1"))
+
+    rows = submissions(db)
+    assert len(rows) == 11
+    assert rows[-1]["verdict"] == "rate_limited" and rows[-1]["flag_id"] == "web1" and rows[-1]["points_awarded"] == 0
+    # The rate-limited correct value was neither digest-matched nor scored.
+    assert db.transactions == 0 and flag_state(db, "web1").get("solved", False) is False
+    assert rate_doc(db, "web1")["count"] == 10
+
+
+def test_retry_after_counts_down_to_the_window_end(db, clock):
+    window_start = clock.now
+    for _ in range(10):
+        submit(db, A, wrong(A, "web1"))
+    clock.now = window_start + 45.5
+
+    with pytest.raises(RateLimitExceeded, match="Try again in 15 seconds"):
+        submit(db, A, wrong(A, "web1"))
+
+
+def test_refused_submissions_do_not_extend_the_window(db, clock):
+    window_start = clock.now
+    for _ in range(10):
+        submit(db, A, wrong(A, "web1"))
+    for _ in range(5):
+        clock.now += 10
+        with pytest.raises(RateLimitExceeded):
+            submit(db, A, wrong(A, "web1"))
+
+    assert rate_doc(db, "web1") == {"id": f"{CTF_ID}-{A}-web1", "window_start": window_start, "count": 10}
+
+
+def test_new_window_resets_the_count(db, clock):
+    window_start = clock.now
+    for _ in range(10):
+        submit(db, A, wrong(A, "web1"))
+    clock.now = window_start + 60
+
+    assert submit(db, A, flag(A, "web1")).verdict == "correct"
+    assert rate_doc(db, "web1") == {"id": f"{CTF_ID}-{A}-web1", "window_start": window_start + 60, "count": 1}
+
+
+def test_limit_is_per_flag_id(db, clock):
+    for _ in range(10):
+        submit(db, A, wrong(A, "web1"))
+
+    assert submit(db, A, flag(A, "web2")).verdict == "correct"
+    assert rate_doc(db, "web2")["count"] == 1
+
+
+def test_limit_is_per_board(db, clock):
+    for _ in range(10):
+        submit(db, A, wrong(A, "web1"))
+
+    assert submit(db, B, flag(B, "web1")).verdict == "correct"
+    assert rate_doc(db, "web1", workout_id=B)["count"] == 1
+
+
+def test_unparsed_values_share_one_bucket(db, clock):
+    for i in range(10):
+        submit(db, A, f"guess-{i}")
+
+    with pytest.raises(RateLimitExceeded):
+        submit(db, A, "agoge{not-a-real-format}")
+    assert submissions(db)[-1]["verdict"] == "rate_limited" and submissions(db)[-1]["flag_id"] is None
+    assert rate_doc(db, "unparsed")["count"] == 10
+
+
+def test_configured_limit_is_honoured(clock):
+    db = FakeDb()
+    seed_event(db, submission_rate_limit=2)
+    submit(db, A, wrong(A, "web1"))
+    submit(db, A, wrong(A, "web1"))
+
+    with pytest.raises(RateLimitExceeded):
+        submit(db, A, wrong(A, "web1"))
+
+
+def test_unreadable_counter_starts_a_fresh_window(db, clock):
+    db.col(DbCollections.CTF_RATE_LIMIT)[f"{CTF_ID}-{A}-web1"] = {"id": f"{CTF_ID}-{A}-web1", "count": "lots"}
+
+    assert submit(db, A, flag(A, "web1")).verdict == "correct"
+    assert rate_doc(db, "web1") == {"id": f"{CTF_ID}-{A}-web1", "window_start": clock.now, "count": 1}
+
+
+def test_rate_limit_is_one_transaction_per_submission(db, clock):
+    submit(db, A, flag(A, "web1"))
+    submit(db, A, flag(B, "web1"))
+    submit(db, A, "guess")
+
+    assert db.rate_limit_transactions == 3
