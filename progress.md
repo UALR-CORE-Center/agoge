@@ -337,3 +337,20 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** No circular import (`arm_worker` imports `flag_planter`; the handler imports both). Gates now: api 383, cloud_functions 400, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** E5 Overnight exemption (PRD.md:996). G4b remains queued until the G4 `host_reset` dispatcher exists.
+
+### Verification — 2026-10-16 — PASS
+- **Checked:** E1, E2, E3, E4 and E4b, the `[x]` tasks added since the last verification. I read `flag_planter.py`, `arm_worker.py`, `ctf_handler.py`, the `Handlers.CTF` branch in `main.py`, and their four test files, and compared them with PRD.md:988-995, :720-723, :793-840 and SC-4/5/6/7/15.
+  - E1: `build_payload` filters to that board's flags on that server. It derives each value with `derive_flag_value`, and every path is checked against `LOCATION_PATH_PATTERNS`. Linux covers `file` and `env`; Windows covers `file`, `registry`, `env` and `ads`. The Linux payload starts with `exec >/dev/null 2>&1`, then installs the best-effort iptables rule, and passes values only to `printf`. Both payloads write `ok:`/`error:<nonce>` to the guest attribute. The tests cover only-this-server's-flags, the nonce, and no print command, and also run the payload in real bash. The pwsh parse test ran because pwsh is installed here. `-rs` shows that none of the 34 tests was skipped.
+  - E2: the nonce comes from `IdGenerator.uuid()`. Each server's flags go to `planting`, then `set_metadata` (plant key + `enable-guest-attributes=TRUE`) and `reset` run for every server before any polling. Polling uses `query_path="agoge-ctf/"` every 10 s for up to 240 s. The ok, error and timeout outcomes match step 6. The `finally` removes `agoge-ctf-plant`. A server that is not running fails with "Server is not running" and is never reset or started. SC-5, the three SC-6 paths, SC-7 (no delete/nuke/stop/start) and SC-4 all have non-vacuous tests.
+  - E3/E4b: `action_map` routes `CTF_PLANT` → `FlagPlanter` and `CTF_ARM_BOARD` → `ArmWorker(env_dict, db).run(ctf_id, workout_id)`. An unknown action raises `ValueError`, and `main.py` dispatches `Handlers.CTF`. `CTF_HOST_RESET` is deliberately deferred to G4b, as the split note on the task says.
+  - E4: a workout not in `WorkoutStates.RUNNING` sets the board to `failed` with exactly "Workout is not running". `_aggregate` runs as one transaction: it does every read (event, board, and the other boards when they are needed) before any write, decrements `boards_pending`, and at 0 calls `CtfStateManager.transition_in_transaction` for ARMED or BROKEN. State is never assigned directly. The tests cover the all-armed, mixed and zero-armed cases, and the fake transaction asserts that reads come before writes.
+  - No TODO, stub, `NotImplemented` or hardcoded test-only value in the new code.
+  - Non-blocking: `main.py` builds `CtfHandler` without `env_dict`, so it falls back to a single `CloudEnv()` and threads that down, which matches how other handlers are invoked. The 240 s deadline is shared by all of a board's servers rather than applied per server, which is consistent with "steps 3–4 for every server before any polling".
+- **Gate results:**
+  - api/unit_tests: 383 passed.
+  - cloud_functions/tests: 400 passed.
+  - build_files/cloud_deployment/tests: 304 passed.
+  - frontend `npm test`: exit 0, 4 files, 28 tests passed.
+  - ESLint gate: "No files matching the pattern" for the CTF paths. This is expected because no Group I/J task is done.
+  - tsc gate: 0 errors name a CTF file.
+- **Reopened:** none.
