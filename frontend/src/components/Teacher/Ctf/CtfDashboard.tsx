@@ -7,6 +7,7 @@ import {CtfStateResponse, CtfStates} from "../../../services/Ctf/ctf.model";
 import {ctfService} from "../../../services/Ctf/ctf.service";
 import HttpError from "../../Common/Errors/HttpError";
 import CtfEventControl from "./CtfEventControl";
+import CtfFlagsPanel from "./CtfFlagsPanel";
 import CtfStateChip from "./CtfStateChip";
 import ScoreboardSettings from "./ScoreboardSettings";
 import {formatDuration, remainingSeconds} from "./ctfTime";
@@ -129,7 +130,7 @@ const CtfDashboard: React.FC = () => {
                             <Tab key={label} label={label} id={tabId(index)} aria-controls={panelId(index)} />
                         ))}
                     </Tabs>
-                    {/* Each panel's content is its own PRD item (I12-I17); the shell owns only the tab wiring. */}
+                    {/* Each panel's content is its own PRD item (I12-I17); the shell owns only the tab wiring and mounting. */}
                     {DASHBOARD_TABS.map((label, index) => (
                         <Box
                             key={label}
@@ -138,7 +139,11 @@ const CtfDashboard: React.FC = () => {
                             aria-labelledby={tabId(index)}
                             hidden={selectedTab !== index}
                             sx={{pt: 2}}
-                        />
+                        >
+                            {label === 'Flags' && event !== null && (
+                                <CtfFlagsPanel ctfId={event.id} state={event.state} active={selectedTab === index} />
+                            )}
+                        </Box>
                     ))}
                 </Paper>
             </Box>

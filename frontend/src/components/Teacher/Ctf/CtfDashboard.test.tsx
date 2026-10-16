@@ -11,10 +11,11 @@ import {ctfService} from "../../../services/Ctf/ctf.service";
 import {darkTheme} from "../../../styles/theme";
 import HttpError from "../../Common/Errors/HttpError";
 import CtfDashboard, {DASHBOARD_TABS, STATE_POLL_INTERVAL_MS} from "./CtfDashboard";
+import {FLAGS_POLL_INTERVAL_MS} from "./CtfFlagsPanel";
 import {formatDuration, remainingSeconds} from "./ctfTime";
 
 vi.mock("../../../services/Ctf/ctf.service", () => ({
-    ctfService: {getState: vi.fn(), processAction: vi.fn()},
+    ctfService: {getFlags: vi.fn(), getState: vi.fn(), processAction: vi.fn()},
 }));
 
 const NOW = 1_800_000_000;
@@ -95,6 +96,26 @@ describe("CtfDashboard", () => {
         fireEvent.click(screen.getByRole("tab", {name: "Hosts"}));
         expect(screen.getByRole("tab", {name: "Hosts"})).toHaveAttribute("aria-selected", "true");
         expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", screen.getByRole("tab", {name: "Hosts"}).id);
+    });
+
+    it("mounts the Flags panel in the Flags tab and polls flags only while that tab is shown", async () => {
+        vi.mocked(ctfService.getState).mockResolvedValue(stateResponse());
+        vi.mocked(ctfService.getFlags).mockResolvedValue([]);
+        renderDashboard();
+        await flush();
+
+        const flagsTab = screen.getByRole("tab", {name: "Flags"});
+        expect(within(screen.getByRole("tabpanel")).getByText("No flags in this event")).toBeInTheDocument();
+        expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", flagsTab.id);
+        expect(ctfService.getFlags).toHaveBeenCalledWith("eventevent");
+        const calls = vi.mocked(ctfService.getFlags).mock.calls.length;
+
+        fireEvent.click(screen.getByRole("tab", {name: "Hosts"}));
+        await act(async () => {
+            vi.advanceTimersByTime(FLAGS_POLL_INTERVAL_MS * 2);
+        });
+        await flush();
+        expect(ctfService.getFlags).toHaveBeenCalledTimes(calls);
     });
 
     it("counts down between polls and re-reads state every 10 s", async () => {
