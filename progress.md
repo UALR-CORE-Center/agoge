@@ -104,7 +104,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I8** CTF state chip — spec + done-when at PRD.md:1060
 - [x] **I9** Dashboard shell — spec + done-when at PRD.md:1061 (the browser check is carried by I4b)
 - [x] **I10** Event Control panel — spec + done-when at PRD.md:1063 (the browser check that illegal actions are disabled is carried by I4b)
-- [ ] **I11** Scoreboard settings — spec + done-when at PRD.md:1065
+- [x] **I11** Scoreboard settings — spec + done-when at PRD.md:1065
 - [ ] **I12** Flags panel — spec + done-when at PRD.md:1066
 - [ ] **I13** Flags bulk replant — spec + done-when at PRD.md:1067
 - [ ] **I14** Hosts panel — spec + done-when at PRD.md:1068
@@ -789,3 +789,19 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Under `vi.useFakeTimers()`, a closing MUI `Dialog` keeps the page behind it `aria-hidden` until its exit transition finishes. Advance the timers (about 500 ms) before you query roles behind it. The selected action is kept apart from the `open` flag so that a dialog does not fall back to the "Delete" label while it fades out. Gates: frontend 13 files / 99 tests. ESLint is clean on the CTF paths plus `Confirmation.tsx`, and tsc reports no CTF or ConfirmationDialog errors. No Python changed. The `agoge-reviewer` found no defects.
 - **Blockers:** I did not do the browser check (it needs a signed-in instructor and a live API). It moves to I4b.
 - **Next:** I11 Scoreboard settings (PRD.md:1065). It can sit in the left `Paper` under `CtfEventControl`; `ctfService.update` already exists.
+
+### Iteration 63 — 2026-10-16
+- **Completed:** I11. I took it ahead of I4b because I4b now needs only browser checks, and those need a signed-in instructor and a live API, which a headless run does not have.
+  - New `frontend/src/components/Teacher/Ctf/ScoreboardSettings.tsx` sits in the dashboard's left `Paper` under `CtfEventControl`. Every control calls `ctfService.update` (`PUT /ctf/{id}/`).
+  - Freeze toggle: turning it on sends `scoreboard_frozen_at: now`, turning it off sends an explicit `null`, and it shows when the board was frozen.
+  - Public-scoreboard toggle: sends `public_scoreboard_enabled`.
+  - `ends_at`: a `DateTimePicker` (`AdapterDateFnsV3`, the same as `WorkoutModal`) holds a draft, with "Save end time" (epoch seconds; past or unchanged times are refused) and "Clear end time" (`null`, open-ended).
+  - After a successful PUT it awaits `onUpdated` (the dashboard's `fetchState`), so a toggle does not snap back. Everything is disabled while a request runs and while ARCHIVED (the API answers 409). Errors show in an `Alert` as `status: message`. The switches carry `role="switch"`.
+  - `ScoreboardSettings.test.tsx`: 11 tests.
+- **Learned:**
+  - The MUI X v7 `DateTimePicker` works in jsdom without a `matchMedia` mock. `fireEvent.change(input, {target: {value: "10/16/2026 05:30 PM"}})` sets it, and `toHaveValue` reads it back in the same format.
+  - `vi.useFakeTimers({toFake: ["Date"]})` pins "now" without breaking `waitFor`.
+  - MUI `Switch` has no `switch` role unless you pass `inputProps={{role: 'switch'}}`.
+  - Gates: frontend 14 files / 110 tests. ESLint is clean on the CTF paths, and tsc reports no CTF errors. No Python changed. The `agoge-reviewer` found no defects.
+- **Blockers:** none. I4b is still open for a human to do the browser checks.
+- **Next:** I12 Flags panel (PRD.md:1066). Fill the Flags `tabpanel` slot in `CtfDashboard` with `ctfService.getFlags`.

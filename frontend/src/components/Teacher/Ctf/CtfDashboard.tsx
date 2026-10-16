@@ -8,6 +8,7 @@ import {ctfService} from "../../../services/Ctf/ctf.service";
 import HttpError from "../../Common/Errors/HttpError";
 import CtfEventControl from "./CtfEventControl";
 import CtfStateChip from "./CtfStateChip";
+import ScoreboardSettings from "./ScoreboardSettings";
 import {formatDuration, remainingSeconds} from "./ctfTime";
 
 // PRD performance budget: the dashboard polls `state` every 10 s, and no CTF poll is faster.
@@ -101,6 +102,7 @@ const CtfDashboard: React.FC = () => {
                         <CtfStateChip state={event.state} />
                         <RemainingTime event={event} />
                         <CtfEventControl ctfId={event.id} state={event.state} onActionComplete={fetchState} />
+                        <ScoreboardSettings ctfId={event.id} event={event} onUpdated={fetchState} />
                     </Paper>
                 )}
             </Box>
