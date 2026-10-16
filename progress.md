@@ -35,7 +35,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **B4** CTF state manager — spec + done-when at PRD.md:967
 
 ### Group C — Specification validation
-- [ ] **C1** Flag validator — spec + done-when at PRD.md:972
+- [x] **C1** Flag validator — spec + done-when at PRD.md:972
 - [ ] **C2** Validator wiring — spec + done-when at PRD.md:974
 
 ### Group D — Compute primitives and the loader
@@ -224,3 +224,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** E4's arm aggregation must read the event *before* writing its board and pass it as `event=` to `transition_in_transaction` (Firestore forbids reads after writes in a transaction). Self-transitions are Conflicts, not no-ops. Gates now: api 319, cloud_functions 285, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** C1 Flag validator (PRD.md:972).
+
+### Iteration 14 — 2026-10-16
+- **Completed:** C1 — `api/utilities/infrastructure_as_code/object_validators/ctf.py` `CtfValidator(config).load()` (exported from the package `__init__`), house style like `AssessmentValidator`: works on the spec dict, raises `AgogeValidationError` naming the flag id for unknown server, duplicate id, duplicate `(server, slot)`, mixed OS per server, `registry`/`ads` off Windows, path not matching its Flag Location Formats row, non-decoy `points <= 0`, unknown `unlocks_after` id, and `unlocks_after` cycles (iterative DFS). `api/unit_tests/test_ctf_spec_validation.py` (31 tests) covers each rule plus a valid spec hitting every location row, a trailing-newline path, a 64-char env name, and a diamond DAG.
+- **Learned:** Paths use `re.fullmatch` since `$` alone accepts a trailing `\n`. `file_mode`/`file_owner` "Linux file placements only" is not in C1's rule list and is not enforced — E1 should ignore them off Linux `file`. Gates now: api 350, cloud_functions 285, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** C2 Validator wiring — call `CtfValidator(self.spec).load()` in `edit_manager._validate_spec` and `file_manager._validate_spec` when `ctf` is present (PRD.md:974).
