@@ -68,7 +68,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 
 ### Group G — Hosts
 - [x] **G1** Replant publish — spec + done-when at PRD.md:1015
-- [ ] **G2** Host rows — spec + done-when at PRD.md:1016
+- [x] **G2** Host rows — spec + done-when at PRD.md:1016
 - [ ] **G3** Reset publish — spec + done-when at PRD.md:1017
 - [ ] **G4** Reset dispatcher — spec + done-when at PRD.md:1018
 - [ ] **G4b** Route `CTF_HOST_RESET` → the `host_reset` dispatcher (with `SERVER_NAME`, `RESET_MODE`) in `CtfHandler.action_map`, with a test showing it reaches it (E3 done-when, PRD.md:992)
@@ -464,3 +464,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Every board carries every spec flag (`CtfEvent._new_board`), so the flag-bearing servers come from the spec without a board read. If board flag sets ever differ, filter per board as `board_servers` does. With no boards, replant returns 0 and does not raise; R1 should not present that as a successful replant. Gates now: api 621, cloud_functions 417, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** G2 Host rows (PRD.md:1016), `CtfHosts.hosts(ctf_id)` in the same file.
+
+### Iteration 38 — 2026-10-16
+- **Completed:** G2 — `CtfHosts.hosts(ctf_id, user)` in `api/core/ctf/hosts.py` returns `List[CtfHostRow]`. It authorizes through `CtfEvent.get`, reads the boards with `CtfEvent._boards` (in `board_ids` order), and reads server docs with `parent_id in` queries of ≤ 30 workouts. That is 1 get + 1 board query + ⌈boards/30⌉ server queries, never one read per board. Each board gets the flag-bearing spec servers first, in spec order, then its other servers sorted by name, so restart and rebuild can reach every host the team owns. A flag-bearing server with no doc still gets a row with `server_state=None`. `flag_count` counts the board's flags on that server, decoys included. `rebuild_allowed` is False when the server has a `wireguard_endpoint_id` or has no doc. An unknown state number shows as its digits. Shared community servers (`parent_id` = unit id) belong to no team and are not listed. `api/unit_tests/test_ctf_hosts_rows.py` has 15 tests.
+- **Learned:** Server docs are keyed `f"{workout_id}-{name}"` with `parent_id = workout_id`. I read them as raw dicts, not through `ModelValidator(ServerModel)`, so a legacy server doc can't blank the panel. G3 should look up the target with `db.get(SERVER, f"{workout_id}-{server}")` and refuse `rebuild` with the same `wireguard_endpoint_id` check. Gates now: api 636, cloud_functions 417, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** G3 Reset publish (PRD.md:1017), `CtfHosts.reset(ctf_id, workout_id, server, mode, user)`.
