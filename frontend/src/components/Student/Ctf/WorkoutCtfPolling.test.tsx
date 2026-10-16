@@ -19,7 +19,9 @@ vi.mock("../../../hooks/userIp", () => ({useUserIp: () => null}));
 // The page's children have their own data fetching; only the two polls are under test here.
 vi.mock("../../Common/Timer", () => ({default: () => null}));
 vi.mock("../../Common/InfoCard/InfoCard", () => ({InfoCard: () => null}));
-vi.mock("../ConfigureAccess", () => ({ConfigureAccess: () => null}));
+// A marker, so the flag card's position below it can be checked.
+vi.mock("../ConfigureAccess", () => ({ConfigureAccess: () => <div data-testid="configure-access" />}));
+vi.mock("mui-modal-provider", () => ({useModal: () => ({showModal: vi.fn()})}));
 vi.mock("../WorkoutTable", () => ({default: () => null}));
 vi.mock("../WorkoutAssessment", () => ({default: () => null}));
 
@@ -112,5 +114,22 @@ describe("StudentWorkout CTF polling", () => {
 
         expect(screen.queryByRole("region", {name: "Spring CTF"})).toBeNull();
         expect(screen.queryByText("Time remaining")).toBeNull();
+    });
+
+    it("shows the flag submission card below ConfigureAccess for an enrolled workout", async () => {
+        vi.mocked(ctfBoardService.getBoard).mockResolvedValue(BOARD(true));
+        render(page());
+        await advance(0);
+
+        const card = screen.getByRole("region", {name: "Submit a flag"});
+        expect(screen.getByTestId("configure-access").nextElementSibling).toBe(card);
+    });
+
+    it("renders no flag submission card when the workout is not enrolled", async () => {
+        vi.mocked(ctfBoardService.getBoard).mockResolvedValue(BOARD(false));
+        render(page());
+        await advance(0);
+
+        expect(screen.queryByRole("region", {name: "Submit a flag"})).toBeNull();
     });
 });
