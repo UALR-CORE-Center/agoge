@@ -47,8 +47,8 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **D4** Loader at build — spec + done-when at PRD.md:983
 
 ### Group E — Planting
-- [ ] **E1** Payload builder — spec + done-when at PRD.md:988
-- [ ] **E2** Plant procedure — spec + done-when at PRD.md:990
+- [x] **E1** Payload builder — spec + done-when at PRD.md:988
+- [x] **E2** Plant procedure — spec + done-when at PRD.md:990
 - [ ] **E3** CTF handler — spec + done-when at PRD.md:992
 - [ ] **E4** Arm worker — spec + done-when at PRD.md:994
 - [ ] **E5** Overnight exemption — spec + done-when at PRD.md:996
@@ -311,3 +311,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `LINUX_ENVIRONMENT_FILE` is a module constant so tests can redirect the env placement. Error messages in both payloads are built from flag ids only. Reviewer notes left as-is: the patterns allow `..` path segments (PRD-defined patterns), and `_ps_quote` doesn't handle smart quotes (unreachable after the pattern checks). Gates now: api 383, cloud_functions 342, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** E2 Plant procedure (`FlagPlanter.plant(board, servers)`, PRD.md:990 and :824-840). Treat `NotFound` from `get_guest_attributes` as a plant failure. Use `parse_plant_result` to read the result.
+
+### Iteration 22 — 2026-10-16
+- **Completed:** E2 — `FlagPlanter.plant(board, servers)` (spec server names; instance = `f"{workout_id}-{server}"`, as SoloWorkout names them). Per server: a new nonce, flags → `planting`, then a running check (stopped → `"Server is not running"`, missing → `"Server instance not found"`; neither is reset, started or written to), `set_metadata` (payload + `enable-guest-attributes=TRUE`), and `reset`. Every server is delivered before any polling. One shared 240 s deadline follows, polling `agoge-ctf/` every 10 s, and `parse_plant_result` ignores stale nonces. The result is `planted`/`planted_at`, `failed` with the guest's message, or the timeout message. The `finally` removes `agoge-ctf-plant` from every instance it may have been written to, and a failed removal is logged, not raised. An unexpected error marks any flag still `planting` as failed, then re-raises. Board writes are transactional and touch only the target flags' `plant_*` fields, so a concurrent solve survives. Compute exceptions are logged by type only, because a set_metadata error could echo the payload. Constructor accepts `compute_api=`/`db=`, and env, compute and db are built lazily. `cloud_functions/tests/test_flag_plant_procedure.py` (18 tests) covers SC-5, the three SC-6 paths, SC-7 (no delete/nuke/stop/start), ordering, stale nonce, a stopped server, a missing instance, a poll NotFound or transient error, a reset failure, an internal-error abort, a missing seed, solve preservation, and SC-4.
+- **Learned:** E1 had shipped in `badb1e9` but its checkbox was never ticked. It is ticked now. A missing seed fails the flags rather than raising, so E4 can still aggregate. Gates now: api 383, cloud_functions 360, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** E3 CTF handler (`cloud_functions/handlers/ctf_handler.py` + the `Handlers.CTF` branch in `main.py`, PRD.md:992).

@@ -1,15 +1,20 @@
 import re
 import shlex
-from typing import List, Union
+import time
+from typing import Dict, List, Optional, Union
 
-from common.exceptions import BadRequest
+from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections
+from common.exceptions import BadRequest, NotFound
 from common.models.agoge import CtfBoardModel, CtfEventModel, CtfFlagSpecModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.ctf_flags import derive_flag_value
 from common.utilities.ctf_plant_contract import (
-    GUEST_ATTRIBUTE_PATH, LOCATION_PATH_PATTERNS, MAX_RESULT_MESSAGE_LENGTH, RESULT_ERROR, RESULT_OK
+    GUEST_ATTRIBUTE_NAMESPACE, GUEST_ATTRIBUTE_PATH, GUEST_ATTRIBUTE_RESULT_KEY, GUEST_ATTRIBUTES_ENABLE_KEY,
+    GUEST_ATTRIBUTES_ENABLE_VALUE, LOCATION_PATH_PATTERNS, MAX_RESULT_MESSAGE_LENGTH, PLANT_METADATA_KEY,
+    RESULT_ERROR, RESULT_OK, parse_plant_result
 )
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
+from common.utilities.id_generator import IdGenerator
 
 _GUEST_ATTRIBUTE_URL = f"http://metadata.google.internal/computeMetadata/v1/instance/guest-attributes/{GUEST_ATTRIBUTE_PATH}"
 _METADATA_SERVER_IP = "169.254.169.254"
@@ -124,10 +129,22 @@ class FlagPlanter:
     (see common/utilities/ctf_plant_contract.py). Flag values are derived here, written only into the
     payload, and never logged or persisted.
     """
+    POLL_INTERVAL_SECONDS = 10
+    CONFIRM_TIMEOUT_SECONDS = 240
+    MSG_NOT_RUNNING = "Server is not running"
+    MSG_NOT_FOUND = "Server instance not found"
+    MSG_TIMEOUT = f"No plant confirmation within {CONFIRM_TIMEOUT_SECONDS} s"
+    MSG_NO_SEED = "CTF flag seed is not configured"
+    MSG_BAD_PAYLOAD = "Could not build the plant payload"
+    MSG_DELIVERY = "Could not deliver the plant payload"
+    MSG_ABORTED = "Plant aborted by an internal error"
+
     def __init__(
         self,
         event: Union[CtfEventModel, dict],
-        env_dict: dict = None
+        env_dict: dict = None,
+        compute_api=None,
+        db=None
     ) -> None:
         self.class_name = self.__class__.__name__
         self.logger = Logger(LoggerNames.CLOUD_FN, class_name=self.class_name)
@@ -135,6 +152,206 @@ class FlagPlanter:
         if not isinstance(event, CtfEventModel):
             event = ModelValidator(model=CtfEventModel, log_location=LoggerNames.CLOUD_FN).load(data=event)
         self.event = event
+        # Built lazily so build_payload needs no GCP clients
+        self._env = None
+        self._compute_api = compute_api
+        self._db = db
+
+    @property
+    def env(self):
+        if self._env is None:
+            from common.utilities.gcp.cloud_env import CloudEnv
+            self._env = CloudEnv(env_dict=self.env_dict) if self.env_dict else CloudEnv()
+        return self._env
+
+    @property
+    def compute_api(self):
+        if self._compute_api is None:
+            from common.utilities.gcp.compute.compute_instance import ComputeInstanceAPI
+            self._compute_api = ComputeInstanceAPI(
+                project=self.env.project, region=self.env.region, zone=self.env.zone, log_name=LoggerNames.CLOUD_FN
+            )
+        return self._compute_api
+
+    @property
+    def db(self):
+        if self._db is None:
+            from common.document_database.factory import DocumentDatabaseFactory
+            self._db = DocumentDatabaseFactory.create_db_object(
+                db_type=DatabaseTypes.firestore, database_name=DATABASE_NAME, log_name=LoggerNames.CLOUD_FN
+            )
+        return self._db
+
+    def plant(
+        self,
+        board: Union[CtfBoardModel, dict],
+        servers: List[str]
+    ) -> CtfBoardModel:
+        """
+        Plants the board's flags on each named spec server (Plant procedure, PRD): payload + reset on every
+        server first, then one shared poll for each server's nonce. Every flag on those servers ends
+        `planted` or `failed`; the result is written to the board document and returned. The plant key is
+        removed in a `finally` from every server it was written to, whatever the outcome. Stopped servers
+        are never started.
+        """
+        if not isinstance(board, CtfBoardModel):
+            board = ModelValidator(model=CtfBoardModel, log_location=LoggerNames.CLOUD_FN).load(data=board)
+        board_flag_ids = {flag.flag_id for flag in board.flags}
+        # server -> board flag ids it carries; servers with none are skipped
+        targets: Dict[str, List[str]] = {}
+        for server in dict.fromkeys(servers):
+            flag_ids = [f.id for f in self.event.spec.flags if f.server == server and f.id in board_flag_ids]
+            if flag_ids:
+                targets[server] = flag_ids
+            else:
+                self.logger.warning(f"{self.class_name}:{board.id} - no board flags on server '{server}'; skipped")
+        if not targets:
+            return board
+
+        seed = self.env.ctf_flag_seed
+        if not seed:
+            self.logger.error(f"{self.class_name}:{board.id} - {self.MSG_NO_SEED}")
+            return self._record(board, {fid: self._failed(self.MSG_NO_SEED) for ids in targets.values() for fid in ids})
+
+        nonces = {}       # server -> nonce, for servers whose payload was (or may have been) written
+        written = []      # instance names that may hold the plant key; cleaned in the finally
+        try:
+            for server, flag_ids in targets.items():
+                nonce = IdGenerator.uuid()
+                board = self._record(board, {fid: {'plant_status': 'planting'} for fid in flag_ids})
+                instance_name = self._instance_name(board, server)
+                failure = self._deliver(board, server, instance_name, nonce, seed, written)
+                if failure:
+                    board = self._record(board, {fid: self._failed(failure) for fid in flag_ids})
+                else:
+                    nonces[server] = nonce
+            board = self._await_results(board, targets, nonces)
+        except Exception:
+            self._fail_unfinished(board, targets)
+            raise
+        finally:
+            for instance_name in written:
+                try:
+                    self.compute_api.set_metadata(instance_name, remove=[PLANT_METADATA_KEY])
+                except Exception as e:
+                    # Logged, not raised: the plant outcome is already recorded. The key stays until a later attempt.
+                    self.logger.error(
+                        f"{self.class_name}:{board.id} - could not remove {PLANT_METADATA_KEY} from {instance_name}",
+                        error=type(e).__name__
+                    )
+        return board
+
+    def _fail_unfinished(self, board: CtfBoardModel, targets: Dict[str, List[str]]) -> None:
+        """Best effort on an unexpected error: no flag is left `planting` with nothing to finish it."""
+        target_ids = {fid for ids in targets.values() for fid in ids}
+        unfinished = [f.flag_id for f in board.flags if f.flag_id in target_ids and f.plant_status == 'planting']
+        if not unfinished:
+            return
+        try:
+            self._record(board, {fid: self._failed(self.MSG_ABORTED) for fid in unfinished})
+        except Exception as e:
+            self.logger.error(f"{self.class_name}:{board.id} - could not mark aborted flags failed", error=type(e).__name__)
+
+    def _deliver(self, board, server, instance_name, nonce, seed, written) -> Optional[str]:
+        """Steps 3-4: payload into metadata, then reset. Returns a failure message, or None on success."""
+        try:
+            instance = self.compute_api.get(instance_name)
+        except NotFound:
+            return self.MSG_NOT_FOUND
+        if str(getattr(instance, 'status', '')).upper() != 'RUNNING':
+            return self.MSG_NOT_RUNNING
+        try:
+            payload = self.build_payload(board, server, nonce, seed)
+        except (BadRequest, ValueError) as e:
+            # BadRequest messages carry flag ids only, never a value
+            self.logger.error(f"{self.class_name}:{board.id} - {self.MSG_BAD_PAYLOAD} for '{server}'", error=str(e))
+            return self.MSG_BAD_PAYLOAD
+        try:
+            # Recorded before the call: a failed or timed-out write may still have landed
+            written.append(instance_name)
+            self.compute_api.set_metadata(
+                instance_name,
+                items={PLANT_METADATA_KEY: payload, GUEST_ATTRIBUTES_ENABLE_KEY: GUEST_ATTRIBUTES_ENABLE_VALUE}
+            )
+            self.compute_api.reset(instance_name)
+        except Exception as e:
+            # Type only: a set_metadata error could echo the request body, which holds flag values
+            self.logger.error(
+                f"{self.class_name}:{board.id} - {self.MSG_DELIVERY} to {instance_name}", error=type(e).__name__
+            )
+            return self.MSG_DELIVERY
+        return None
+
+    def _await_results(self, board, targets, nonces) -> CtfBoardModel:
+        """Steps 5-6: poll every delivered server until its nonce answers or the shared deadline passes."""
+        pending = dict(nonces)
+        deadline = time.monotonic() + self.CONFIRM_TIMEOUT_SECONDS
+        while pending and time.monotonic() < deadline:
+            time.sleep(self.POLL_INTERVAL_SECONDS)
+            for server, nonce in list(pending.items()):
+                instance_name = self._instance_name(board, server)
+                try:
+                    attributes = self.compute_api.get_guest_attributes(
+                        instance_name, query_path=GUEST_ATTRIBUTE_NAMESPACE
+                    )
+                except NotFound:
+                    board = self._record(board, {fid: self._failed(self.MSG_NOT_FOUND) for fid in targets[server]})
+                    del pending[server]
+                    continue
+                except Exception as e:
+                    # Transient API errors keep polling until the deadline
+                    self.logger.warning(
+                        f"{self.class_name}:{board.id} - guest attribute poll failed", error=type(e).__name__
+                    )
+                    continue
+                result = parse_plant_result(attributes.get(GUEST_ATTRIBUTE_RESULT_KEY), nonce)
+                if result is None:
+                    continue
+                status, message = result
+                if status == RESULT_OK:
+                    update = {'plant_status': 'planted', 'planted_at': time.time(), 'plant_error': None}
+                else:
+                    update = self._failed(message or "Plant reported an error")
+                board = self._record(board, {fid: dict(update) for fid in targets[server]})
+                del pending[server]
+        for server in pending:
+            board = self._record(board, {fid: self._failed(self.MSG_TIMEOUT) for fid in targets[server]})
+        return board
+
+    @staticmethod
+    def _instance_name(board: CtfBoardModel, server: str) -> str:
+        # Same naming as SoloWorkout: f"{workout_id}-{server.name}"
+        return f"{board.workout_id}-{server}"
+
+    @staticmethod
+    def _failed(message: str) -> dict:
+        return {'plant_status': 'failed', 'plant_error': message[:MAX_RESULT_MESSAGE_LENGTH]}
+
+    def _record(self, board: CtfBoardModel, updates: Dict[str, dict]) -> CtfBoardModel:
+        """
+        Writes plant fields for the given flag ids onto the board document in a transaction, touching only
+        those flags' plant_* fields, so a concurrent solve or hint on the same board is never overwritten.
+        """
+        doc_ref = self.db.db.collection(DbCollections.CTF_BOARD.value).document(board.id)
+
+        def apply(flags: list) -> list:
+            for flag in flags:
+                if flag.get('flag_id') in updates:
+                    flag.update(updates[flag['flag_id']])
+            return flags
+
+        def operation(transaction):
+            snapshot = doc_ref.get(transaction=transaction)
+            if not snapshot.exists:
+                raise NotFound(f"CTF board {board.id} not found")
+            flags = apply(snapshot.to_dict().get('flags', []))
+            transaction.update(doc_ref, {'flags': flags})
+            return flags
+
+        flags = self.db.transaction(operation)
+        stored = board.model_dump()
+        stored['flags'] = flags
+        return ModelValidator(model=CtfBoardModel, log_location=LoggerNames.CLOUD_FN).load(data=stored)
 
     def build_payload(
         self,
