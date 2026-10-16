@@ -77,8 +77,8 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **G7** Reset `rebuild` — spec + done-when at PRD.md:1022
 
 ### Group H — Scoring
-- [ ] **H1** Submission resolve — spec + done-when at PRD.md:1026
-- [ ] **H2** Solve award — spec + done-when at PRD.md:1028
+- [x] **H1** Submission resolve — spec + done-when at PRD.md:1026
+- [x] **H2** Solve award — spec + done-when at PRD.md:1028
 - [ ] **H3** Rate limiting — spec + done-when at PRD.md:1030
 - [ ] **H4** Hints — spec + done-when at PRD.md:1032
 - [ ] **H5** Student board read — spec + done-when at PRD.md:1033
@@ -509,3 +509,15 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** All three CTF actions are now routed, so the E3 done-when is fully met. Gates now: api 664, cloud_functions 449, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** H1 Submission resolve (PRD.md:1026).
+
+### Iteration 42 — 2026-10-16
+- **Completed:** H1 and H2 together. A same-board match with no step 6 would have been a stub, which follows the precedent of G4–G7. `api/core/ctf/scoring.py` `CtfScoring(env_dict, db).submit(workout_id, flag, origin_ip) -> CtfSubmitResponse`:
+  - Step 1: the active-board query, then the event get. A missing board or event → `NotFound`. A non-RUNNING event records `closed`, then raises `Conflict("Submissions are closed.")`.
+  - Steps 3-5: one digest read. A missing digest or another `ctf_id` → `incorrect`. Another workout → `cross_submission` with `matched_workout_id`, answered as `incorrect`.
+  - Step 6: one `db.transaction` that re-reads the board. Duplicate, decoy (points plus `decoy_count`, never marked solved) or correct (`solved`, `solved_at`, `score`, `solve_count`, `last_solve_at`). `attempts` is incremented on the parsed flag.
+  - Step 7: one `CtfSubmissionModel` insert holding only the digest.
+  - Decoy points are hidden in the response unless `reveal_decoy_penalty`.
+  - `api/unit_tests/test_ctf_scoring_submit.py` has 24 tests: SC-10, SC-12 (two threads behind a barrier, so both query before either transaction), decoy, closed for every non-RUNNING state, and SC-4.
+- **Learned:** The PRD increments `attempts` only inside step 6 (same-board matches), so wrong guesses don't count. That follows the algorithm literally and keeps the "at most one board transaction" budget. The ctf_enabled check is left to the student router (R2), as with the other core classes. Gates now: api 688, cloud_functions 449, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** H3 Rate limiting. Insert step 2 between the closed check and the digest read in `CtfScoring.submit`: a transaction on `agoge-ctf-rate-limit/{ctf_id}-{workout_id}-{bucket}`, record `rate_limited`, raise `RateLimitExceeded`. PRD.md:1030.
