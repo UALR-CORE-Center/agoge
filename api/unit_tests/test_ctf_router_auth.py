@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 import dependencies
 from common.models.response import CtfFlagRevealResponse, CtfStudentBoardResponse
-from common.models.users import AgogeUser
+from common.models.users import AgogeUser, AnonymousAppUser
 from core.ctf.audit import CtfAudit
 from routers import ctf as ctf_module
 from routers import ctf_board as ctf_board_module
@@ -17,8 +17,7 @@ CTF_ID = "ctfaaaaaaa"
 WORKOUT = "wkaaaaaaaa"
 FLAG = "agoge{web1_0123456789abcdef0123}"
 
-# AnonymousAppUser() fails its own validation (uid/email None), so a no-permission user stands in.
-ANONYMOUS = AgogeUser(uid="anonymous", email="anonymous@example.edu", permissions={})
+ANONYMOUS = AnonymousAppUser()
 STUDENT = AgogeUser(uid="student", email="student@example.edu", permissions={"student": True})
 PENDING = AgogeUser(uid="pending", email="pending@example.edu", permissions={"pending": True})
 GM = AgogeUser(uid="gm", email="gm@example.edu", permissions={"instructor": True})
@@ -31,7 +30,7 @@ NON_ADMINS = [ANONYMOUS, STUDENT, PENDING, GM]
 
 
 def _uid(user):
-    return user.uid
+    return user.uid or "anonymous"
 
 
 class FakeLogDb:
