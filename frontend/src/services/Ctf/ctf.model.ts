@@ -11,11 +11,14 @@ export const VERDICTS = ['correct', 'incorrect', 'duplicate', 'decoy', 'cross_su
 export type Verdict = typeof VERDICTS[number];
 export type CtfAction = 'arm' | 'start' | 'pause' | 'resume' | 'end' | 'archive';
 export type ResetMode = 'replant' | 'restart' | 'rebuild';
+export type CtfServersAction = 'build' | 'start' | 'stop';
 // A runtime list, not just a type, so the Event Log panel can offer every action as a filter.
 export const LOG_ACTIONS = [
     'CTF_CREATE', 'CTF_UPDATE', 'CTF_ARM', 'CTF_START', 'CTF_PAUSE',
     'CTF_RESUME', 'CTF_END', 'CTF_ARCHIVE', 'CTF_DELETE',
     'FLAG_REPLANT', 'FLAG_REVEAL', 'HOST_RESET', 'SCORE_ADJUST',
+    'TEAM_ADD', 'TEAM_REMOVE', 'TEAM_UPDATE', 'SPEC_UPDATE',
+    'SERVERS_BUILD', 'SERVERS_START', 'SERVERS_STOP',
 ] as const;
 export type LogAction = typeof LOG_ACTIONS[number];
 export type LogResult = 'OK' | 'DENIED' | 'ERROR';
@@ -83,6 +86,8 @@ export interface CtfEvent {
     scoreboard_frozen_at: number | null;
     public_scoreboard_enabled: boolean;
     board_ids: string[];
+    // The lab's join code; participants enter it with their roster email.
+    join_code: string | null;
     boards_pending: number;
     state: number;
     state_timestamp: string;
@@ -206,6 +211,37 @@ export interface CtfScoreboardRow {
     last_solve_at: number | null;
 }
 
+export interface CtfTeamRow {
+    workout_id: string;
+    team_name: string;
+    members: string[];
+    // WorkoutStates value; null while the workout record is missing.
+    workout_state: number | null;
+    workout_state_name: string | null;
+    arm_status: ArmStatus;
+}
+
+export interface CtfTemplateServer {
+    name: string;
+    os: string | null;
+    machine_type: string | null;
+}
+
+export interface CtfTemplateRow {
+    id: string;
+    name: string;
+    description: string | null;
+    ctf_name: string;
+    // Decoys excluded: the flags teams can score.
+    flag_count: number;
+    servers: CtfTemplateServer[];
+}
+
+// PUT /ctf/{id}/servers/ answers with the number of workout messages published.
+export interface CtfServersResponse {
+    messages: number;
+}
+
 // PUT /ctf/{id}/flags/ answers with the number of plant messages published.
 export interface CtfReplantResponse {
     messages: number;
@@ -272,7 +308,26 @@ export interface CtfHintResponse {
 // ---- Requests ----
 
 export interface CtfCreateRequest {
-    unit_id: string;
+    spec_id: string;
+    name?: string | null;
+    // UTC epoch seconds when the event's lab and workouts expire.
+    expires: number;
+}
+
+export interface CtfTeamMembersRequest {
+    members: string[];
+}
+
+export interface CtfTeamRequest extends CtfTeamMembersRequest {
+    team_name: string;
+}
+
+export interface CtfSpecUpdateRequest {
+    ctf: CtfSpec;
+}
+
+export interface CtfServersRequest {
+    action: CtfServersAction;
 }
 
 // Only keys present are applied; `scoreboard_frozen_at: null` unfreezes, so omit a key to leave it alone.

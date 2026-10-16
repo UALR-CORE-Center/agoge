@@ -1,18 +1,18 @@
 # Agoge Game Master Guide
 
-Agoge can run a capture-the-flag (CTF) exercise on top of an ordinary Lab. Each learner Workout becomes one team's **board**: Agoge plants a unique set of flags on that Workout's servers, scores each submission, and gives the instructor running the exercise (the **game master**) a dashboard to control the event.
+Agoge can run a capture-the-flag (CTF) exercise built from a lab template. Each team gets its own Workout, which is that team's **board**: Agoge plants a unique set of flags on the team's servers, scores each submission, and gives the instructor running the exercise (the **game master**) a dashboard to control the event.
 
 This guide assumes you already know how to build and manage a Lab. If you don't, read the [Instructor Guide](instructor-guide.md) first.
 
 ## Before you begin
 
 - A deployment administrator must turn CTF on. Run `setup.py`, open the environment variables menu, and set `ctf_enabled` to true. The first time it is enabled, this creates the `ctf_flag_seed` secret. That secret is never replaced afterwards, because every flag value is derived from it.
-- Once CTF is on, instructors and admins see **Teachers → CTF Events**. While it is off, the menu item and the **Create CTF Event** button are hidden, and the `/ctf` API answers 404.
-- A Workout's servers can receive flags only if they were built while this release was deployed, because the plant loader is added at server build time. Rebuild any older Workouts before you create an event.
+- Once CTF is on, instructors and admins see **Teachers → CTF Events**. While it is off, the menu item is hidden and the `/ctf` API answers 404.
+- A team's servers can receive flags only if they were built while this release was deployed, because the plant loader is added at server build time.
 
 ## Author the `ctf` block
 
-A lab template becomes CTF-capable when its JSON specification contains a top-level `ctf` block. Building a Lab copies the specification into the Lab, so **add or change the `ctf` block before you build the Lab**. Editing the template afterwards does not affect a Lab that is already built.
+A lab template becomes CTF-capable when its JSON specification contains a top-level `ctf` block, and it must be a solo lab. Creating an event copies the template into the event's own Lab, so editing the template afterwards does not affect an event that already exists. To change one event's flags, use the **Flags** section of its **Setup** tab instead (see below).
 
 ### Complete example
 
@@ -180,22 +180,33 @@ The dashboard shows the event's state as a chip. These are the states:
 
 ### 1. Create the event
 
-1. Build the Lab from a template that has a `ctf` block, and wait for its Workouts to exist.
-2. Open the Lab detail page and click **Create CTF Event**. The button appears only for a CTF-capable Lab while CTF is enabled, and it is disabled after the Lab expires.
-3. Agoge creates the event in `DRAFT` with one board per Workout, then opens its dashboard. To find the event later, use **Teachers → CTF Events**, which has **Active** and **Archived** tabs.
+1. Open **Teachers → CTF Events** and click **New CTF**.
+2. Choose a template (only solo lab templates with a valid `ctf` block are listed), optionally rename the event, and set when its Lab expires. Every team's servers are deleted after that time.
+3. Agoge creates the event in `DRAFT` with its own Lab and no teams, then opens its dashboard on the **Setup** tab. No VM exists yet. To find the event later, use **Teachers → CTF Events**, which has **Active** and **Archived** tabs.
 
-Creation fails if:
+Creation fails if the template has no `ctf` block, is a community lab, or the `ctf_flag_seed` secret is missing.
 
-- the Lab has no Workouts;
-- it would need more than the deployment's board limit (100 by default);
-- a Workout already belongs to another active event;
-- the `ctf_flag_seed` secret is missing.
+### 2. Set up (DRAFT)
 
-The team name shown on boards is the Workout's team name. If there is none, the student's email is used, and if that is missing too, the Workout id.
+The **Setup** tab has three sections.
 
-### 2. Arm
+**Teams.** Add each team with a name and its members' emails, or **Import CSV** with one `team,email` line per member (lines with the same team name make one team). Adding a team creates its Workout record but starts no VM. Rules:
 
-Make sure every Workout is **running**, then click **Arm**. Agoge plants each board's flags:
+- Team names are unique within the event.
+- An email can be on only one team in any active event.
+- The deployment's board limit (100 by default) caps the number of teams.
+- Teams can be added or removed only in `DRAFT`, and a team can be removed only while its servers have never been built.
+- Members can be changed until the event ends, so a late student can still be added after you arm.
+
+Participants join at `/join` with the event's **join code** (shown on the Setup tab) and the email on their team. Teammates land on the same Workout, so they share one set of servers and one score. An email that is on no team is refused with "This email is not on the roster for this event". The first member to join also builds the team's servers if you have not built them yet.
+
+**Flags.** Review or change the event's name, description, rules link, scoring, and flags. The same rules as the `ctf` block apply, and the server rejects an invalid path or server. Saving regenerates every team's flag values. Flags can be edited only in `DRAFT`.
+
+**Servers.** Shows the Lab's servers. **Build all** builds every team that is not built yet, and **Start all** and **Stop all** act on every team. Running VMs cost money until they are stopped. Stop is not offered while the event is running.
+
+### 3. Arm
+
+Make sure every team's servers are **running**, then click **Arm**. Arm stays disabled until the event has at least one team. Agoge plants each board's flags:
 
 - For each flag-bearing server, it writes the plant script into the instance metadata and **restarts the VM**.
 - A startup loader writes the flags, reports the result, and Agoge removes the script from the metadata.
@@ -203,7 +214,7 @@ Make sure every Workout is **running**, then click **Arm**. Agoge plants each bo
 
 A board is armed if at least one of its flags planted. When the last board finishes, the event moves to `ARMED` if any board armed, and to `BROKEN` if none did. You can click **Arm** again from `ARMED` or `BROKEN`. A re-arm re-plants every board.
 
-### 3. Start, pause, resume
+### 4. Start, pause, resume
 
 - **Start** (`ARMED` → `RUNNING`) opens submissions and starts the clock.
 - **Pause** (`RUNNING` → `PAUSED`) closes submissions and hints. Students see "(paused)" on the banner.
@@ -211,11 +222,11 @@ A board is armed if at least one of its flags planted. When the last board finis
 
 Use **Ends at** in the scoreboard settings to set or change the end time.
 
-### 4. End
+### 5. End
 
 **End** (`RUNNING` or `PAUSED` → `ENDED`) closes submissions for good. It cannot be undone, and the confirmation dialog says so. A submission made after the end is recorded with the verdict `closed`.
 
-### 5. Archive and delete
+### 6. Archive and delete
 
 **Archive** is allowed from `DRAFT`, `ARMED`, `ENDED`, or `BROKEN`, but not while the event is running or paused. It cannot be undone. Archiving sets every board inactive, so the Workouts can join a new event, and students stop seeing the CTF banner. Settings can no longer be changed once an event is archived.
 
@@ -225,6 +236,7 @@ An admin can delete an event in `DRAFT` or `ARCHIVED`. Deleting removes the even
 
 | Tab | Use it to |
 | --- | --- |
+| **Setup** | Change team members (for example, add a late student), and build, start, or stop every team's servers. |
 | **Flags** | See each flag's plant status on every board, and replant one row or a selection. |
 | **Hosts** | Reset a team's server (see below). |
 | **Scoreboard** | See the unfrozen standings and adjust a team's score by −10,000 to 10,000 points, with a reason. |

@@ -12,11 +12,11 @@ from common.constants.database import (
 )
 from common.constants.pub_sub import PubSub
 from common.constants.build_constants import BuildConstants
-from common.constants.states import UnitStates, WorkoutStates
-from common.models.agoge import UnitModel, WorkoutModel, WebApplicationModel, AgogeWorkoutSummaryModel
+from common.constants.states import UnitStates
+from common.models.agoge import UnitModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.id_generator import IdGenerator
-from common.utilities.timestamps import Timestamps
+from common.utilities.workout_record import build_workout_record
 
 from ...lms.canvas.lms_canvas import LMSCanvas
 from ...lms.google_classroom.lms_google_classroom import LMSGoogleClassroom
@@ -362,78 +362,9 @@ class BaseUnit(ABC):
         Returns:
             dict: WorkoutModel in dictionary form representing the workout record.
         """
-        unit_summary = self.unit_model.summary
-        workout_record = {
-            'id': workout_id,
-            'parent_id': self.unit_id,
-            'parent_build_type': BuildConstants.BuildType.UNIT,
-            'build_type': BuildConstants.BuildType.WORKOUT,
-            'creation_timestamp': Timestamps.get_current_timestamp_utc(),
-            'state': WorkoutStates.NOT_BUILT.value,
-            'summary': AgogeWorkoutSummaryModel(
-                name=unit_summary.name,
-                description=unit_summary.description,
-                student_instructions_url=unit_summary.student_instructions_url
-            )
-        }
-
-        if kwargs:
-            for key, value in kwargs.items():
-                if key == 'student_email':
-                    workout_record[key] = str(value).lower()
-                else:
-                    workout_record[key] = value
-
-        # Expiration based on workout_duration_days
-        if (workout_duration_days := self.unit_model.workout_duration_days) is not None:
-            workout_record['expires'] = Timestamps.get_current_timestamp_utc(add_seconds=86400*workout_duration_days)
-        else:
-            workout_record['expires'] = self.unit_model.workspace_settings.expires
-
-        # Networks, servers, and firewall_rules
-        for key in ['unit_type', 'networks', 'servers', 'firewall_rules', 'firewalls']:
-            try:
-                if hasattr(self.unit_model, key):
-                    value = getattr(self.unit_model, key)
-                    if value:
-                        if key == 'servers':
-                            workout_record['shutoff_timestamp'] = (
-                                Timestamps.get_current_timestamp_utc(add_seconds=7200, round_to_quarter=True)
-                            )
-                        workout_record[key] = value
-            except AttributeError as e:
-                self.logger.debug(
-                    f"{self.class_name} - Attempted to access field {key}, but it doesn't exist in model!"
-                    f"{e}"
-                )
-
-        # Optional Fields
-        # Process web_applications if they exist
-        if (web_applications := self.unit_model.web_applications) is not None:
-            processed_web_applications = [
-                WebApplicationModel(
-                    host_name=app.host_name,
-                    name=app.name,
-                    starting_directory=app.starting_directory,
-                    url=f"https://{app.host_name}/{app.starting_directory}"
-                )
-                for app in web_applications
-            ]
-            workout_record['web_applications'] = processed_web_applications
-
-        # Optional escape room, assessment, or lms_quiz
-        if (escape_room := self.unit_model.escape_room) is not None:
-            workout_record['escape_room'] = escape_room
-        elif (assessment := self.unit_model.assessment) is not None:
-            workout_record['assessment'] = assessment
-        elif (lms_integration := self.unit_model.lms_integration) is not None:
-            workout_record['lms_integration'] = lms_integration
-
-        # Debug flag
-        if self.debug:
-            workout_record['test'] = True
-
-        return self.validator(model=WorkoutModel, log_location=self.log_name).load(workout_record, as_dict=True)
+        return build_workout_record(
+            self.unit_model, workout_id, log_name=self.log_name, test=self.debug, **kwargs
+        )
 
     @abstractmethod
     def _wait_until_unit_is_ready_for_servers(self):

@@ -27,6 +27,13 @@ export const LOG_ACTION_LABELS: Record<LogAction, string> = {
     FLAG_REVEAL: 'Flag reveal',
     HOST_RESET: 'Host reset',
     SCORE_ADJUST: 'Score adjustment',
+    TEAM_ADD: 'Team added',
+    TEAM_REMOVE: 'Team removed',
+    TEAM_UPDATE: 'Team roster changed',
+    SPEC_UPDATE: 'Flags edited',
+    SERVERS_BUILD: 'Servers built',
+    SERVERS_START: 'Servers started',
+    SERVERS_STOP: 'Servers stopped',
 };
 
 const RESULT_COLORS: Record<LogResult, 'success' | 'warning' | 'error'> = {

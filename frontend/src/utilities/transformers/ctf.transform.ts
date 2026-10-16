@@ -20,6 +20,8 @@ import {
     CtfStudentBoardResponse,
     CtfSubmission,
     CtfSubmitResponse,
+    CtfTeamRow,
+    CtfTemplateRow,
 } from "../../services/Ctf/ctf.model";
 
 // Each transformer copies only the modelled keys. Its input is typed as the wire shape the API
@@ -75,6 +77,7 @@ export const transformToCtfEvent = (data: CtfEvent): CtfEvent => ({
     scoreboard_frozen_at: orNull(data.scoreboard_frozen_at),
     public_scoreboard_enabled: data.public_scoreboard_enabled === true,
     board_ids: data.board_ids ?? [],
+    join_code: orNull(data.join_code),
     boards_pending: data.boards_pending ?? 0,
     state: data.state,
     state_timestamp: data.state_timestamp,
@@ -253,3 +256,31 @@ export const transformToCtfPublicScoreboardRow = (data: CtfPublicScoreboardRow):
 
 export const transformToCtfPublicScoreboard = (data: CtfPublicScoreboardRow[]): CtfPublicScoreboardRow[] =>
     (data ?? []).map(transformToCtfPublicScoreboardRow);
+
+export const transformToCtfTeamRow = (data: CtfTeamRow): CtfTeamRow => ({
+    workout_id: data.workout_id,
+    team_name: data.team_name,
+    members: data.members ?? [],
+    workout_state: orNull(data.workout_state),
+    workout_state_name: orNull(data.workout_state_name),
+    arm_status: data.arm_status ?? 'pending',
+});
+
+export const transformToCtfTeamList = (data: CtfTeamRow[]): CtfTeamRow[] =>
+    (data ?? []).map(transformToCtfTeamRow);
+
+export const transformToCtfTemplateRow = (data: CtfTemplateRow): CtfTemplateRow => ({
+    id: data.id,
+    name: data.name,
+    description: orNull(data.description),
+    ctf_name: data.ctf_name,
+    flag_count: data.flag_count ?? 0,
+    servers: (data.servers ?? []).map((server) => ({
+        name: server.name,
+        os: orNull(server.os),
+        machine_type: orNull(server.machine_type),
+    })),
+});
+
+export const transformToCtfTemplateList = (data: CtfTemplateRow[]): CtfTemplateRow[] =>
+    (data ?? []).map(transformToCtfTemplateRow);

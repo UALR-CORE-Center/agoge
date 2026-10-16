@@ -10,10 +10,17 @@ import {CtfStateResponse, CtfStates} from "../../../services/Ctf/ctf.model";
 import {ctfService} from "../../../services/Ctf/ctf.service";
 import {darkTheme} from "../../../styles/theme";
 import HttpError from "../../Common/Errors/HttpError";
-import CtfDashboard, {DASHBOARD_TABS, STATE_POLL_INTERVAL_MS} from "./CtfDashboard";
+import CtfDashboard, {DASHBOARD_TABS, defaultTabFor, STATE_POLL_INTERVAL_MS} from "./CtfDashboard";
 import {FLAGS_POLL_INTERVAL_MS} from "./CtfFlagsPanel";
 import {SCOREBOARD_POLL_INTERVAL_MS} from "./CtfScoreboardPanel";
 import {formatDuration, remainingSeconds} from "./ctfTime";
+
+// The real Setup panel pulls in unit.service and so Firebase; its own behavior is covered elsewhere.
+vi.mock("./CtfSetupPanel", () => ({
+    default: ({ctfId, state, active}: {ctfId: string; state: number; active: boolean}) => (
+        <div data-testid="setup-panel" data-active={String(active)}>setup for {ctfId} in {state}</div>
+    ),
+}));
 
 vi.mock("../../../services/Ctf/ctf.service", () => ({
     ctfService: {getFlags: vi.fn(), getHosts: vi.fn(), getLog: vi.fn(), getScoreboard: vi.fn(), getState: vi.fn(), getSubmissions: vi.fn(), processAction: vi.fn()},
@@ -94,9 +101,61 @@ describe("CtfDashboard", () => {
         expect(tabs).toEqual([...DASHBOARD_TABS]);
         expect(screen.queryByText(/budget has been exceeded/)).not.toBeInTheDocument();
 
+        expect(tabs[0]).toBe("Setup");
         fireEvent.click(screen.getByRole("tab", {name: "Hosts"}));
         expect(screen.getByRole("tab", {name: "Hosts"})).toHaveAttribute("aria-selected", "true");
         expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", screen.getByRole("tab", {name: "Hosts"}).id);
+    });
+
+    it("picks Setup for a DRAFT event and Flags for every other state", () => {
+        expect(DASHBOARD_TABS[defaultTabFor(CtfStates.DRAFT)]).toBe("Setup");
+        for (const state of Object.values(CtfStates).filter((value) => value !== CtfStates.DRAFT)) {
+            expect(DASHBOARD_TABS[defaultTabFor(state)]).toBe("Flags");
+        }
+    });
+
+    it("opens a DRAFT event on the Setup tab and mounts the setup panel as active", async () => {
+        vi.mocked(ctfService.getState).mockResolvedValue(stateResponse({state: CtfStates.DRAFT, state_name: "DRAFT", starts_at: null, ends_at: null}));
+        renderDashboard();
+        await flush();
+
+        expect(screen.getByRole("tab", {name: "Setup"})).toHaveAttribute("aria-selected", "true");
+        expect(screen.getByTestId("setup-panel")).toHaveAttribute("data-active", "true");
+        expect(screen.getByTestId("setup-panel")).toHaveTextContent(`setup for eventevent in ${CtfStates.DRAFT}`);
+        expect(ctfService.getFlags).not.toHaveBeenCalled();
+    });
+
+    it("keeps the tab the user chose when a later poll reports a new state", async () => {
+        vi.mocked(ctfService.getState).mockResolvedValue(stateResponse({state: CtfStates.DRAFT, state_name: "DRAFT"}));
+        vi.mocked(ctfService.getHosts).mockResolvedValue([]);
+        renderDashboard();
+        await flush();
+        fireEvent.click(screen.getByRole("tab", {name: "Hosts"}));
+
+        vi.mocked(ctfService.getState).mockResolvedValue(stateResponse());
+        await act(async () => {
+            vi.advanceTimersByTime(STATE_POLL_INTERVAL_MS);
+        });
+        await flush();
+        expect(screen.getByRole("tab", {name: "Hosts"})).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("blocks Arm until the event has a team, then allows it", async () => {
+        vi.mocked(ctfService.getState).mockResolvedValue(stateResponse({state: CtfStates.DRAFT, state_name: "DRAFT", boards: []}));
+        renderDashboard();
+        await flush();
+        const group = () => within(screen.getByRole("group", {name: "Event actions"}));
+        expect(group().getByRole("button", {name: "Arm"})).toBeDisabled();
+
+        vi.mocked(ctfService.getState).mockResolvedValue(stateResponse({
+            state: CtfStates.DRAFT, state_name: "DRAFT",
+            boards: [{workout_id: "boardaaaaa", team_name: "Red", arm_status: "pending", arm_error: null, plant_failed_count: 0, plant_stale_count: 0}],
+        }));
+        await act(async () => {
+            vi.advanceTimersByTime(STATE_POLL_INTERVAL_MS);
+        });
+        await flush();
+        expect(group().getByRole("button", {name: "Arm"})).toBeEnabled();
     });
 
     it("mounts the Flags panel in the Flags tab and polls flags only while that tab is shown", async () => {

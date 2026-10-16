@@ -13,6 +13,10 @@ import CtfEventList from "./CtfEventList";
 vi.mock("../../../services/Ctf/ctf.service", () => ({
     ctfService: {list: vi.fn()},
 }));
+vi.mock("./CreateCtfDialog", () => ({
+    default: ({open, onClose}: {open: boolean; onClose: () => void}) =>
+        open ? <div role="dialog" aria-label="New CTF dialog"><button onClick={onClose}>close dialog</button></div> : null,
+}));
 
 const summary = (id: string, name: string, state: number): CtfEventSummary => ({
     id,
@@ -76,5 +80,17 @@ describe("CtfEventList", () => {
 
         expect(await screen.findByRole("alert")).toHaveTextContent("503: Service unavailable.");
         expect(screen.getByText("No active CTF events")).toBeInTheDocument();
+    });
+
+    it("opens the New CTF dialog from the button and closes it again", async () => {
+        renderList();
+        await screen.findByText("Spring Qualifier");
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", {name: "New CTF"}));
+        expect(screen.getByRole("dialog", {name: "New CTF dialog"})).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", {name: "close dialog"}));
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 });

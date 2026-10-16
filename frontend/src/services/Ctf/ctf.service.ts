@@ -11,8 +11,13 @@ import {
     URL_CTF_API_LOG,
     URL_CTF_API_SCORE,
     URL_CTF_API_SCOREBOARD,
+    URL_CTF_API_SERVERS,
+    URL_CTF_API_SPEC,
     URL_CTF_API_STATE,
     URL_CTF_API_SUBMISSIONS,
+    URL_CTF_API_TEAM,
+    URL_CTF_API_TEAMS,
+    URL_CTF_API_TEMPLATES,
     URL_CTF_BOARD_API_HINT,
     URL_CTF_BOARD_API_ITEM,
     URL_CTF_BOARD_API_SCOREBOARD,
@@ -38,6 +43,9 @@ import {
     transformToCtfStudentBoard,
     transformToCtfSubmissionList,
     transformToCtfSubmitResponse,
+    transformToCtfTeamList,
+    transformToCtfTeamRow,
+    transformToCtfTemplateList,
 } from "../../utilities/transformers/ctf.transform";
 import {apiService} from "../api-request.service";
 import {
@@ -60,10 +68,16 @@ import {
     CtfScoreAdjustRequest,
     CtfScoreAdjustResponse,
     CtfScoreboardRow,
+    CtfServersAction,
+    CtfServersResponse,
+    CtfSpec,
     CtfStateResponse,
     CtfStudentBoardResponse,
     CtfSubmission,
     CtfSubmitResponse,
+    CtfTeamRequest,
+    CtfTeamRow,
+    CtfTemplateRow,
     CtfUpdateRequest,
     LogAction,
     Verdict,
@@ -141,6 +155,33 @@ const update = async (ctfId: string, request: CtfUpdateRequest) =>
 const processAction = async (ctfId: string, request: CtfActionRequest) =>
     await apiService.put<CtfEvent>(item(ctfId, URL_CTF_API_ACTION), request, true, transformToCtfEvent);
 
+// ---- Setup (DRAFT): templates, teams, flags, servers ----
+
+const getTemplates = async () =>
+    await apiService.get<CtfTemplateRow[]>(URL_CTF_API_TEMPLATES, null, true, transformToCtfTemplateList);
+
+const getTeams = async (ctfId: string) =>
+    await apiService.get<CtfTeamRow[]>(item(ctfId, URL_CTF_API_TEAMS), null, true, transformToCtfTeamList);
+
+const addTeam = async (ctfId: string, request: CtfTeamRequest) =>
+    await apiService.post<CtfTeamRow>(item(ctfId, URL_CTF_API_TEAMS), request, true, null, transformToCtfTeamRow);
+
+const setTeamMembers = async (ctfId: string, workoutId: string, members: string[]) =>
+    await apiService.put<CtfTeamRow>(
+        item(ctfId, URL_CTF_API_TEAM, {WORKOUT_ID: workoutId}), {members}, true, transformToCtfTeamRow
+    );
+
+const removeTeam = async (ctfId: string, workoutId: string) =>
+    await apiService.del<CtfIdResponse>(item(ctfId, URL_CTF_API_TEAM, {WORKOUT_ID: workoutId}), true, transformToCtfIdResponse);
+
+const updateSpec = async (ctfId: string, ctf: CtfSpec) =>
+    await apiService.put<CtfEvent>(item(ctfId, URL_CTF_API_SPEC), {ctf}, true, transformToCtfEvent);
+
+const controlServers = async (ctfId: string, action: CtfServersAction) =>
+    await apiService.put<CtfServersResponse>(
+        item(ctfId, URL_CTF_API_SERVERS), {action}, true, (data: CtfServersResponse) => ({messages: data?.messages ?? 0})
+    );
+
 // ---- Student (/ctf-board) ----
 // These routes carry no auth on the API (the workout id is the capability), so no token is sent.
 
@@ -166,7 +207,9 @@ const getPublicScoreboard = async (workoutId: string) =>
     );
 
 export const ctfService = {
+    addTeam,
     adjustScore,
+    controlServers,
     create,
     get,
     getBoards,
@@ -177,13 +220,18 @@ export const ctfService = {
     getScoreboard,
     getState,
     getSubmissions,
+    getTeams,
+    getTemplates,
     list,
     processAction,
     remove,
+    removeTeam,
     replant,
     resetHost,
     revealFlag,
+    setTeamMembers,
     update,
+    updateSpec,
 };
 
 export const ctfBoardService = {

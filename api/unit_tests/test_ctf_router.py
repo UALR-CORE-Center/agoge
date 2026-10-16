@@ -7,9 +7,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import dependencies
-from common.exceptions.agoge import Conflict, NotFound, Unauthorized
+from common.exceptions.agoge import AgogeValidationError, Conflict, NotFound, Unauthorized
 from common.models.agoge import CtfActionRequest, CtfUpdateRequest
-from common.models.response import CtfFlagRevealResponse
+from common.models.response import CtfFlagRevealResponse, CtfTeamRow, CtfTemplateRow
 from common.models.users import AgogeUser
 from core.ctf.audit import CtfAudit
 from routers import ctf as ctf_router_module
@@ -34,6 +34,8 @@ class Harness:
         self.event = MagicMock(name="CtfEvent()")
         self.hosts = MagicMock(name="CtfHosts()")
         self.scoring = MagicMock(name="CtfScoring()")
+        self.setup = MagicMock(name="CtfSetup()")
+        monkeypatch.setattr(ctf_router_module, "CtfSetup", MagicMock(return_value=self.setup))
         monkeypatch.setattr(ctf_router_module, "CtfEvent", MagicMock(return_value=self.event))
         monkeypatch.setattr(ctf_router_module, "CtfHosts", MagicMock(return_value=self.hosts))
         monkeypatch.setattr(ctf_router_module, "CtfScoring", MagicMock(return_value=self.scoring))
@@ -55,10 +57,18 @@ def h(monkeypatch):
     return Harness(monkeypatch)
 
 
+CREATE_BODY = {"spec_id": "web-lab", "expires": 1893456000}
+TEAM_BODY = {"team_name": "Red", "members": ["a@x.edu"]}
+SPEC_BODY = {"ctf": {"name": "N", "flags": [{
+    "id": "web-root", "server": "web", "slot": 1, "location_type": "file", "path": "/root/flag.txt",
+    "operating_system": "linux", "points": 10,
+}]}}
+
 # Every route but /ctf/config/: (method, path, json body).
 ROUTES = [
     ("get", "/ctf/", None),
-    ("post", "/ctf/", {"unit_id": "unitabcdef"}),
+    ("get", "/ctf/templates/", None),
+    ("post", "/ctf/", CREATE_BODY),
     ("get", f"/ctf/{CTF_ID}/", None),
     ("put", f"/ctf/{CTF_ID}/", {"public_scoreboard_enabled": True}),
     ("delete", f"/ctf/{CTF_ID}/", None),
@@ -74,6 +84,12 @@ ROUTES = [
     ("get", f"/ctf/{CTF_ID}/scoreboard/", None),
     ("get", f"/ctf/{CTF_ID}/submissions/", None),
     ("get", f"/ctf/{CTF_ID}/log/", None),
+    ("get", f"/ctf/{CTF_ID}/teams/", None),
+    ("post", f"/ctf/{CTF_ID}/teams/", TEAM_BODY),
+    ("put", f"/ctf/{CTF_ID}/teams/{WORKOUT}/", {"members": ["a@x.edu"]}),
+    ("delete", f"/ctf/{CTF_ID}/teams/{WORKOUT}/", None),
+    ("put", f"/ctf/{CTF_ID}/spec/", SPEC_BODY),
+    ("put", f"/ctf/{CTF_ID}/servers/", {"action": "build"}),
 ]
 
 
@@ -103,19 +119,23 @@ def test_config_answers_even_when_disabled(monkeypatch):
 
 
 def test_create_uses_the_audited_id_and_returns_it(h):
-    response = h.client.post("/ctf/", json={"unit_id": "unitabcdef"})
+    response = h.client.post("/ctf/", json={**CREATE_BODY, "name": "Fall CTF"})
 
     assert response.status_code == 200
     assert response.json()["data"]["build_id"] == "newctfidxx"
-    h.event.create.assert_called_once_with("unitabcdef", GM, ctf_id="newctfidxx")
+    [call] = h.setup.create.call_args_list
+    request, caller = call.args
+    assert (request.spec_id, request.name, request.expires) == ("web-lab", "Fall CTF", 1893456000)
+    assert caller == GM
+    assert call.kwargs == {"ctf_id": "newctfidxx"}
     [row] = h.log_db.rows
-    assert (row["ctf_id"], row["action"], row["target"], row["result"]) == ("newctfidxx", "CTF_CREATE", "unitabcdef", "OK")
+    assert (row["ctf_id"], row["action"], row["target"], row["result"]) == ("newctfidxx", "CTF_CREATE", "web-lab", "OK")
 
 
 def test_core_refusal_is_one_denied_row_and_the_mapped_status(h):
-    h.event.create.side_effect = Unauthorized(message="not on unit")
+    h.setup.create.side_effect = Unauthorized(message="not on unit")
 
-    response = h.client.post("/ctf/", json={"unit_id": "unitabcdef"})
+    response = h.client.post("/ctf/", json=CREATE_BODY)
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Requesting user is not authorized to make this request"
@@ -180,11 +200,12 @@ def test_malformed_body_is_400_and_never_reaches_core(h, path, body):
     assert h.event.method_calls == h.hosts.method_calls == h.scoring.method_calls == []
 
 
-def test_malformed_create_body_is_400(h):
-    response = h.client.post("/ctf/", json={"unit_id": "NOT-AN-ID"})
+@pytest.mark.parametrize("body", [{"unit_id": "unitabcdef"}, {"spec_id": "x"}, {"spec_id": "", "expires": 5}])
+def test_malformed_create_body_is_400(h, body):
+    response = h.client.post("/ctf/", json=body)
 
     assert response.status_code == 400
-    h.event.create.assert_not_called()
+    h.setup.create.assert_not_called()
 
 
 def test_update_passes_only_the_sent_fields(h):
@@ -306,3 +327,149 @@ def test_collection_reads_use_the_items_envelope(h, path, target, method, kwargs
 def test_malformed_ctf_id_never_reaches_core(h):
     assert h.client.get("/ctf/NOTANID123/").status_code == 422
     h.event.get.assert_not_called()
+
+
+# --- setup routes: templates, teams, spec, servers ----------------------------------
+
+def test_templates_are_returned_as_items(h):
+    h.setup.templates.return_value = [CtfTemplateRow(
+        id="web-lab", name="Web Lab", description=None, ctf_name="CTF", flag_count=2, servers=[],
+    )]
+
+    response = h.client.get("/ctf/templates/")
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["data"]["items"]] == ["web-lab"]
+    h.setup.templates.assert_called_once_with()
+
+
+def _team_row(**kw):
+    return CtfTeamRow(
+        workout_id=WORKOUT, team_name="Red", members=["a@x.edu"], workout_state=0,
+        workout_state_name="NOT_BUILT", arm_status="pending", **kw,
+    )
+
+
+def test_get_teams_are_returned_as_items(h):
+    h.setup.teams.return_value = [_team_row()]
+
+    response = h.client.get(f"/ctf/{CTF_ID}/teams/")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["items"][0]["team_name"] == "Red"
+    h.setup.teams.assert_called_once_with(CTF_ID, GM)
+
+
+def test_add_team_audits_counts_only_and_the_new_workout(h):
+    h.setup.add_team.return_value = _team_row()
+
+    response = h.client.post(f"/ctf/{CTF_ID}/teams/", json={"team_name": "Red", "members": ["A@X.edu", "b@x.edu"]})
+
+    assert response.status_code == 200
+    assert response.json()["data"]["workout_id"] == WORKOUT
+    [[ctf_id, request, caller]] = [c.args for c in h.setup.add_team.call_args_list]
+    assert (ctf_id, caller) == (CTF_ID, GM)
+    assert request.members == ["a@x.edu", "b@x.edu"]
+    [row] = h.log_db.rows
+    assert (row["action"], row["result"]) == ("TEAM_ADD", "OK")
+    assert row["detail"] == {"members": 2, "workout_id": WORKOUT}
+    assert "a@x.edu" not in str(row) and "Red" not in str(row)
+
+
+@pytest.mark.parametrize("body", [{"team_name": "Red", "members": []}, {"team_name": "Red", "members": ["nope"]},
+                                  {"members": ["a@x.edu"]}, {"team_name": " ", "members": ["a@x.edu"]}])
+def test_add_team_malformed_body_is_400(h, body):
+    response = h.client.post(f"/ctf/{CTF_ID}/teams/", json=body)
+
+    assert response.status_code == 400
+    h.setup.add_team.assert_not_called()
+
+
+def test_add_team_conflict_is_409_and_a_denied_row(h):
+    h.setup.add_team.side_effect = Conflict(message="a@x.edu is already on team Blue in an active CTF event")
+
+    response = h.client.post(f"/ctf/{CTF_ID}/teams/", json=TEAM_BODY)
+
+    assert response.status_code == 409
+    assert [(row["action"], row["result"]) for row in h.log_db.rows] == [("TEAM_ADD", "DENIED")]
+
+
+def test_set_team_members_passes_the_normalized_roster(h):
+    h.setup.set_members.return_value = _team_row()
+
+    response = h.client.put(f"/ctf/{CTF_ID}/teams/{WORKOUT}/", json={"members": [" C@x.edu ", "c@x.edu"]})
+
+    assert response.status_code == 200
+    [[ctf_id, workout_id, request, caller]] = [c.args for c in h.setup.set_members.call_args_list]
+    assert (ctf_id, workout_id, caller) == (CTF_ID, WORKOUT, GM)
+    assert request.members == ["c@x.edu"]
+    [row] = h.log_db.rows
+    assert (row["action"], row["target"], row["detail"]) == ("TEAM_UPDATE", WORKOUT, {"members": 1})
+
+
+def test_remove_team_returns_the_id_and_audits_the_workout(h):
+    response = h.client.delete(f"/ctf/{CTF_ID}/teams/{WORKOUT}/")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["build_id"] == WORKOUT
+    h.setup.remove_team.assert_called_once_with(CTF_ID, WORKOUT, GM)
+    [row] = h.log_db.rows
+    assert (row["action"], row["target"]) == ("TEAM_REMOVE", WORKOUT)
+
+
+def test_remove_built_team_conflict_is_409(h):
+    h.setup.remove_team.side_effect = Conflict(message="already built")
+    assert h.client.delete(f"/ctf/{CTF_ID}/teams/{WORKOUT}/").status_code == 409
+
+
+def test_update_spec_passes_the_ctf_block_and_audits_the_flag_count(h):
+    h.setup.update_spec.return_value = None
+
+    response = h.client.put(f"/ctf/{CTF_ID}/spec/", json=SPEC_BODY)
+
+    assert response.status_code == 200
+    [[ctf_id, ctf, caller]] = [c.args for c in h.setup.update_spec.call_args_list]
+    assert (ctf_id, caller) == (CTF_ID, GM)
+    assert ctf.name == "N"
+    [row] = h.log_db.rows
+    assert (row["action"], row["detail"]) == ("SPEC_UPDATE", {"flags": 1})
+
+
+def test_update_spec_validation_failure_is_400(h):
+    h.setup.update_spec.side_effect = AgogeValidationError("Invalid CTF flag web-root")
+
+    response = h.client.put(f"/ctf/{CTF_ID}/spec/", json=SPEC_BODY)
+
+    assert response.status_code == 400
+    assert [row["result"] for row in h.log_db.rows] == ["ERROR"]
+
+
+def test_update_spec_malformed_body_is_400(h):
+    assert h.client.put(f"/ctf/{CTF_ID}/spec/", json={"ctf": {"name": "N", "flags": []}}).status_code == 400
+    h.setup.update_spec.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["build", "start", "stop"])
+def test_servers_action_is_audited_and_reports_the_message_count(h, action):
+    h.setup.servers.return_value = 3
+
+    response = h.client.put(f"/ctf/{CTF_ID}/servers/", json={"action": action})
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"messages": 3}
+    h.setup.servers.assert_called_once_with(CTF_ID, action, GM)
+    [row] = h.log_db.rows
+    assert (row["action"], row["detail"]) == (f"SERVERS_{action.upper()}", {"messages": 3})
+
+
+@pytest.mark.parametrize("body", [{"action": "delete"}, {}, None])
+def test_servers_unknown_action_is_400(h, body):
+    response = h.client.put(f"/ctf/{CTF_ID}/servers/", json=body)
+
+    assert response.status_code == 400
+    h.setup.servers.assert_not_called()
+
+
+def test_servers_stop_conflict_while_running_is_409(h):
+    h.setup.servers.side_effect = Conflict(message="Cannot stop the servers of a CTF event that is RUNNING")
+    assert h.client.put(f"/ctf/{CTF_ID}/servers/", json={"action": "stop"}).status_code == 409

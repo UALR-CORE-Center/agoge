@@ -238,6 +238,30 @@ class CtfFlagRevealResponse(BaseModel):
     value: str
 
 
+class CtfTeamRow(BaseModel):               # GET /ctf/{id}/teams/ items
+    workout_id: str
+    team_name: str
+    members: List[str]
+    workout_state: Optional[int]           # None while the workout record is missing
+    workout_state_name: Optional[str]
+    arm_status: ArmStatus
+
+
+class CtfTemplateServer(BaseModel):
+    name: str
+    os: Optional[str]
+    machine_type: Optional[str]
+
+
+class CtfTemplateRow(BaseModel):           # GET /ctf/templates/ items
+    id: str
+    name: str
+    description: Optional[str]
+    ctf_name: str
+    flag_count: int                        # Decoys excluded: what teams can score
+    servers: List[CtfTemplateServer]
+
+
 class CtfHostRow(BaseModel):               # GET /ctf/{id}/hosts/ items
     workout_id: str
     team_name: str

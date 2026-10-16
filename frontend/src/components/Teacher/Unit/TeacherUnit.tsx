@@ -11,7 +11,6 @@ import { WorkoutStates } from "../../../types/AgogeStates";
 import HttpError from "../../Common/Errors/HttpError";
 import {InfoCard} from "../../Common/InfoCard/InfoCard";
 import TimerBox from "../../Common/Timer";
-import CreateCtfButton from "../Ctf/CreateCtfButton";
 import UnitRubricEditor from "./UnitRubricEditor";
 import UnitTable from "./UnitTable";
 
@@ -143,11 +142,6 @@ const TeacherUnit: React.FC = () => {
                         {
                             unitFull.value?.rubric_support && (
                                 <UnitRubricEditor buildId={String(build_id)} isExpired={isExpired} rubricEnabled={unitFull.value.rubric_support} />
-                            )
-                        }
-                        {
-                            unitFull.value?.ctf_capable && (
-                                <CreateCtfButton buildId={String(build_id)} isExpired={isExpired} />
                             )
                         }
                     </Box>

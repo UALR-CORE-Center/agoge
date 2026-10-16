@@ -1,4 +1,4 @@
-import {Alert, Box, Button} from '@mui/material';
+import {Alert, Box, Button, Tooltip} from '@mui/material';
 import React, {useState} from 'react';
 import {CtfAction, CtfStates} from "../../../services/Ctf/ctf.model";
 import {ctfService} from "../../../services/Ctf/ctf.service";
@@ -64,9 +64,11 @@ interface CtfEventControlProps {
     state: number;
     // Called after a successful action so the dashboard re-reads state instead of waiting for the next poll.
     onActionComplete: () => void;
+    // Set while setup is incomplete (e.g. no teams yet): Arm stays disabled and the reason is its tooltip.
+    armBlockedReason?: string | null;
 }
 
-const CtfEventControl: React.FC<CtfEventControlProps> = ({ctfId, state, onActionComplete}) => {
+const CtfEventControl: React.FC<CtfEventControlProps> = ({ctfId, state, onActionComplete, armBlockedReason = null}) => {
     // `selected` outlives `open` so a dialog keeps its labels while it fades out.
     const [selected, setSelected] = useState<CtfAction>('arm');
     const [open, setOpen] = useState(false);
@@ -100,21 +102,31 @@ const CtfEventControl: React.FC<CtfEventControlProps> = ({ctfId, state, onAction
     return (
         <Box sx={{mt: 2}}>
             <Box role="group" aria-label="Event actions" sx={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1}}>
-                {ACTION_ORDER.map((action) => (
-                    <Button
-                        key={action}
-                        variant="outlined"
-                        color={CTF_ACTION_RULES[action].irreversible ? 'error' : 'primary'}
-                        disabled={loading || !isActionLegal(action, state)}
-                        onClick={() => {
-                            setError(null);
-                            setSelected(action);
-                            setOpen(true);
-                        }}
-                    >
-                        {CTF_ACTION_RULES[action].label}
-                    </Button>
-                ))}
+                {ACTION_ORDER.map((action) => {
+                    const blocked = action === 'arm' && isActionLegal(action, state) ? armBlockedReason : null;
+                    const button = (
+                        <Button
+                            key={action}
+                            variant="outlined"
+                            color={CTF_ACTION_RULES[action].irreversible ? 'error' : 'primary'}
+                            disabled={loading || !isActionLegal(action, state) || !!blocked}
+                            onClick={() => {
+                                setError(null);
+                                setSelected(action);
+                                setOpen(true);
+                            }}
+                            sx={{width: '100%'}}
+                        >
+                            {CTF_ACTION_RULES[action].label}
+                        </Button>
+                    );
+                    // A disabled button fires no events, so the tooltip needs a wrapper to anchor on.
+                    return blocked ? (
+                        <Tooltip key={action} title={blocked}>
+                            <span>{button}</span>
+                        </Tooltip>
+                    ) : button;
+                })}
             </Box>
             {error && <Alert severity="error" sx={{mt: 2}}>{error}</Alert>}
             <ActionConfirmDialog

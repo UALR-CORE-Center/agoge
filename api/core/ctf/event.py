@@ -1,14 +1,12 @@
 import time
-from datetime import datetime, timezone
 from typing import List, Optional, get_args
 
 from google.cloud.firestore_v1 import FieldFilter
 from google.cloud.firestore_v1.field_path import FieldPath
-from pydantic import ValidationError
 
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections, DbOperationTypes, DbOperators
 from common.constants.pub_sub import PubSub
-from common.constants.states import CtfStates, WorkoutStates
+from common.constants.states import CtfStates
 from common.exceptions.agoge import BadRequest, Conflict, NotFound, ServiceUnavailable, Unauthorized
 from common.models.agoge import (
     CtfActionRequest,
@@ -17,7 +15,6 @@ from common.models.agoge import (
     CtfEventModel,
     CtfFlagStateModel,
     CtfLogModel,
-    CtfSpecModel,
     CtfSubmissionModel,
     CtfUpdateRequest,
     LogAction,
@@ -36,7 +33,6 @@ from common.models.users import AgogeUser
 from common.utilities.ctf_flags import derive_flag_value, flag_digest
 from common.utilities.ctf_state_manager import CtfStateManager
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
-from common.utilities.id_generator import IdGenerator
 from core.ctf import config
 
 UNAUTHORIZED_MESSAGE = "Requesting user is not authorized to make this request"
@@ -46,7 +42,8 @@ NOT_PROVISIONED_MESSAGE = (
 
 
 class CtfEvent:
-    """CTF event lifecycle for the instructor API (collection `agoge-ctf`)."""
+    """CTF event lifecycle for the instructor API (collection `agoge-ctf`). Creation and team setup
+    are in CtfSetup."""
     DEFAULT_MAX_BOARDS = 100
     # Firestore commits at most 500 writes; chunks are kept at or under it so
     # db.batch_write never takes its splitting path, which swallows batch errors.
@@ -55,12 +52,6 @@ class CtfEvent:
     MAX_IN_VALUES = 30
     # Cap on the submissions and log panels (endpoint table: newest first, max 500).
     MAX_PANEL_ROWS = 500
-    # A workout being torn down gets no board: it can never be armed.
-    EXCLUDED_WORKOUT_STATES = {
-        WorkoutStates.DELETING_SERVERS.value,
-        WorkoutStates.COMPLETED_DELETING_SERVERS.value,
-        WorkoutStates.DELETED.value,
-    }
 
     # Board arm statuses an arm worker has already aggregated into boards_pending.
     TERMINAL_ARM_STATUSES = ('armed', 'failed')
@@ -116,70 +107,6 @@ class CtfEvent:
 
             self._env = CloudEnv(log_name=self.log_name, env_dict=self.env_dict)
         return self._env
-
-    def create(self, unit_id: str, user: AgogeUser, ctf_id: Optional[str] = None) -> str:
-        """Create a DRAFT event from a unit's `ctf` block with one board per workout and one
-        digest document per board per flag. Returns the new ctf_id.
-
-        `ctf_id` lets the router choose the id up front so its CTF_CREATE audit row carries it even
-        when creation fails. Every check runs before the first write. Flag values are derived only
-        to hash them and are never stored.
-        """
-        unit = self.db.get(collection_name=DbCollections.UNIT, doc_id=unit_id)
-        if not unit:
-            raise NotFound(message="Unit not found")
-        if not unit.get('ctf'):
-            raise BadRequest(message="Unit has no ctf specification")
-        try:
-            spec = ModelValidator(CtfSpecModel).load(unit['ctf'])
-        except ValidationError as e:
-            raise BadRequest(message=f"Unit ctf specification is invalid: {e.error_count()} error(s)")
-
-        instructor_ids = unit.get('instructor_id') or []
-        if isinstance(instructor_ids, str):
-            instructor_ids = [instructor_ids]
-        self._authorize(instructor_ids, user)
-
-        workouts = self._unit_workouts(unit_id)
-        if not workouts:
-            raise BadRequest(message="Unit has no workouts")
-        max_boards = self._max_boards()
-        if len(workouts) > max_boards:
-            raise BadRequest(
-                message=f"Unit has {len(workouts)} workouts; a CTF event allows at most {max_boards}"
-            )
-        workout_ids = [workout['id'] for workout in workouts]
-        if busy := self._workouts_on_active_boards(workout_ids):
-            raise Conflict(message=f"Workout {busy[0]} is already on an active CTF board")
-
-        seed = self.env.ctf_flag_seed
-        if not seed:
-            raise ServiceUnavailable(message=NOT_PROVISIONED_MESSAGE)
-
-        ctf_id = ctf_id or IdGenerator.build_id()
-        event = CtfEventModel(
-            id=ctf_id,
-            unit_id=unit_id,
-            instructor_id=instructor_ids,
-            spec=spec,
-            creation_timestamp=time.time(),
-            board_ids=workout_ids,
-            state=CtfStates.DRAFT.value,
-            state_timestamp=datetime.now(timezone.utc).isoformat(),
-        )
-        digest_docs, board_docs = [], []
-        for workout in workouts:
-            board, digests = self._new_board(event, workout, seed)
-            board_docs.append((DbCollections.CTF_BOARD, board.id, board.model_dump()))
-            digest_docs.extend((DbCollections.CTF_DIGEST, d.digest, d.model_dump()) for d in digests)
-        # The event goes last, so a failed commit never leaves an event pointing at missing boards.
-        event_doc = (DbCollections.CTF, ctf_id, event.model_dump(mode='json'))
-        self._commit(ctf_id, [*digest_docs, *board_docs, event_doc])
-        self.logger.info(
-            f"{self.class_name}:{ctf_id} - Created CTF event",
-            unit_id=unit_id, boards=len(board_docs), digests=len(digest_docs),
-        )
-        return ctf_id
 
     def get(self, ctf_id: str, user: AgogeUser) -> CtfEventModel:
         """The event, for an admin or one of its instructors."""
@@ -252,7 +179,7 @@ class CtfEvent:
         if action == 'arm':
             if not event.board_ids:
                 # Nothing would ever decrement boards_pending, leaving the event in ARMING for good.
-                raise BadRequest(message="CTF event has no boards to arm")
+                raise BadRequest(message="Add at least one team before arming")
             fields = {'boards_pending': len(event.board_ids)}
             board_update = {'arm_status': 'pending', 'arm_error': None}
         elif action == 'start':
@@ -500,7 +427,8 @@ class CtfEvent:
 
     def delete(self, ctf_id: str, user: AgogeUser) -> None:
         """Admin only, DRAFT or ARCHIVED only. Deletes the rate-limit, digest and board documents,
-        then the event. Submissions and the event log are kept.
+        then the event, then publishes the deletion of the lab the event created. Submissions and the
+        event log are kept.
 
         The event goes last: if a commit fails it is still there in a deletable state, and a retry
         finds whatever is left because every document is located by query or by derived id.
@@ -529,10 +457,28 @@ class CtfEvent:
                 self._operation(collection, doc_id, DbOperationTypes.DELETE)
                 for collection, doc_id in docs[start:start + self.MAX_WRITES_PER_COMMIT]
             ])
+        lab_deleted = self._delete_owned_lab(event)
         self.logger.info(
             f"{self.class_name}:{ctf_id} - Deleted CTF event",
-            boards=len(event.board_ids), digests=len(digests), documents=len(docs),
+            boards=len(event.board_ids), digests=len(digests), documents=len(docs), lab_deleted=lab_deleted,
         )
+
+    def _delete_owned_lab(self, event: CtfEventModel) -> bool:
+        """Publish a unit DELETE for the lab this event created (CtfSetup.create), so its team workouts,
+        built or not, and any VMs go with the event. A lab the event did not create is left alone.
+        The Cloud Function does the deleting, as it does for the unit page's Delete."""
+        unit = self.db.get(collection_name=DbCollections.UNIT, doc_id=event.unit_id)
+        if not unit or unit.get('ctf_event_id') != event.id:
+            return False
+        attrs = PubSub.EventAttributes
+        future = self.pubsub.msg(**{
+            attrs.HANDLER: str(PubSub.Handlers.CONTROL.value),
+            attrs.ACTION: str(PubSub.Actions.DELETE.value),
+            attrs.COURSE_OBJECT: str(PubSub.CourseObjects.UNIT.value),
+            attrs.BUILD_ID: event.unit_id,
+        })
+        future.result(timeout=self.ARM_PUBLISH_TIMEOUT_SECONDS)
+        return True
 
     def _rate_limit_ids(self, ctf_id: str) -> List[str]:
         """Rate-limit documents carry no ctf_id field; their ids are `{ctf_id}-{workout_id}-{bucket}`
@@ -593,16 +539,6 @@ class CtfEvent:
         )
         return board, digests
 
-    def _unit_workouts(self, unit_id: str) -> List[dict]:
-        workouts = self.db.query(
-            collection_name=DbCollections.WORKOUT,
-            filters=[('parent_id', DbOperators.EQUAL, unit_id)],
-        ) or []
-        return [
-            w for w in workouts
-            if w.get('id') and w.get('state') not in self.EXCLUDED_WORKOUT_STATES
-        ]
-
     def _max_boards(self) -> int:
         env_dict = self.env_dict if self.env_dict is not None else self.env.get_env()
         value = (env_dict or {}).get('ctf_max_boards')
@@ -614,24 +550,10 @@ class CtfEvent:
         except (TypeError, ValueError):
             return self.DEFAULT_MAX_BOARDS
 
-    def _workouts_on_active_boards(self, workout_ids: List[str]) -> List[str]:
-        busy = set()
-        for start in range(0, len(workout_ids), self.MAX_IN_VALUES):
-            chunk = workout_ids[start:start + self.MAX_IN_VALUES]
-            boards = self.db.query(
-                collection_name=DbCollections.CTF_BOARD,
-                filters=[
-                    ('workout_id', DbOperators.IN, chunk),
-                    ('active', DbOperators.EQUAL, True),
-                ],
-            ) or []
-            busy.update(board['workout_id'] for board in boards)
-        return [workout_id for workout_id in workout_ids if workout_id in busy]
-
     def _commit(self, ctf_id: str, docs: List[tuple]) -> None:
         """Set every (collection, doc_id, data) in commits of at most MAX_WRITES_PER_COMMIT.
         If a commit fails, the documents already committed are deleted (best effort) so an
-        orphaned active board cannot block the next attempt with a Conflict."""
+        orphaned active board cannot block the next attempt with a Conflict. Used by CtfSetup."""
         committed = 0
         try:
             for start in range(0, len(docs), self.MAX_WRITES_PER_COMMIT):
@@ -643,7 +565,7 @@ class CtfEvent:
                 committed += len(chunk)
         except Exception as e:
             self.logger.error(
-                f"{self.class_name}:{ctf_id} - Event creation failed; removing partial writes",
+                f"{self.class_name}:{ctf_id} - CTF write failed; removing partial writes",
                 error_type=type(e).__name__, committed=committed,
             )
             self._rollback(ctf_id, docs[:committed])
