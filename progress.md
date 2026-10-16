@@ -97,8 +97,8 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I2** CTF transformer and service — spec + done-when at PRD.md:1050
 - [x] **I3** Feature flag hook — spec + done-when at PRD.md:1052
 - [x] **I4** Routes and menu — spec + done-when at PRD.md:1053 (split: this slice is `URL_TEACHER_CTF_BASE`, `URL_TEACHER_CTF_EVENT` and the flag-gated **Teachers** menu item; the two routes are I4b)
-- [ ] **I4b** Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route.
-- [ ] **I5** Events list page — spec + done-when at PRD.md:1055
+- [ ] **I4b** (list route done in iteration 57; only the dashboard route remains) Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route.
+- [x] **I5** Events list page — spec + done-when at PRD.md:1055 (the list route is in; the browser check is carried by I4b)
 - [ ] **I6** Create from unit — spec + done-when at PRD.md:1057
 - [ ] **I7** Action confirm dialog — spec + done-when at PRD.md:1059
 - [ ] **I8** CTF state chip — spec + done-when at PRD.md:1060
@@ -703,3 +703,15 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** The routes need `CtfEventList`/`CtfDashboard`, which are I5 and I9. Adding them now would mean placeholder pages, so they were split out as I4b. `AgogeAppBar.tsx` already had an ESLint error before this change (`onSidebarToggle` is defined but never used); it is outside the CTF lint gate, so it was left alone. Gates now: frontend 7 files / 51 tests; eslint is clean on the CTF paths and the new test; tsc has no CTF/nav/urls errors; no Python changed.
 - **Blockers:** none. The browser check is moved to I4b.
 - **Next:** I5 Events list page (PRD.md:1055), then add its route (part of I4b).
+
+### Iteration 57 — 2026-10-16
+- **Completed:** I5, plus the list half of I4b.
+  - New `frontend/src/components/Teacher/Ctf/CtfEventList.tsx`: a `StyledDataGrid` with Active / Archived `Tabs` that use the same tab `sx` as `ActiveExpiredUnitTable`. The ID column is a `LinkButton` to `${URL_TEACHER_CTF_EVENT}/<id>`.
+  - Only `ARCHIVED` events go on the Archived tab. BROKEN stays on Active because it still needs the game master.
+  - A failed `ctfService.list()` shows an error `Alert` (`status: message`) above an empty grid.
+  - `AppRouter.tsx` routes `URL_TEACHER_CTF_BASE` to `CtfEventList` through `ProtectedRoute level="instructor"`.
+  - `CtfEventList.test.tsx` has 4 tests: Active-tab filtering with the dashboard href, the Archived tab, the empty message, and the error alert.
+- **Learned:** `StyledDataGrid` renders rows under jsdom without `disableVirtualization`, because its default `autoHeight` sizes the grid to its rows. Gates now: frontend 8 files / 55 tests. ESLint is clean on `src/components/Teacher/Ctf` and `AppRouter.tsx`, and tsc reports no CTF errors. No Python changed.
+- **Blockers:** I did not do the browser check. It needs a signed-in instructor and a live API, which a headless run does not have. It stays with I4b.
+- **Next:** I6 Create from unit (PRD.md:1057). The dashboard route in I4b waits for I9.
+
