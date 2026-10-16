@@ -826,3 +826,22 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `StyledDataGrid` ignores `disableMultipleRowSelection` (it reads `disableMultiRowSelection`), and a defined `isDisabled` in `buttonsConfig` overrides `requiresSelection`. Selected rows that the quick filter hides, or that sit on another page, stay selected; the dialog lists the server names so the user sees them before confirming. Gates: frontend 15 files / 123 tests. ESLint is clean on the CTF paths, and tsc reports no CTF errors. No Python changed. `agoge-reviewer` found no defects.
 - **Blockers:** none. I4b is still open for a human to do the browser checks.
 - **Next:** I14 Hosts panel (PRD.md:1068). Fill the Hosts `tabpanel` in `CtfDashboard` using `ctfService.getHosts`/`resetHost`, and add the getter to the dashboard test's service mock.
+
+### Verification — 2026-10-16 — PASS
+- **Checked:** I9, I10, I11, I12 and I13, the `[x]` tasks changed since the last verification (diff `152769d..38ad084`). I read all of `CtfDashboard.tsx`, `ctfTime.ts`, `CtfEventControl.tsx`, `ScoreboardSettings.tsx` and `CtfFlagsPanel.tsx`, plus the changes to `Confirmation.tsx` and `AppRouter.tsx` and the test names in the four new test files. I compared them with PRD.md:1061-1067. A subagent checked the request and response contracts against `api/routers/ctf.py`, `api/core/ctf/event.py`, `api/core/ctf/hosts.py` and `common/models/response.py`. I also confirmed that BUG3's earlier reopen was fixed in iteration 36 and passed by the verification after it.
+  - I9: the dashboard uses the 25/75 `Box` split. The left column is a `Paper elevation={2}` holding the state chip, the remaining time and Event Control. The right column has `Tabs` for Flags, Hosts, Scoreboard, Event Log and Submissions. `usePolling` reads state every 10 s, and a warning `Alert` shows when `budget_exceeded`. The route is `ProtectedRoute level="instructor"`. `remainingSeconds` matches `CtfScoring._remaining_seconds` (scoring.py:119-127) line for line.
+  - I10: `CTF_ACTION_RULES` matches `CtfEvent.ACTIONS` (event.py:74-81) exactly. Arm, Start, Pause and Resume confirm through `ActionConfirmDialog`. End and Archive confirm through the type-to-confirm `ConfirmationDialog`, which now has a `confirmLabel`; existing callers still read "Delete".
+  - I11: the freeze, public-scoreboard and `ends_at` controls each send `PUT /ctf/{id}/`. Times are epoch seconds, and an explicit `null` clears a field; the backend applies only the fields in `model_fields_set`, so this is correct.
+  - I12: a Community `StyledDataGrid` with flag id, server, slot, points, decoy and per-board status. Rows with `failed` or `stale` boards show a warning icon and text, and each row has a Replant button. `REPLANT_STATES` equals hosts.py:18. Every response field it reads exists in `CtfFlagRow` and `CtfFlagBoardStatus`.
+  - I13: `checkboxSelection` (the `StyledDataGrid` default) drives one `PUT /ctf/{id}/flags/` with `{servers}`: the de-duplicated union of the selected rows' servers, never empty.
+  - No TODO, FIXME, skip/only, `@ts-ignore`, `eslint-disable` or `as any` in the new or changed files. No Pro DataGrid features.
+  - Note, not a reopen: the "verified in browser" done-when for I9 and I10 has not been done. As with I4, I5 and I6, it is tracked in the open I4b.
+  - Minor, not a reopen: `CtfUpdateRequest.public_scoreboard_enabled` is typed `boolean | null` on the frontend, and the backend request model accepts null too. But `CtfEventModel.public_scoreboard_enabled` is a non-optional `bool`, so an explicit null would fail re-validation in `CtfEvent.update` (event.py:218) and come back as an error instead of a clean 400. No caller sends null.
+- **Gate results:**
+  - api/unit_tests: 1100 passed.
+  - cloud_functions/tests: 449 passed.
+  - build_files/cloud_deployment/tests: 304 passed.
+  - frontend `npm test`: 15 files, 123 tests passed.
+  - ESLint gate, as written: exit 2, "No files matching the pattern "src/components/Student/Ctf" were found". This is expected because J1 onward are not done. Run on the paths that exist, plus `ConfirmationDialog/Confirmation.tsx` and `router/AppRouter.tsx`, it exits 0 with 0 warnings.
+  - tsc gate: no tsc error names a CTF file (gate exit 0).
+- **Reopened:** none.
