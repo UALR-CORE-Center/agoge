@@ -80,13 +80,25 @@ def test_storing_openai_key_does_not_enable_rubrics(monkeypatch):
 
     handler = EnvironmentVariables.__new__(EnvironmentVariables)
     handler.env = {"project": "test-project"}
+    handler.project = "test-project"
     handler.db = MagicMock()
-    handler.get_secret = MagicMock(return_value=None)
+    handler.secret_client = MagicMock()
     handler.store_secret = MagicMock()
-    monkeypatch.setattr("builtins.input", lambda _: "y")
+    # openai_api_key is a shared API secret: setup first asks for its source (L = local),
+    # then confirms the overwrite. Scripted replies fail loudly on any unexpected prompt.
+    replies = ["L", "y"]
+
+    def answer(prompt):
+        assert replies, f"unexpected input() prompt: {prompt}"
+        return replies.pop(0)
+
+    monkeypatch.setattr("builtins.input", answer)
 
     handler.set_variable("openai_api_key", "test-only-key")
 
+    assert replies == []
     assert "rubric_support" not in handler.env
-    handler.db.update.assert_not_called()
     handler.store_secret.assert_called_once_with("openai_api_key", "test-only-key")
+    # The only admin-info write records the secret source; it must never carry rubric_support.
+    handler.db.update.assert_called_once()
+    assert handler.db.update.call_args.kwargs["data"] == {"shared_api_secrets": []}

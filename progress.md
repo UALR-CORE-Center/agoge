@@ -18,7 +18,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 
 ### Group 0 — Green baseline
 - [x] **0.1** Frontend test script — spec + done-when at PRD.md:943
-- [ ] **0.2** Rubric opt-in tests — spec + done-when at PRD.md:945
+- [x] **0.2** Rubric opt-in tests — spec + done-when at PRD.md:945
 
 ### Group A — Contracts and constants
 - [ ] **A1** CTF constants — spec + done-when at PRD.md:950
@@ -137,3 +137,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** PRD says 23 tests; the suite already has 28 (tests added since the PRD was written) — treat 28 as the new frontend baseline.
 - **Blockers:** none.
 - **Next:** 0.2 Rubric opt-in tests (`api/unit_tests/test_rubric_opt_in.py`, 4 failing).
+
+### Iteration 3 — 2026-10-16
+- **Completed:** 0.2 — `api/routers/unit.py` `get_all_data` now returns the unit's own `rubric_support` (dict or `UnitModel`) instead of the env flag; `test_storing_openai_key_does_not_enable_rubrics` updated to script the shared-secret source prompt (`L`, `y`) with an `input()` stub that fails on unexpected prompts, and to assert the single admin-info write is `{'shared_api_secrets': []}`. No tests deleted or skipped.
+- **Learned:** Gate baselines have drifted from the PRD: api/unit_tests 62 passed, cloud_functions 285, build_files 293, frontend 28. `openai_api_key` is in `SHARED_API_SECRET_NAMES`, so `set_variable` prompts for a source before the Y/n confirm.
+- **Blockers:** none.
+- **Next:** A1 CTF constants (PRD.md:950).
