@@ -1013,3 +1013,22 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - ESLint gate as written, now including `src/components/Student/Ctf`: exit 0 with 0 warnings.
   - tsc gate: no tsc error names a CTF file (gate exit 0).
 - **Reopened:** none. I4b, the human browser checks, is the only open task.
+
+### Verification — 2026-10-16 — PASS
+- **Checked:** every `[x]` task: 0.1, 0.2, A1-A6, B1-B4, C1-C2, BUG, D1-D4, E1-E5, E4b, BUG2, F1-F7, BUG3, G1-G7, G4b, H1-H7, R1-R4, BUG4, I1-I17, LINT1, J1-J4 and K1. Nothing changed since the previous verification (the working tree is clean at `60998fd`), but I checked the full queue again, not only the latest tasks. Three read-only agents split it: A-E, F-R with the BUG entries, and I-K. I checked BUG3 myself.
+  - BUG3: `CtfEvent._publish_arm` (api/core/ctf/event.py:291-377) keeps each publish future and resolves it with `.result(timeout=…)` against one shared 30 s deadline. Failed, timed-out and in-line-raised boards go to `_fail_unpublished`. The `[x]` is now correct, even though the old "Reopened" sub-bullet is still in the queue.
+  - Security: derivation is HMAC-SHA256 with `hmac.compare_digest`. The seed comes from `secrets.token_hex(32)`, is never overwritten and is never printed. Only digests are stored. No student response model has a path, server, location or digest field. The rate limit is enforced on the server with a Firestore transaction. Loaders and the planter silence output, and logs record the exception type only.
+  - Routers: all 18 instructor routes use `teacher_required`, except DELETE and reveal, which use `admin_required`. Collections come back as `{'items': …}`, and `api/core/ctf/` raises no `HTTPException`. Frontend services match the router paths, methods and query parameters, and the TS models match `response.py`. No MUI X Pro APIs are used.
+  - Sweep: no TODO, FIXME, `NotImplemented`, `ts-ignore`, `as any` or `eslint-disable` in the CTF code. The only skips are `skipif` guards for a missing bash or pwsh, and none of them skipped in this run (0 skipped).
+  - Possible gaps, not reopened because the PRD does not cover them:
+    - E5 exempts VMs only by the `"{workout_id}-"` prefix, so a unit-scoped VM in a community unit (for example `{build_id}-display-guacamole-server`) may still be stopped overnight. Not traced.
+    - The D4 Linux loader is appended to `startup-script`, so an author's script that calls a top-level `exit` stops it from running.
+    - Sending `PUT /ctf/{id}/` with an explicit `"public_scoreboard_enabled": null` probably fails revalidation. Not tested.
+- **Gate results:**
+  - api/unit_tests: 1100 passed.
+  - cloud_functions/tests: 449 passed.
+  - build_files/cloud_deployment/tests: 304 passed.
+  - frontend `npm test`: 24 files, 216 tests passed.
+  - ESLint gate: exit 0 with 0 warnings.
+  - tsc gate: no tsc error names a CTF file (gate exit 0).
+- **Reopened:** none. I4b, the human browser checks, is still the only open task.
