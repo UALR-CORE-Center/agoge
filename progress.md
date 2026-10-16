@@ -43,7 +43,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 ### Group D — Compute primitives and the loader
 - [x] **D1** `set_metadata` — spec + done-when at PRD.md:979
 - [x] **D2** `get_guest_attributes` — spec + done-when at PRD.md:981
-- [ ] **D3** Plant contract module — spec + done-when at PRD.md:982
+- [x] **D3** Plant contract module — spec + done-when at PRD.md:982
 - [ ] **D4** Loader at build — spec + done-when at PRD.md:983
 
 ### Group E — Planting
@@ -276,3 +276,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** E2's poller should treat `NotFound` from `get_guest_attributes` as a plant failure, not keep polling. Ruff flags a pre-existing F901 (`raise NotImplemented`) in `ComputeInstanceAPI.update`. Gates now: api 362, cloud_functions 298, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** D3 Plant contract module (`common/utilities/ctf_plant_contract.py`, PRD.md:982).
+
+### Iteration 19 — 2026-10-16
+- **Completed:** D3 — `common/utilities/ctf_plant_contract.py`: `PLANT_METADATA_KEY`, `GUEST_ATTRIBUTES_ENABLE_KEY/VALUE`, `GUEST_ATTRIBUTE_NAMESPACE` (`agoge-ctf/`, E2's poll `query_path`), `GUEST_ATTRIBUTE_RESULT_KEY`/`_PATH`, `RESULT_OK/ERROR`, `MAX_RESULT_MESSAGE_LENGTH`, `LINUX_/WINDOWS_LOADER_METADATA_KEY`, the fixed `LINUX_LOADER` (bash subshell, curl -f, 0600 mktemp file, payload output to /dev/null, rm) and `WINDOWS_LOADER` (scoped `& { }`, WebClient, SYSTEM-only ACL dir by SID, runs then deletes, `*> $null`), plus `parse_plant_result(value, nonce)` → `(ok, None)` / `(error, msg≤200)` / `None` for a missing or stale result. `api/unit_tests/test_ctf_plant_contract.py` (21 tests) runs the real Linux loader under bash with a fake `curl` on PATH: silent run, 0600 file, file deleted, no-op on 404 or an empty value, and the enclosing script continuing after the payload `exit 3`. A mutation that un-silences the payload fails the suite.
+- **Learned:** The loaders contain no `exit`/`return` that escapes their scope, because `_merge_metadata_item` concatenates them with other scripts. The Linux loader starts with `#!/bin/bash`, which becomes a harmless comment when it is appended after other content. Gates now: api 383, cloud_functions 298, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** D4 Loader at build (`LabServerManager._add_metadata` + `_merge_metadata_item` concatenating `windows-startup-script-ps1`; tests in `cloud_functions/tests/test_ctf_loader_stub.py`, PRD.md:983). Note that the existing Windows assessment script uses `windows-startup-script-bat`, a different key that needs no change.
