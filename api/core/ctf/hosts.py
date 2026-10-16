@@ -1,9 +1,11 @@
 import time
 from typing import List, Optional
 
+from common.constants.database import DbCollections, DbOperators
 from common.constants.pub_sub import PubSub
-from common.constants.states import CtfStates
+from common.constants.states import CtfStates, ServerStates
 from common.exceptions.agoge import BadRequest, Conflict
+from common.models.response import CtfHostRow
 from common.models.users import AgogeUser
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from core.ctf.event import CtfEvent
@@ -55,6 +57,67 @@ class CtfHosts:
             boards=len(boards), servers=len(targets), messages=len(messages),
         )
         return len(messages)
+
+    def hosts(self, ctf_id: str, user: AgogeUser) -> List[CtfHostRow]:
+        """One row per board per server: the flag-bearing spec servers first (spec order), then the
+        workout's other servers by name, so restart and rebuild reach every host a team owns.
+
+        Server documents are read with `parent_id in` queries of at most MAX_IN_VALUES boards, never
+        one read per board. A flag-bearing server with no document yet (unbuilt or deleted) still gets
+        a row with no state, so the panel shows the gap instead of hiding the host. Shared community
+        servers are parented to the unit, not a workout, so they belong to no single team and are
+        not listed.
+        """
+        event = self.events.get(ctf_id, user)
+        boards = self.events._boards(event)
+        flag_servers = {flag.id: flag.server for flag in event.spec.flags}
+        spec_servers = list(dict.fromkeys(flag_servers.values()))
+        docs = self._server_docs([board.workout_id for board in boards])
+
+        rows = []
+        for board in boards:
+            servers = docs.get(board.workout_id, {})
+            flag_counts = {}
+            for flag in board.flags:
+                server = flag_servers.get(flag.flag_id)
+                if server is not None:
+                    flag_counts[server] = flag_counts.get(server, 0) + 1
+            names = spec_servers + sorted(name for name in servers if name not in spec_servers)
+            for name in names:
+                doc = servers.get(name)
+                state = doc.get('state') if doc else None
+                rows.append(CtfHostRow(
+                    workout_id=board.workout_id,
+                    team_name=board.team_name,
+                    server=name,
+                    server_state=state,
+                    server_state_name=self._server_state_name(state),
+                    flag_count=flag_counts.get(name, 0),
+                    # Host Reset Modes: LabServerManager.nuke() leaves WireGuard servers deleted, and a
+                    # server with no document has nothing to rebuild.
+                    rebuild_allowed=doc is not None and not doc.get('wireguard_endpoint_id'),
+                ))
+        return rows
+
+    def _server_docs(self, workout_ids: List[str]) -> dict:
+        """{workout_id: {server name: server document}} for the given workouts' own servers."""
+        by_workout = {}
+        for start in range(0, len(workout_ids), CtfEvent.MAX_IN_VALUES):
+            chunk = workout_ids[start:start + CtfEvent.MAX_IN_VALUES]
+            docs = self.db.query(
+                collection_name=DbCollections.SERVER,
+                filters=[('parent_id', DbOperators.IN, chunk)],
+            ) or []
+            for doc in docs:
+                if doc.get('parent_id') in chunk and doc.get('name'):
+                    by_workout.setdefault(doc['parent_id'], {})[doc['name']] = doc
+        return by_workout
+
+    @staticmethod
+    def _server_state_name(state) -> Optional[str]:
+        if state is None:
+            return None
+        return ServerStates(state).name if state in ServerStates._value2member_map_ else str(state)
 
     @staticmethod
     def _select(available: List[str], requested: Optional[List[str]], kind: str) -> List[str]:
