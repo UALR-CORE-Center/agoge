@@ -81,7 +81,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **H2** Solve award — spec + done-when at PRD.md:1028
 - [x] **H3** Rate limiting — spec + done-when at PRD.md:1030
 - [x] **H4** Hints — spec + done-when at PRD.md:1032
-- [ ] **H5** Student board read — spec + done-when at PRD.md:1033
+- [x] **H5** Student board read — spec + done-when at PRD.md:1033
 - [ ] **H6** Scoreboards — spec + done-when at PRD.md:1035
 - [ ] **H7** Score adjustment — spec + done-when at PRD.md:1037
 
@@ -533,3 +533,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** The PRD gives no state rule for hints. New deductions follow the submission rule (RUNNING only, since points move only while the clock runs). Repeat reads are always allowed because the hint is already paid for. Gates now: api 722, cloud_functions 449, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** H5 Student board read (PRD.md:1033), `CtfScoring.board(workout_id)`. Its locked-flag rule should match `_hint_in_transaction`'s `unlocks_after` check.
+
+### Iteration 45 — 2026-10-16
+- **Completed:** H5 — `CtfScoring.board(workout_id) -> CtfStudentBoardResponse` in `api/core/ctf/scoring.py`. With no active board, or an active board whose event doc is missing, it returns `enrolled=False` instead of raising, because most workouts aren't on a CTF. Otherwise it lists challenges in spec order and drops decoys, flags missing from the board, and flags whose `unlocks_after` are unsolved on the caller's own board. The locked rule is now one `_is_locked` helper, shared with `_hint_in_transaction`. `hint` holds the text only once `hint_taken`. `remaining_seconds` is None when open-ended, 0 when ENDED, held at `ends_at - paused_at` while PAUSED, and otherwise `ceil(ends_at - now)` with a floor of 0. `flag_format` is `"<prefix>{<challenge>_<20 hex characters>}"`. The read makes no writes. `api/unit_tests/test_ctf_scoring_board.py` has 25 tests, including SC-17 run for every CtfStates value with everything unlocked and every hint taken: no `path`/`server`/`location_type`/`digest`/`access_level` key at any depth, and no path or digest value.
+- **Learned:** The `ctf_enabled` → `enrolled: false` rule (SC-19) is still left to the R2 router, as with the other core classes. The board read lists challenges in every state, DRAFT included; the PRD gives no rule to hide them before start. Gates now: api 747, cloud_functions 449, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** H6 Scoreboards (PRD.md:1035): instructor ranking (score desc, then earliest `last_solve_at`) and public ranking (anonymized "Team <n>" by board order, `is_you`, freeze-aware using `solved_at <= scoreboard_frozen_at`; SC-16).

@@ -1,6 +1,6 @@
 import math
 import time
-from typing import Optional, Tuple
+from typing import AbstractSet, Optional, Tuple
 
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections, DbOperators
 from common.constants.states import CtfStates
@@ -15,7 +15,7 @@ from common.models.agoge import (
     Verdict,
 )
 from common.models.model_validators.model_validator import ModelValidator
-from common.models.response import CtfHintResponse, CtfSubmitResponse
+from common.models.response import CtfChallenge, CtfHintResponse, CtfStudentBoardResponse, CtfSubmitResponse
 from common.utilities.ctf_flags import flag_digest, parse_flag_id
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.id_generator import IdGenerator
@@ -28,7 +28,7 @@ UNPARSED_BUCKET = "unparsed"
 
 
 class CtfScoring:
-    """Student-facing scoring for a CTF board: flag submission (PRD Submission Algorithm) and hints."""
+    """Student-facing scoring for a CTF board: the board read, flag submission (PRD Submission Algorithm) and hints."""
     MESSAGES = {
         'correct': "Correct! Flag accepted.",
         'incorrect': "Incorrect flag.",
@@ -51,6 +51,65 @@ class CtfScoring:
                 log_name=self.log_name,
             )
         self.db = db
+
+    def board(self, workout_id: str) -> CtfStudentBoardResponse:
+        """The team's view of its board. It never carries a flag's server, path, location type,
+        access level or digest (SC-17), and omits decoys and flags whose `unlocks_after` are unsolved."""
+        try:
+            board = self._active_board(workout_id)
+            event = self._load_event(board.ctf_id)
+        except NotFound:
+            # Not on a CTF is the common case for a workout page, not an error.
+            return CtfStudentBoardResponse(enrolled=False)
+
+        states = {f.flag_id: f for f in board.flags}
+        solved = {f.flag_id for f in board.flags if f.solved}
+        challenges = []
+        for spec_flag in event.spec.flags:
+            state = states.get(spec_flag.id)
+            # A flag missing from the board can be neither submitted nor hinted, so it is not listed.
+            if spec_flag.decoy or state is None or self._is_locked(spec_flag, solved):
+                continue
+            challenges.append(CtfChallenge(
+                flag_id=spec_flag.id,
+                category=spec_flag.category,
+                points=spec_flag.points,
+                solved=state.solved,
+                solved_at=state.solved_at,
+                hint_available=bool(spec_flag.hint),
+                hint_cost=spec_flag.hint_cost,
+                hint=spec_flag.hint if state.hint_taken else None,
+            ))
+
+        return CtfStudentBoardResponse(
+            enrolled=True,
+            ctf_id=event.id,
+            name=event.spec.name,
+            description=event.spec.description,
+            rules_url=event.spec.rules_url,
+            state_name=CtfStates(event.state).name,
+            remaining_seconds=self._remaining_seconds(event),
+            flag_format=f"{event.spec.scoring.flag_prefix}{{<challenge>_<20 hex characters>}}",
+            score=board.score,
+            challenges=challenges,
+            public_scoreboard_enabled=event.public_scoreboard_enabled,
+        )
+
+    @staticmethod
+    def _is_locked(spec_flag: CtfFlagSpecModel, solved: AbstractSet[str]) -> bool:
+        """The one locked-flag rule, shared by the board read and hints so a hidden flag's hint stays hidden."""
+        return any(required not in solved for required in spec_flag.unlocks_after or [])
+
+    @staticmethod
+    def _remaining_seconds(event: CtfEventModel) -> Optional[int]:
+        """Seconds left on the clock; None when open-ended."""
+        if event.ends_at is None:
+            return None
+        if event.state == CtfStates.ENDED.value:
+            return 0
+        # While paused the clock is held; resume moves ends_at forward by the paused duration.
+        now = event.paused_at if event.state == CtfStates.PAUSED.value and event.paused_at else time.time()
+        return max(0, math.ceil(event.ends_at - now))
 
     def submit(self, workout_id: str, flag: str, origin_ip: Optional[str] = None) -> CtfSubmitResponse:
         """Resolve one submitted flag against the workout's active board and record it.
@@ -149,8 +208,7 @@ class CtfScoring:
         if state.hint_taken:
             # Already paid for: returned in any event state, without a write.
             return False, board.score
-        solved = {f.flag_id for f in board.flags if f.solved}
-        if any(required not in solved for required in spec_flag.unlocks_after or []):
+        if self._is_locked(spec_flag, {f.flag_id for f in board.flags if f.solved}):
             # A locked flag is not listed to the team (H5), so its hint is not reachable either.
             raise NotFound(message=HINT_NOT_FOUND_MESSAGE)
         if event.state != CtfStates.RUNNING.value:
