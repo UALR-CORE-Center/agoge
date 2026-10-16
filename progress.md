@@ -675,3 +675,24 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `useAuthContext().agogeUser.user` is `SafeAgogeUser | null` with `permissions: {[key]: boolean}`; mocking `../context/AuthContext` with a mutable `currentUser` plus `rerender()` simulates a user change. Gates now: frontend 6 files / 48 tests; eslint is clean on the hook; tsc has no CTF errors. No Python files changed.
 - **Blockers:** none.
 - **Next:** I4 Routes and menu (PRD.md:1053). Filter the Teachers `AppBarMenu` item on `useCtfEnabled().ctfEnabled`.
+
+### Verification — 2026-10-16 — PASS
+- **Checked:** R4, BUG4, I1, I2 and I3, the `[x]` tasks changed since the last verification. I read `api/unit_tests/test_ctf_router_auth.py`, `test_anonymous_user.py`, `AnonymousAppUser`/`AgogeUser` in `common/models/users.py`, and all of `useCtfEnabled.tsx`. Subagents compared `ctf.model.ts`, `ctf.transform.ts`, `ctf.service.ts` and `ctf.service.test.ts` field by field and route by route with `common/models/response.py`, the `Ctf*Request` models in `common/models/agoge.py`, `api/routers/ctf.py` and `api/routers/ctf_board.py`, against PRD.md:1044-1052 and SC-19.
+  - R4: the test overrides only `get_current_user`, `get_cloud_env` and `is_ctf_enabled`. The real `teacher_required`, `admin_required` and `ctf_enabled_required` run.
+    - Anonymous, student and pending users get 403 on all 18 `/ctf` routes, and no core call or audit row is made.
+    - An instructor gets 403 on DELETE and on reveal.
+    - SC-19: with CTF disabled, every role gets 404 on every gated route, `GET /config/` still answers, and `GET /ctf-board/{wid}/` returns `enrolled: false`.
+    - `test_route_table_covers_every_instructor_route` compares the table with `ctf_router.routes` (18 routes; the previous entry's "19" was a miscount).
+  - BUG4: `AnonymousAppUser` overrides `uid`/`email` as `Optional[str] = None` on the subclass only. `AgogeUser` still requires both fields, and the tests assert this with `model_fields[...].is_required()`.
+  - I1: all 14 `Ctf*` response models and 7 `Ctf*Request` models are mirrored with snake_case keys, and the field names and types match. The Literal unions and `CtfStates` 0-7 match. Internal docs that no route returns (`CtfBoardModel`, `CtfDigestModel`, …) are not mirrored, which is fine.
+  - I2: all 18 `/ctf` and 4 `/ctf-board` routes have a service function through `apiService`. Methods, trailing-slash paths and query params match, and the board calls send no token. The test uses the rubric mock setup and covers a GET, a PUT, a 409 and a 429.
+  - I3: the config call is made only for instructor/admin users. The answer is cached per uid at module level and the request is shared. An error fails closed and allows a retry, and a stale answer from another user is never shown.
+  - No TODO, FIXME, skip/only or stub in any of these files.
+- **Gate results:**
+  - api/unit_tests: 1100 passed.
+  - cloud_functions/tests: 449 passed.
+  - build_files/cloud_deployment/tests: 304 passed.
+  - frontend `npm test`: 6 files, 48 tests passed.
+  - ESLint gate: exit 2, "No files matching the pattern "src/components/Teacher/Ctf" were found". This is expected because I4+ are not done. Run on the existing CTF paths (`src/services/Ctf`, the hook and its test, `ctf.transform.ts`), it exits 0 with 0 warnings.
+  - tsc gate: 0 errors name a CTF file (grep exit 1).
+- **Reopened:** none.
