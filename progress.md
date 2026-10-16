@@ -21,7 +21,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **0.2** Rubric opt-in tests — spec + done-when at PRD.md:945
 
 ### Group A — Contracts and constants
-- [ ] **A1** CTF constants — spec + done-when at PRD.md:950
+- [x] **A1** CTF constants — spec + done-when at PRD.md:950
 - [ ] **A2** CTF specification models — spec + done-when at PRD.md:952
 - [ ] **A3** CTF stored models — spec + done-when at PRD.md:954
 - [ ] **A4** CTF request models — spec + done-when at PRD.md:955
@@ -143,3 +143,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Gate baselines have drifted from the PRD: api/unit_tests 62 passed, cloud_functions 285, build_files 293, frontend 28. `openai_api_key` is in `SHARED_API_SECRET_NAMES`, so `set_variable` prompts for a source before the Y/n confirm.
 - **Blockers:** none.
 - **Next:** A1 CTF constants (PRD.md:950).
+
+### Iteration 4 — 2026-10-16
+- **Completed:** A1 — `CtfStates` (states.py), six `DbCollections.CTF*` members, `PubSub.Handlers.CTF`, `Actions.CTF_ARM_BOARD/CTF_PLANT/CTF_HOST_RESET` (18–20), `EventAttributes.CTF_ID/WORKOUT_ID/RESET_MODE`; `api/unit_tests/test_ctf_constants.py` asserts no Actions value collides (via `__members__`, since duplicate Enum values alias silently).
+- **Learned:** `common/tests/` is not in any gate; put new common-code tests in `api/unit_tests/` (where the PRD's structure puts `test_ctf_*.py`). Gates now: api 66, cloud_functions 285, build_files 293, frontend 28. The frontend lint and type-check gates target CTF paths that don't exist yet.
+- **Blockers:** none.
+- **Next:** A2 CTF specification models (PRD.md:952).
