@@ -97,13 +97,13 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I2** CTF transformer and service — spec + done-when at PRD.md:1050
 - [x] **I3** Feature flag hook — spec + done-when at PRD.md:1052
 - [x] **I4** Routes and menu — spec + done-when at PRD.md:1053 (split: this slice is `URL_TEACHER_CTF_BASE`, `URL_TEACHER_CTF_EVENT` and the flag-gated **Teachers** menu item; the two routes are I4b)
-- [ ] **I4b** (both routes are in as of iteration 61; only the browser checks remain, including I9's dashboard check) Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route. Also verify in the browser that `Create CTF Event` is absent on a non-CTF unit's `TeacherUnit` page (I6 done-when).
+- [ ] **I4b** (both routes are in as of iteration 61; only the browser checks remain, including I9's dashboard check and I10's disabled-actions check) Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route. Also verify in the browser that `Create CTF Event` is absent on a non-CTF unit's `TeacherUnit` page (I6 done-when).
 - [x] **I5** Events list page — spec + done-when at PRD.md:1055 (the list route is in; the browser check is carried by I4b)
 - [x] **I6** Create from unit — spec + done-when at PRD.md:1057 (the browser check that the button is absent on a non-CTF unit is carried by I4b)
 - [x] **I7** Action confirm dialog — spec + done-when at PRD.md:1059
 - [x] **I8** CTF state chip — spec + done-when at PRD.md:1060
 - [x] **I9** Dashboard shell — spec + done-when at PRD.md:1061 (the browser check is carried by I4b)
-- [ ] **I10** Event Control panel — spec + done-when at PRD.md:1063
+- [x] **I10** Event Control panel — spec + done-when at PRD.md:1063 (the browser check that illegal actions are disabled is carried by I4b)
 - [ ] **I11** Scoreboard settings — spec + done-when at PRD.md:1065
 - [ ] **I12** Flags panel — spec + done-when at PRD.md:1066
 - [ ] **I13** Flags bulk replant — spec + done-when at PRD.md:1067
@@ -777,3 +777,15 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `usePolling` makes its first call on mount, so the dashboard does not need a separate initial fetch. Under `vi.useFakeTimers()`, `act(async () => vi.advanceTimersByTime(...))` followed by a microtask flush is enough to drive it. Gates: frontend 12 files / 84 tests. ESLint is clean on the CTF paths plus `AppRouter.tsx`, and tsc reports no CTF errors. No Python changed.
 - **Blockers:** I did not do the browser check (it needs a signed-in instructor and a live API). It moves to I4b.
 - **Next:** I10 Event Control panel (PRD.md:1063). Put it inside the dashboard's left `Paper`. It needs `ConfirmationDialog` to take a `confirmLabel` prop.
+
+### Iteration 62 — 2026-10-16
+- **Completed:** I10.
+  - New `frontend/src/components/Teacher/Ctf/CtfEventControl.tsx` shows Arm, Start, Pause, Resume, End and Archive in a labelled `group` inside the dashboard's left `Paper`.
+  - `CTF_ACTION_RULES` gives each action its legal states, copied from `CtfEvent.ACTIONS` (api/core/ctf/event.py:75-80). A button is enabled only in those states and is disabled while a request runs.
+  - Arm, Start, Pause and Resume confirm through `ActionConfirmDialog`. End and Archive confirm through the type-to-confirm `ConfirmationDialog`, where the user types the event id.
+  - `ConfirmationDialog` gains optional `confirmLabel` and `message` props and the actions `end` and `archive`. With no `confirmLabel`, existing callers keep "Delete", the trash icon and the original text.
+  - On success, `onActionComplete` (the dashboard's `fetchState`) re-reads state right away. On failure, an error `Alert` shows `status: message`.
+  - Tests: `CtfEventControl.test.tsx` (14): the enabled-button matrix for all 8 states, the plain dialog's confirm and cancel, type-to-confirm for End and Archive, the API error, and the default "Delete" wording. One added `CtfDashboard` test checks that an action re-reads state.
+- **Learned:** Under `vi.useFakeTimers()`, a closing MUI `Dialog` keeps the page behind it `aria-hidden` until its exit transition finishes. Advance the timers (about 500 ms) before you query roles behind it. The selected action is kept apart from the `open` flag so that a dialog does not fall back to the "Delete" label while it fades out. Gates: frontend 13 files / 99 tests. ESLint is clean on the CTF paths plus `Confirmation.tsx`, and tsc reports no CTF or ConfirmationDialog errors. No Python changed. The `agoge-reviewer` found no defects.
+- **Blockers:** I did not do the browser check (it needs a signed-in instructor and a live API). It moves to I4b.
+- **Next:** I11 Scoreboard settings (PRD.md:1065). It can sit in the left `Paper` under `CtfEventControl`; `ctfService.update` already exists.

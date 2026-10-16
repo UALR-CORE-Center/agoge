@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import {ThemeProvider} from "@mui/material/styles";
-import {act, cleanup, fireEvent, render, screen} from "@testing-library/react";
+import {act, cleanup, fireEvent, render, screen, within} from "@testing-library/react";
 import React from "react";
 import {MemoryRouter, Route, Routes} from "react-router-dom";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
@@ -14,7 +14,7 @@ import CtfDashboard, {DASHBOARD_TABS, STATE_POLL_INTERVAL_MS} from "./CtfDashboa
 import {formatDuration, remainingSeconds} from "./ctfTime";
 
 vi.mock("../../../services/Ctf/ctf.service", () => ({
-    ctfService: {getState: vi.fn()},
+    ctfService: {getState: vi.fn(), processAction: vi.fn()},
 }));
 
 const NOW = 1_800_000_000;
@@ -117,6 +117,30 @@ describe("CtfDashboard", () => {
         expect(screen.getByText("Paused")).toBeInTheDocument();
         // The paused clock is held at paused_at, not the wall clock.
         expect(screen.getByText("01:01:01 (paused)")).toBeInTheDocument();
+    });
+
+    it("re-reads state right after an Event Control action instead of waiting for the next poll", async () => {
+        vi.mocked(ctfService.getState).mockResolvedValue(stateResponse());
+        vi.mocked(ctfService.processAction).mockResolvedValue({} as never);
+        renderDashboard();
+        await flush();
+        expect(screen.getByRole("button", {name: "Start"})).toBeDisabled();
+
+        vi.mocked(ctfService.getState).mockResolvedValue(stateResponse({state: CtfStates.PAUSED, state_name: "PAUSED", paused_at: NOW}));
+        fireEvent.click(screen.getByRole("button", {name: "Pause"}));
+        fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", {name: "Pause"}));
+        await flush();
+        await flush();
+
+        expect(ctfService.processAction).toHaveBeenCalledWith("eventevent", {action: "pause"});
+        expect(ctfService.getState).toHaveBeenCalledTimes(2);
+        expect(screen.getByText("Paused")).toBeInTheDocument();
+        // Let the dialog's exit transition finish; until then the page behind it is aria-hidden.
+        await act(async () => {
+            vi.advanceTimersByTime(500);
+        });
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        expect(within(screen.getByRole("group", {name: "Event actions"})).getByRole("button", {name: "Resume"})).toBeEnabled();
     });
 
     it("shows a banner when the project budget is exceeded", async () => {
