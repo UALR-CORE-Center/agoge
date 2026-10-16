@@ -38,7 +38,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **C1** Flag validator — spec + done-when at PRD.md:972
 - [x] **C2** Validator wiring — spec + done-when at PRD.md:974
 
-- [ ] **BUG** `SpecEditManager.save` writes the spec to Firestore (catalog on publish, edits otherwise) *before* calling `is_valid()`, so an invalid spec is persisted and then the call raises. Callers in `lab_spec_edit.py` check `is_valid()` first, which masks it. Not CTF-specific.
+- [x] **BUG** `SpecEditManager.save` writes the spec to Firestore (catalog on publish, edits otherwise) *before* calling `is_valid()`, so an invalid spec is persisted and then the call raises. Callers in `lab_spec_edit.py` check `is_valid()` first, which masks it. Not CTF-specific.
 
 ### Group D — Compute primitives and the loader
 - [ ] **D1** `set_metadata` — spec + done-when at PRD.md:979
@@ -258,3 +258,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - ESLint gate: "No files matching the pattern" for the CTF paths. This is expected, because no Group I/J task is done.
   - tsc gate: 0 errors name a CTF file.
 - **Reopened:** none.
+
+### Iteration 16 — 2026-10-16
+- **Completed:** BUG — `SpecEditManager.save` now calls `is_valid()` first and raises `AgogeValidationError` before any `db.update`/`db.delete`, matching `SpecFileManager.save`. `api/unit_tests/test_spec_edit_save_order.py` (4 tests) shows an invalid spec writes nothing on the edit-save or catalog-publish path, a valid edit save writes the edit, and a valid publish writes the catalog and then deletes the edit. Both invalid-spec tests fail with the fix reverted.
+- **Learned:** Validating before `clean()` means validator updates (`self.spec.update(...)`) now land in the persisted spec even when a caller skips `is_valid()`. A `build_type` outside unit/escape-room is a valid spec that needs no validator stubs. Gates now: api 362, cloud_functions 285, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** D1 `set_metadata` (PRD.md:979).
