@@ -9,23 +9,26 @@ from common.models.agoge import (
     CtfBoardModel,
     CtfDigestModel,
     CtfEventModel,
+    CtfFlagSpecModel,
     CtfRateLimitModel,
     CtfSubmissionModel,
     Verdict,
 )
 from common.models.model_validators.model_validator import ModelValidator
-from common.models.response import CtfSubmitResponse
+from common.models.response import CtfHintResponse, CtfSubmitResponse
 from common.utilities.ctf_flags import flag_digest, parse_flag_id
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.id_generator import IdGenerator
 
 SUBMISSIONS_CLOSED_MESSAGE = "Submissions are closed."
+HINTS_CLOSED_MESSAGE = "Hints can only be taken while the event is running."
+HINT_NOT_FOUND_MESSAGE = "Hint not found"
 RATE_LIMIT_WINDOW_SECONDS = 60
 UNPARSED_BUCKET = "unparsed"
 
 
 class CtfScoring:
-    """Student-facing scoring for a CTF board: flag submission (PRD Submission Algorithm)."""
+    """Student-facing scoring for a CTF board: flag submission (PRD Submission Algorithm) and hints."""
     MESSAGES = {
         'correct': "Correct! Flag accepted.",
         'incorrect': "Incorrect flag.",
@@ -112,6 +115,52 @@ class CtfScoring:
             points_awarded=shown_points,
             message=self.MESSAGES[shown],
         )
+
+    def hint(self, workout_id: str, flag_id: str) -> CtfHintResponse:
+        """Reveal a flag's hint to the workout's team, deducting `hint_cost` from its score the first time only."""
+        board = self._active_board(workout_id)
+        event = self._load_event(board.ctf_id)
+        spec_flag = next((f for f in event.spec.flags if f.id == flag_id), None)
+        # A decoy answers like an unknown id, so the hint route cannot be used to discover decoys.
+        if spec_flag is None or spec_flag.decoy or not spec_flag.hint:
+            raise NotFound(message=HINT_NOT_FOUND_MESSAGE)
+
+        taken_now, score = self.db.transaction(
+            lambda transaction: self._hint_in_transaction(transaction, event, board.id, spec_flag)
+        )
+        if taken_now:
+            self.logger.info(f"{self.class_name}:{event.id} - Hint taken", workout_id=workout_id,
+                             flag_id=flag_id, hint_cost=spec_flag.hint_cost)
+        return CtfHintResponse(flag_id=flag_id, hint=spec_flag.hint, hint_cost=spec_flag.hint_cost, score=score)
+
+    def _hint_in_transaction(
+        self, transaction, event: CtfEventModel, board_id: str, spec_flag: CtfFlagSpecModel
+    ) -> Tuple[bool, int]:
+        """Mark the hint taken and deduct its cost, decided from the board as read inside the transaction,
+        so two concurrent requests deduct once. Returns (taken by this call, board score)."""
+        board_ref = self.db.db.collection(DbCollections.CTF_BOARD.value).document(board_id)
+        snapshot = board_ref.get(transaction=transaction)
+        if not snapshot.exists:
+            raise NotFound(message="CTF board not found")
+        board = ModelValidator(CtfBoardModel, log_location=self.log_name).load(snapshot.to_dict())
+        state = next((f for f in board.flags if f.flag_id == spec_flag.id), None)
+        if state is None:
+            raise NotFound(message=HINT_NOT_FOUND_MESSAGE)
+        if state.hint_taken:
+            # Already paid for: returned in any event state, without a write.
+            return False, board.score
+        solved = {f.flag_id for f in board.flags if f.solved}
+        if any(required not in solved for required in spec_flag.unlocks_after or []):
+            # A locked flag is not listed to the team (H5), so its hint is not reachable either.
+            raise NotFound(message=HINT_NOT_FOUND_MESSAGE)
+        if event.state != CtfStates.RUNNING.value:
+            # Points only move while the event runs, matching submissions.
+            raise Conflict(message=HINTS_CLOSED_MESSAGE)
+        state.hint_taken = True
+        state.hint_taken_at = time.time()
+        score = board.score - spec_flag.hint_cost
+        transaction.update(board_ref, {'flags': [f.model_dump() for f in board.flags], 'score': score})
+        return True, score
 
     def _rate_limit_in_transaction(
         self, transaction, ctf_id: str, workout_id: str, bucket: str, limit: int

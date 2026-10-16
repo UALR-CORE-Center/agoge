@@ -80,7 +80,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **H1** Submission resolve — spec + done-when at PRD.md:1026
 - [x] **H2** Solve award — spec + done-when at PRD.md:1028
 - [x] **H3** Rate limiting — spec + done-when at PRD.md:1030
-- [ ] **H4** Hints — spec + done-when at PRD.md:1032
+- [x] **H4** Hints — spec + done-when at PRD.md:1032
 - [ ] **H5** Student board read — spec + done-when at PRD.md:1033
 - [ ] **H6** Scoreboards — spec + done-when at PRD.md:1035
 - [ ] **H7** Score adjustment — spec + done-when at PRD.md:1037
@@ -527,3 +527,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `http_errors` already maps `RateLimitExceeded` → 429, so R2 just needs to use it. Gates now: api 698, cloud_functions 449, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** H4 Hints (PRD.md:1032).
+
+### Iteration 44 — 2026-10-16
+- **Completed:** H4 — `CtfScoring.hint(workout_id, flag_id) -> CtfHintResponse` in `api/core/ctf/scoring.py`. It does the active-board query and event get, then a spec check: an unknown id, a flag with no hint, or a decoy → `NotFound("Hint not found")`. Decoys answer like unknown ids so they can't be discovered. Then one board transaction (`_hint_in_transaction`): a flag missing from the board → `NotFound`. If the hint is already taken, it returns the hint and current score with no write, in any event state. A flag whose `unlocks_after` are unsolved → `NotFound` (H5 hides locked flags, so their hints stay hidden too). A state other than RUNNING → `Conflict("Hints can only be taken while the event is running.")`. Otherwise it sets `hint_taken`/`hint_taken_at` and `score -= hint_cost` (the score may go below zero). No submission row is written. `api/unit_tests/test_ctf_scoring_hint.py` has 24 tests, including two concurrent first requests behind a barrier that deduct once.
+- **Learned:** The PRD gives no state rule for hints. New deductions follow the submission rule (RUNNING only, since points move only while the clock runs). Repeat reads are always allowed because the hint is already paid for. Gates now: api 722, cloud_functions 449, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** H5 Student board read (PRD.md:1033), `CtfScoring.board(workout_id)`. Its locked-flag rule should match `_hint_in_transaction`'s `unlocks_after` check.
