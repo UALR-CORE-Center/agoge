@@ -16,11 +16,6 @@ class UserGroups(Enum):
 
 class LMSConnection(Enum):
     CANVAS = 'canvas'
-    ALL = [CANVAS]
-
-    @classmethod
-    def _value_to_member_map(cls):
-        _value2member_map_ = {v.value: v for v in cls.__members__.values()}
 
     @classmethod
     def exists(cls, name):
@@ -28,6 +23,4 @@ class LMSConnection(Enum):
 
     @classmethod
     def has_value(cls, value):
-        if not hasattr(cls, '_value2member_map_'):
-            cls._value_to_member_map()
         return value in cls._value2member_map_

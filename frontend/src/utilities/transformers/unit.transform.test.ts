@@ -27,3 +27,13 @@ describe("lab rubric opt-in", () => {
         },
     );
 });
+
+describe("specification accessibility features", () => {
+    it.each([transformToCatalog, transformToSpecification])(
+        "reads accessibility_features from its own field, not workout_duration_days", (transform) => {
+            const result = transform({ workout_duration_days: 7, accessibility_features: false });
+            expect(result.accessibility_features).toBe(false);
+            expect(transform({ accessibility_features: true }).accessibility_features).toBe(true);
+        },
+    );
+});

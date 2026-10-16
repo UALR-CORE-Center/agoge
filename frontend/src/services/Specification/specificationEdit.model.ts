@@ -34,7 +34,6 @@ export interface Assessment {
     key?: string;
 }
 
-
 interface FirewallRule {
     name: string;
     network: string;
@@ -75,7 +74,6 @@ export interface LMSQuiz {
     assessment_script?: AssessmentScript;
     questions?: LMSQuizQuestions[];
 }
-
 
 interface Nic {
     network: string;
@@ -212,6 +210,3 @@ export interface SpecificationEditId {
     build_id: string;
 }
 
-export interface PublishResponse {
-    build_id: string;
-}

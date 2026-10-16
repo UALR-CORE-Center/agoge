@@ -54,7 +54,7 @@ async def get_user(
 ) -> AgogeResponse[AgogeUser]:
     try:
         user = Users().get_user_from_request(current_user, user_id)
-        return AgogeResponse(data=user)
+        return AgogeResponse(data=user.redacted(include_api_key=current_user.uid == user.uid))
     except Unauthorized as e:
         logger.error(e.message)
         raise HTTPException(status_code=403, detail=e.message)
@@ -102,7 +102,8 @@ async def update_user_settings(
         raise HTTPException(status_code=400, detail=e.message)
 
     if user:
-        return AgogeResponse(data=user)
+        # update_settings only lets users change their own settings, so the requester owns this key.
+        return AgogeResponse(data=user.redacted(include_api_key=True))
     raise HTTPException(status_code=400)
 
 

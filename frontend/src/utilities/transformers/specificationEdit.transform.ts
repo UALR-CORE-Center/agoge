@@ -1,5 +1,4 @@
 import {
-    PublishResponse,
     SpecificationEdit, SpecificationEditId
 } from "../../services/Specification/specificationEdit.model";
 
@@ -32,12 +31,6 @@ export const transformToSpecificationEdit = (data: any) : SpecificationEdit => {
 export const transformToSpecificationEditId = (data: any) : SpecificationEditId => {
     return {
         build_id: data.build_id,
-    }
-}
-
-export const transformToSpecificationPublish = (data: any) : PublishResponse => {
-    return {
-        build_id: data.build_id
     }
 }
 

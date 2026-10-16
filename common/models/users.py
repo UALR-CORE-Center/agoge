@@ -67,6 +67,22 @@ class AgogeUser(BaseModel):
             for lms, settings in self.settings.items()
         }
 
+    def redacted(self, include_api_key: bool = False) -> "AgogeUser":
+        """
+        Copy of the user that is safe to return in an API response. LMS secrets never leave the
+        server; the API key is kept only when the caller is the user who owns it (the settings
+        page pre-fills it).
+        """
+        return self.model_copy(update={
+            'settings': {
+                lms: settings.model_copy(update={
+                    'secret': None,
+                    'api': settings.api if include_api_key else None,
+                })
+                for lms, settings in self.settings.items()
+            }
+        })
+
 
 class SafeAgogeUser(BaseModel):
     uid: str

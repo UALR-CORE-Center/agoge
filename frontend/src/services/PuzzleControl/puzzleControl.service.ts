@@ -1,8 +1,4 @@
-import {
-    URL_PUZZLE_CONTROL_API_BASE,
-    URL_PUZZLE_CONTROL_QUESTION
-} from "../../router/urls";
-import formatString from "../../utilities/formatString";
+import {URL_PUZZLE_CONTROL_API_BASE} from "../../router/urls";
 import {
     transformToPuzzleLamp,
     transformToPuzzleQuestion,
@@ -28,30 +24,8 @@ const post = async (sku: string, device: string, action: LampAction) => {
         `${URL_PUZZLE_CONTROL_API_BASE}control`,
         payload,
         true,
+        null,
         transformToPuzzleLamp
-    );
-};
-
-const post_choice = async (question_id: string,answer: string) => {
-    const payload = {'question_id': question_id, 'answer': answer};
-    const endpoint = formatString(`${URL_PUZZLE_CONTROL_API_BASE}question/check`)
-    return await apiService.post<LampQuestion>(
-        endpoint,
-        payload,
-        false,
-        transformToPuzzleQuestion
-    );
-};
-
-const create_question = async (
-    sku: string, device: string, title: string, answer: string, fuzzy: boolean,
-) => {
-    const payload = {'sku': sku, 'device': device, 'title': title, 'answer': answer, 'fuzzy': fuzzy};
-    return await apiService.post<LampQuestion>(
-        `${URL_PUZZLE_CONTROL_API_BASE}question`,
-        payload,
-        true,
-        transformToPuzzleQuestion
     );
 };
 
@@ -63,6 +37,7 @@ const create_test = async (
         `${URL_PUZZLE_CONTROL_API_BASE}test`,
         payload,
         false,
+        null,
         transformToPuzzleTest
     )
 }
@@ -96,16 +71,15 @@ const check_answer = async (
         `${URL_PUZZLE_CONTROL_API_BASE}question/check`,
         payload,
         false,
+        null,
         transformToPuzzleQuestion
     );
 };
 
 export const puzzleControlService = {
-    create_question,
     create_test,
     get,
     post,
-    post_choice,
     get_test,
     get_tests,
     check_answer,

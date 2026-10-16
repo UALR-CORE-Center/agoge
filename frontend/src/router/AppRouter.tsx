@@ -87,7 +87,7 @@ const AppRouter: React.FC = () => {
                     { path: URL_TEACHER_SETTINGS, element: <ProtectedRoute element={<TeacherSettings />} level={"instructor"} /> },
                     { path: URL_TEACHER_SERVERS, element: <ProtectedRoute element={<ServerManager />} level={"instructor"} /> },
                     { path: URL_TEACHER_SERVERS_CREATE, element: <ProtectedRoute element={<ServerCreatorForm />} level={"instructor"} /> },
-                    { path: `${URL_TEACHER_SERVERS_EDITOR}/:image_id`, element: <ProtectedRoute element={<ServerEditorForm />} minPermission={"instructor"} /> },
+                    { path: `${URL_TEACHER_SERVERS_EDITOR}/:image_id`, element: <ProtectedRoute element={<ServerEditorForm />} level={"instructor"} /> },
                     { path: URL_TEACHER_SPECIFICATIONS_BASE, element: <ProtectedRoute element={<CatalogTable />} level={"instructor"} /> },
                     { path: URL_TEACHER_SPECIFICATION_EDIT, element: <ProtectedRoute element={<CatalogEditTable />} level={"instructor"} /> },
                     { path: `${URL_TEACHER_SPECIFICATION_EDIT}/:edit_id`, element: <ProtectedRoute element={<Editor />} level={"instructor"} /> },

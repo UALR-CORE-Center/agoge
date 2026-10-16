@@ -92,6 +92,5 @@ export const
 
     //Lamp Control
     URL_PUZZLE_CONTROL_API_BASE: string = "puzzle-control/",
-    URL_PUZZLE_CONTROL_QUESTION: string = `${URL_PUZZLE_CONTROL_API_BASE}question/{ITEM_ID}/`,
     URL_PUZZLE_CONTROL_COMMAND: string = `${URL_PUZZLE_CONTROL_API_BASE}{DEVICE_ID}/{SKU}/command/`
 ;

@@ -5,7 +5,7 @@ import {apiUrl} from "../utilities/apiClient";
 
 const generateHeader = async (
     includeAuth: boolean,
-    headerOverrides: object | null = null
+    headerOverrides: Record<string, string> | null = null
 ): Promise<object> => {
     let headers: object = {
         'Content-Type': 'application/json'
@@ -60,7 +60,7 @@ const post = async <T>(
     endpoint: string,
     body: any,
     includeAuth: boolean = true,
-    headers: object | null = null,
+    headers: Record<string, string> | null = null,
     transformFn?: (data: any) => T
 ): Promise<T> => {
     try {
