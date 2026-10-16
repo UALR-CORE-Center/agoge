@@ -793,6 +793,111 @@ class PuzzleTestModel(BaseModel):
     sku: Optional[str] = Field(default=None, description="Lighting SKU (e.g., Govee)")
     device: Optional[str] = Field(default=None, description="Lighting device identifier")
 
+
+# ---------------------------------------------------------------------------
+# CTF stored documents. The spec models above live in catalog and unit records;
+# these are the per-event documents in the DbCollections.CTF* collections.
+# ---------------------------------------------------------------------------
+
+class CtfEventModel(BaseModel):
+    """Collection `agoge-ctf`, doc id = ctf_id (IdGenerator.build_id)"""
+    id: str = Field(...)
+    unit_id: str = Field(...)
+    instructor_id: List[str] = Field(..., description="Copied from the unit (normalized to a list) at creation")
+    spec: CtfSpecModel = Field(..., description="Copied from the unit at creation; later unit edits do not change it")
+    seed_version: int = Field(default=1, description="Always 1 in Phase 1; part of the derivation input")
+    creation_timestamp: float = Field(...)
+    starts_at: Optional[float] = Field(default=None, description="Set by start")
+    ends_at: Optional[float] = Field(default=None, description="Null means open-ended; resume extends it by the paused duration")
+    paused_at: Optional[float] = Field(default=None)
+    accumulated_pause_seconds: float = Field(default=0.0)
+    scoreboard_frozen_at: Optional[float] = Field(default=None, description="Public scoreboard ignores solves after this")
+    public_scoreboard_enabled: bool = Field(default=False)
+    board_ids: List[str] = Field(default_factory=list, description="Workout ids of the team boards")
+    boards_pending: int = Field(default=0, description="Arm workers not yet finished; decremented in a transaction")
+    state: int = Field(..., description="CtfStates value")
+    state_timestamp: str = Field(..., description="ISO 8601 UTC")
+
+    class Config:
+        from_attributes = True
+
+
+class CtfFlagStateModel(BaseModel):
+    """Per-board, per-flag state. Embedded in CtfBoardModel."""
+    flag_id: str = Field(...)
+    digest: str = Field(..., description="SHA-256 hex of the normalized derived value")
+    plant_status: PlantStatus = Field(default='pending')
+    planted_at: Optional[float] = Field(default=None)
+    plant_error: Optional[str] = Field(default=None, description="Never contains a flag value")
+    solved: bool = Field(default=False)
+    solved_at: Optional[float] = Field(default=None)
+    hint_taken: bool = Field(default=False)
+    hint_taken_at: Optional[float] = Field(default=None)
+    attempts: int = Field(default=0, description="Submissions whose parsed flag id is this flag")
+
+
+class CtfBoardModel(BaseModel):
+    """Collection `agoge-ctf-board`, doc id = f"{ctf_id}-{workout_id}" """
+    id: str = Field(...)
+    workout_id: str = Field(...)
+    ctf_id: str = Field(...)
+    active: bool = Field(default=True, description="False once the event is archived or deleted; a workout has at most one active board")
+    team_name: str = Field(..., description="WorkoutModel.team_name, else student_email, else workout_id")
+    flags: List[CtfFlagStateModel] = Field(default_factory=list)
+    score: int = Field(default=0, description="Solved points + decoy points - hint costs + manual adjustments")
+    solve_count: int = Field(default=0)
+    decoy_count: int = Field(default=0)
+    last_solve_at: Optional[float] = Field(default=None, description="Ranking tiebreaker")
+    arm_status: ArmStatus = Field(default='pending')
+    arm_error: Optional[str] = Field(default=None)
+
+    class Config:
+        from_attributes = True
+
+
+class CtfDigestModel(BaseModel):
+    """Collection `agoge-ctf-digest`, doc id = digest. Written at event creation so
+    one document read resolves any submitted value to its board and flag."""
+    digest: str = Field(...)
+    ctf_id: str = Field(...)
+    workout_id: str = Field(...)
+    flag_id: str = Field(...)
+
+
+class CtfRateLimitModel(BaseModel):
+    """Collection `agoge-ctf-rate-limit`, doc id = f"{ctf_id}-{workout_id}-{bucket}" where
+    bucket is the parsed flag id, or "unparsed". Updated in a transaction."""
+    id: str = Field(...)
+    window_start: float = Field(..., description="Start of the current 60 s window")
+    count: int = Field(default=0)
+
+
+class CtfSubmissionModel(BaseModel):
+    """Collection `agoge-ctf-submission`, doc id = IdGenerator.uuid(). Append-only."""
+    id: str = Field(...)
+    ctf_id: str = Field(...)
+    workout_id: str = Field(...)
+    flag_id: Optional[str] = Field(default=None, description="Resolved flag id, else the parsed flag id, else null")
+    submitted_digest: str = Field(..., description="The submission itself is never stored")
+    verdict: Verdict = Field(...)
+    matched_workout_id: Optional[str] = Field(default=None, description="Set on cross_submission")
+    points_awarded: int = Field(default=0)
+    submitted_at: float = Field(...)
+    origin_ip: Optional[str] = Field(default=None, description="request.client.host")
+
+
+class CtfLogModel(BaseModel):
+    """Collection `agoge-ctf-log`, doc id = IdGenerator.uuid(). Append-only."""
+    id: str = Field(...)
+    ctf_id: str = Field(...)
+    action: LogAction = Field(...)
+    actor: str = Field(..., description="AgogeUser.email, or 'system'")
+    target: Optional[str] = Field(default=None, description="workout_id, server name, or flag id")
+    result: LogResult = Field(...)
+    detail: Optional[Dict[str, Union[str, int, bool]]] = Field(default=None, description="Scalar context only. Never a flag value, never a seed.")
+    created_at: float = Field(...)
+
+
 UnitModel.model_rebuild()
 AssessmentModel.model_rebuild()
 LMSIntegrationModel.model_rebuild()
