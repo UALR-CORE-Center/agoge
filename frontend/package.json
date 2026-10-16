@@ -51,7 +51,7 @@
   "scripts": {
     "start": "vite --debug",
     "build": "vite build",
-    "test": "vitest run",
+    "test": "vitest run --exclude \"tests/**\"",
     "preview": "vite preview"
   },
   "eslintConfig": {

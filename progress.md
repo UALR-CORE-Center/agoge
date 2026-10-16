@@ -17,7 +17,7 @@ Read the PRD line cited for the full spec; its "Done when" bullet, if any, sits
 directly under it; the group header in the PRD collects them too. Phase 2 items are out of scope for this loop.
 
 ### Group 0 — Green baseline
-- [ ] **0.1** Frontend test script — spec + done-when at PRD.md:943
+- [x] **0.1** Frontend test script — spec + done-when at PRD.md:943
 - [ ] **0.2** Rubric opt-in tests — spec + done-when at PRD.md:945
 
 ### Group A — Contracts and constants
@@ -131,3 +131,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** PRD Working Note 1 says work on `release/2027-spring`, but the checkout is `feature-2027-spring-ctf`; gate baselines in PROMPT.md may differ slightly — trust a fresh run. Group I/J browser-verified "done when" items need the `run` skill or a human check.
 - **Blockers:** none.
 - **Next:** 0.1 Frontend test script (`frontend/package.json` test → `vitest run --exclude "tests/**"`).
+
+### Iteration 2 — 2026-10-16
+- **Completed:** 0.1 — `frontend/package.json` test script is now `vitest run --exclude "tests/**"`; `npm test` exits 0 (4 files, 28 tests). The `frontend/tests/*.test.mjs` node:test files are untouched.
+- **Learned:** PRD says 23 tests; the suite already has 28 (tests added since the PRD was written) — treat 28 as the new frontend baseline.
+- **Blockers:** none.
+- **Next:** 0.2 Rubric opt-in tests (`api/unit_tests/test_rubric_opt_in.py`, 4 failing).
