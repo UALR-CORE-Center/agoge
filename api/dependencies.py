@@ -7,6 +7,7 @@ from common.exceptions.agoge import BadRequest, NotFound, Unauthorized
 from common.models.users import AgogeUser, AnonymousAppUser
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 
+from core.ctf.config import is_ctf_enabled
 from core.users import Users
 
 security = HTTPBearer()
@@ -54,6 +55,12 @@ def admin_required(
         logger.error("Insufficient permissions")
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     return current_user
+
+
+def ctf_enabled_required() -> None:
+    # 404 rather than 403 so a disabled deployment doesn't reveal the CTF routes exist (SC-19).
+    if not is_ctf_enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
 
 
 def verify_token(
