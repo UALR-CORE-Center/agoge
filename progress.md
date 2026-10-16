@@ -26,7 +26,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **A3** CTF stored models — spec + done-when at PRD.md:954
 - [x] **A4** CTF request models — spec + done-when at PRD.md:955
 - [x] **A5** CTF response models — spec + done-when at PRD.md:956
-- [ ] **A6** Spec block wiring — spec + done-when at PRD.md:957
+- [x] **A6** Spec block wiring — spec + done-when at PRD.md:957
 
 ### Group B — Flag derivation and state
 - [ ] **B1** Derivation module — spec + done-when at PRD.md:962
@@ -184,3 +184,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Per the PRD, fields like `starts_at: Optional[float]` have no default, so they are *required* keys in Pydantic v2 — the core code building these responses must always pass them (a test pins this). `CtfSubmitResponse.verdict` deliberately excludes `cross_submission`/`rate_limited`/`closed`. Gates now: api 200, cloud_functions 285, build_files 293, frontend 28.
 - **Blockers:** none.
 - **Next:** A6 Spec block wiring (PRD.md:957).
+
+### Iteration 9 — 2026-10-16
+- **Completed:** A6 — `ctf: Optional[CtfSpecModel] = None` on `UnitModel`, `CatalogModel`, `CatalogEditModel` (each right after `rubric_support`); `api/unit_tests/test_ctf_spec_wiring.py` (6 tests) carries a block through `CatalogEditModel → CatalogModel → Unit.build` (catalog stored as `model_dump(mode="json")`, as Firestore would), covers specs with no/null `ctf`, and checks all three models reject a bad flag id and an empty `flags` list.
+- **Learned:** `Unit.build` only pops `discriminator`/`id`/`creation_timestamp` from the catalog dict, so new spec fields flow into the unit with no build-code change. Gates now: api 206, cloud_functions 285, build_files 293, frontend 28.
+- **Blockers:** none.
+- **Next:** B1 Derivation module (PRD.md:962).
