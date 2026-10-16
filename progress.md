@@ -747,3 +747,22 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Next:** I9 Dashboard shell (PRD.md:1061). Put `CtfStateChip` in its left column, then add the dashboard route to finish I4b. `CtfEventList` still shows `state_name` as plain text; it could switch to `CtfStateChip` later.
 
 - **Addendum (iteration 60):** Adding `CtfStateMapping` changed the wording of an existing tsc error in `UnitTable.tsx` (TS2305 became TS2724 "Did you mean 'CtfStateMapping'?"), so it no longer matched the check baseline. `UnitTable.tsx` imported a `StateMapping` export that never existed and was never used, so I removed that name from the import and refreshed the baseline.
+
+### Verification — 2026-10-16 — PASS
+- **Checked:** I4 (first slice), I5, I6, I7 and I8, the `[x]` tasks changed since the last verification. I read the diff `e835026..16d4d8f`: all of `CtfEventList.tsx`, `CreateCtfButton.tsx`, `CtfStateChip.tsx` and `ActionConfirmDialog.tsx`, plus the changes to `urls.ts`, `AppRouter.tsx`, `AgogeAppBar.tsx`, `TeacherUnit.tsx`, `StateMapping.tsx`, `unit.model.ts`, `unit.transform.ts` and `UnitTable.tsx`. I compared them with PRD.md:1053-1060.
+  - I4: `URL_TEACHER_CTF_BASE` is `${URL_TEACHER_BASE}/ctf` and the dashboard base is `URL_TEACHER_CTF_EVENT`. The **Teachers** menu adds "CTF Events" only when `ctfEnabled`, which is false while loading.
+  - I5: `StyledDataGrid` with Active/Archived `Tabs` that use the same tab `sx` as `ActiveExpiredUnitTable`. The ID column is a `LinkButton` to the dashboard. The route is wrapped in `ProtectedRoute level="instructor"`. The list call has a cancel guard and an error `Alert`.
+  - I6: `TeacherUnit` renders the button only when `ctf_capable`, the same way `UnitRubricEditor` is gated. `ctf_capable` is true only when `unit.ctf` is an object. `UnitFullResponse.unit` is `UnitModel`, which has `ctf` (common/models/agoge.py:533), so the field reaches the client. On success the button navigates to `${URL_TEACHER_CTF_EVENT}/<build_id>`. All hooks run before the `!ctfEnabled` early return.
+  - I7: it has exactly the props `{open, title, message, confirmLabel, onConfirm, onClose, loading}` and uses a `LoadingButton`. Title and message are wired to `aria-labelledby`/`aria-describedby`, and close is blocked while loading.
+  - I8: `CtfStateMapping` is a `Record` over all 8 `CtfStates`, each with `{text, color, icon}`. `ready` and `neutral` are real palette augmentations (styles/theme.tsx:6-20). The chip renders through `StatusBadge` with `icon`, and `StateAnnouncement` (taken out of `StateInfo`) provides the `aria-live` announcement.
+  - No TODO, FIXME, skip/only or stubs in the new files.
+  - Note, not a reopen: the done-when for I4, I5 and I6 is a browser check, and it has not been done. The builder moved it into the open task I4b, which names each check. The dashboard route is still missing, so the menu item will not be fully usable until I9/I4b.
+- **Gate results:**
+  - api/unit_tests: 1100 passed.
+  - cloud_functions/tests: 449 passed.
+  - build_files/cloud_deployment/tests: 304 passed.
+  - frontend `npm test`: 11 files, 75 tests passed.
+  - ESLint gate, as written: exit 2, "No files matching the pattern "src/components/Student/Ctf" were found". This is expected because J1+ are not done. Run on the paths that exist (`src/components/Teacher/Ctf`, `src/services/Ctf`, the hook, `ctf.transform.ts`, `ActionConfirmDialog`) plus the touched `StateMapping.tsx`, `StateInfo.tsx`, `AppRouter.tsx` and `urls.ts`, it exits 0 with 0 warnings.
+  - Lint problems that were already there before this work: `StateChip.tsx`, `StatusBadge.tsx`, and the `exhaustive-deps` warning at `TeacherUnit.tsx:104` (from 2026-03, `6296b93`). This work did not touch any of them.
+  - tsc gate: 0 errors name a CTF file (grep exit 1, gate exit 0).
+- **Reopened:** none.
