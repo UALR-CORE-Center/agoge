@@ -121,7 +121,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **J4** Challenge list — spec + done-when at PRD.md:1080 (the browser check is carried by I4b)
 
 ### Group K — Documentation
-- [ ] **K1** Game master guide — spec + done-when at PRD.md:1085
+- [x] **K1** Game master guide — spec + done-when at PRD.md:1085
 
 ---
 
@@ -978,3 +978,19 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** After an MUI `Dialog` closes, the page stays `aria-hidden` until the exit transition ends, so role queries on the page fail right after a confirm. Wait for `queryByRole("dialog")` to be null first. Gates: frontend 24 files / 216 tests. ESLint is clean on the CTF paths. `Workout.tsx` still has its 3 pre-existing lint problems and none new. tsc reports no CTF errors. No Python changed, so the Python suites were not re-run. `agoge-reviewer` found no house-rule issues. Its one defect (the standings were stuck on "Loading" after a failed first read) is fixed and tested.
 - **Blockers:** none. I4b is still open for a human to do the browser checks, which now include J4.
 - **Next:** K1 Game master guide (PRD.md:1085), `docs/guides/game-master-guide.md`.
+
+### Iteration 75 — 2026-10-16
+- **Completed:** K1.
+  - New `docs/guides/game-master-guide.md` covers:
+    - enabling CTF (`ctf_enabled` through setup.py);
+    - spec authoring, with a complete `ctf` block example and field and location tables;
+    - create to archive, by state and by action;
+    - the dashboard tabs and verdicts;
+    - the three reset modes;
+    - `stale` and `failed`, with common failure reasons and fixes;
+    - the overnight-stop exemption.
+  - It is linked from `docs/README.md`.
+  - Every claim was taken from the shipped code, not the PRD. For example: decoys may be 0 or negative; a re-arm is allowed from ARMED or BROKEN; a rebuild marks flags stale even when the nuke fails; restart and rebuild have no fixed duration in code, so the guide gives none.
+- **Learned:** The guide's JSON example was checked against both `CtfValidator` and `CtfSpecModel`; both accept it. Re-run that check if the spec model changes. The plant loader is added to every lab server at build (`LabServerManager._add_ctf_loaders`), so servers built before the CTF release cannot be planted, and the guide says to rebuild them. Docs only: no code changed, so no suites were re-run.
+- **Blockers:** none. I4b is still open: a human must do the browser checks. It is the only incomplete task, so the loop cannot reach ALL TASKS COMPLETE without it.
+- **Next:** I4b, the human browser checks listed on its queue line.
