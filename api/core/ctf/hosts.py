@@ -1,10 +1,11 @@
 import time
-from typing import List, Optional
+from typing import List, Optional, get_args
 
 from common.constants.database import DbCollections, DbOperators
 from common.constants.pub_sub import PubSub
 from common.constants.states import CtfStates, ServerStates
-from common.exceptions.agoge import BadRequest, Conflict
+from common.exceptions.agoge import BadRequest, Conflict, NotFound
+from common.models.agoge import ResetMode
 from common.models.response import CtfHostRow
 from common.models.users import AgogeUser
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
@@ -57,6 +58,44 @@ class CtfHosts:
             boards=len(boards), servers=len(targets), messages=len(messages),
         )
         return len(messages)
+
+    def reset(self, ctf_id: str, workout_id: str, server: str, mode: str, user: AgogeUser) -> None:
+        """Publish one CTF_HOST_RESET for one server of one board (Host Reset Modes).
+
+        Every check runs before the publish, so a refused reset sends nothing. Resets share the replant
+        states: before ARMED there is nothing planted to restore (and ARMING would race the arm
+        worker), and after RUNNING/PAUSED the exercise is over. Nothing is written here; the Cloud
+        Function marks progress on the board as it works.
+        """
+        if mode not in get_args(ResetMode):
+            raise BadRequest(message=f"Unknown reset mode: {mode}")
+        event = self.events.get(ctf_id, user)
+        if event.state not in {s.value for s in self.REPLANT_STATES}:
+            raise Conflict(message=f"Cannot reset a host of a CTF event that is {CtfEvent._state_name(event.state)}")
+        if workout_id not in event.board_ids:
+            raise NotFound(message=f"Workout {workout_id} is not a board of this CTF event")
+        # Server docs are keyed workout_id-name; a team's own servers are the only ones it may reset.
+        doc = self.db.get(DbCollections.SERVER, f"{workout_id}-{server}")
+        if not doc:
+            raise NotFound(message=f"Server {server} does not exist on workout {workout_id}")
+        if mode == 'replant' and server not in {flag.server for flag in event.spec.flags}:
+            raise BadRequest(message=f"Server {server} carries no flags, so there is nothing to replant")
+        if mode == 'rebuild' and doc.get('wireguard_endpoint_id'):
+            # LabServerManager.nuke() deletes WireGuard servers without rebuilding them.
+            raise BadRequest(message=f"Server {server} has a WireGuard endpoint and cannot be rebuilt")
+
+        attrs = PubSub.EventAttributes
+        self._publish(ctf_id, [{
+            attrs.HANDLER: PubSub.Handlers.CTF.value,
+            attrs.ACTION: str(PubSub.Actions.CTF_HOST_RESET.value),
+            attrs.CTF_ID: ctf_id,
+            attrs.WORKOUT_ID: workout_id,
+            attrs.SERVER_NAME: server,
+            attrs.RESET_MODE: mode,
+        }])
+        self.logger.info(
+            f"{self.class_name}:{ctf_id} - Published host reset", workout_id=workout_id, server=server, mode=mode,
+        )
 
     def hosts(self, ctf_id: str, user: AgogeUser) -> List[CtfHostRow]:
         """One row per board per server: the flag-bearing spec servers first (spec order), then the
