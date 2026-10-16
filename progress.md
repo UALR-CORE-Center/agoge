@@ -97,9 +97,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I2** CTF transformer and service — spec + done-when at PRD.md:1050
 - [x] **I3** Feature flag hook — spec + done-when at PRD.md:1052
 - [x] **I4** Routes and menu — spec + done-when at PRD.md:1053 (split: this slice is `URL_TEACHER_CTF_BASE`, `URL_TEACHER_CTF_EVENT` and the flag-gated **Teachers** menu item; the two routes are I4b)
-- [ ] **I4b** (list route done in iteration 57; only the dashboard route remains) Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route.
+- [ ] **I4b** (list route done in iteration 57; only the dashboard route remains) Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route. Also verify in the browser that `Create CTF Event` is absent on a non-CTF unit's `TeacherUnit` page (I6 done-when).
 - [x] **I5** Events list page — spec + done-when at PRD.md:1055 (the list route is in; the browser check is carried by I4b)
-- [ ] **I6** Create from unit — spec + done-when at PRD.md:1057
+- [x] **I6** Create from unit — spec + done-when at PRD.md:1057 (the browser check that the button is absent on a non-CTF unit is carried by I4b)
 - [ ] **I7** Action confirm dialog — spec + done-when at PRD.md:1059
 - [ ] **I8** CTF state chip — spec + done-when at PRD.md:1060
 - [ ] **I9** Dashboard shell — spec + done-when at PRD.md:1061
@@ -111,6 +111,8 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [ ] **I15** Scoreboard panel — spec + done-when at PRD.md:1069
 - [ ] **I16** Event log panel — spec + done-when at PRD.md:1070
 - [ ] **I17** Submission log panel — spec + done-when at PRD.md:1071
+
+- [ ] **LINT1** `frontend/src/utilities/transformers/unit.transform.test.ts:2` fails eslint `import/order` (`./unit.transform` should come after `./specificationEdit.transform`). This was already the case before I6. Not CTF-specific, and it is outside the CTF lint gate.
 
 ### Group J — Student UI
 - [ ] **J1** Student CTF polling — spec + done-when at PRD.md:1075
@@ -715,3 +717,15 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Blockers:** I did not do the browser check. It needs a signed-in instructor and a live API, which a headless run does not have. It stays with I4b.
 - **Next:** I6 Create from unit (PRD.md:1057). The dashboard route in I4b waits for I9.
 
+
+### Iteration 58 — 2026-10-16
+- **Completed:** I6.
+  - New `frontend/src/components/Teacher/Ctf/CreateCtfButton.tsx`: a `LoadingButton` "Create CTF Event" that calls `ctfService.create({unit_id})` and navigates to `${URL_TEACHER_CTF_EVENT}/<build_id>` on success.
+  - On failure it shows an error `Alert` (`status: message`, e.g. 409 for a workout already on an active board) and re-enables the button.
+  - It is disabled on an expired unit, and it renders nothing when `useCtfEnabled()` is false, because every `/ctf/` route returns 404 then (SC-19).
+  - `TeacherUnit` renders it in the left column under `UnitRubricEditor`, gated on `unitFull.value?.ctf_capable` the same way the rubric editor is gated on `rubric_support`.
+  - `transformToUnit` now sets `ctf_capable` (true only when `ctf` is an object). The spec block itself is not copied into frontend state.
+  - Tests: `CreateCtfButton.test.tsx` (4: success navigation, error alert and retry, disabled when expired, hidden when CTF is disabled), plus 5 `ctf_capable` cases in `unit.transform.test.ts`.
+- **Learned:** `GET /unit/{id}/full/` already returns `unit.ctf`, because `UnitModel.ctf` exists, so no API change was needed. Gates: api 1100, cloud_functions 449, build_files 304 passed; frontend 9 files / 64 tests. The CTF eslint gate exits 0 on the existing paths. tsc reports no CTF, TeacherUnit or unit-transform/model errors. The `unit.service.ts` TS7053 errors were already there.
+- **Blockers:** I did not do the browser check (it needs a signed-in instructor and a live API). It moves to I4b.
+- **Next:** I7 Action confirm dialog (PRD.md:1059).

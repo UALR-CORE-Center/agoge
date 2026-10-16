@@ -37,3 +37,17 @@ describe("specification accessibility features", () => {
         },
     );
 });
+
+describe("unit CTF capability", () => {
+    it.each([undefined, null, "yes", true])("is not CTF-capable when ctf is %s", (ctf) => {
+        const result = transformToFullUnit({ unit: { id: "abcdefghij", ctf }, workouts: [], roster: 0 });
+        expect(result.ctf_capable).toBe(false);
+    });
+
+    it("is CTF-capable when the unit carries a ctf block", () => {
+        const result = transformToFullUnit({
+            unit: { id: "abcdefghij", ctf: { flags: [] } }, workouts: [], roster: 0,
+        });
+        expect(result.ctf_capable).toBe(true);
+    });
+});
