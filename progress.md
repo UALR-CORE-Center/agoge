@@ -112,7 +112,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I16** Event log panel — spec + done-when at PRD.md:1070
 - [x] **I17** Submission log panel — spec + done-when at PRD.md:1071
 
-- [ ] **LINT1** `frontend/src/utilities/transformers/unit.transform.test.ts:2` fails eslint `import/order` (`./unit.transform` should come after `./specificationEdit.transform`). This was already the case before I6. Not CTF-specific, and it is outside the CTF lint gate.
+- [x] **LINT1** `frontend/src/utilities/transformers/unit.transform.test.ts:2` fails eslint `import/order` (`./unit.transform` should come after `./specificationEdit.transform`). This was already the case before I6. Not CTF-specific, and it is outside the CTF lint gate.
 
 ### Group J — Student UI
 - [ ] **J1** Student CTF polling — spec + done-when at PRD.md:1075
@@ -901,3 +901,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `CtfStateResponse.boards` already carries `workout_id` → `team_name` for every board, so a panel that needs team names should take it as a prop rather than add a read. Gates: frontend 19 files / 163 tests. ESLint is clean on the CTF paths, and tsc reports no CTF errors. No Python changed, so the Python suites were not re-run. `agoge-reviewer` found no defects.
 - **Blockers:** none. I4b is still open for a human to do the browser checks.
 - **Next:** LINT1 (a one-line import-order fix), then J1 Student CTF polling (PRD.md:1075).
+
+### Iteration 70 — 2026-10-16
+- **Completed:** LINT1. In `frontend/src/utilities/transformers/unit.transform.test.ts`, the `./unit.transform` import now comes after `./specificationEdit.transform`. `npx eslint` on the file exits 0 with 0 warnings. Nothing else changed.
+- **Learned:** `import/order` sorts sibling imports alphabetically by path. Gates: frontend 19 files / 163 tests; ESLint is clean on the CTF paths; tsc reports no CTF errors. No Python changed, so the Python suites were not re-run.
+- **Blockers:** none. I4b is still open for a human to do the browser checks.
+- **Next:** J1 Student CTF polling (PRD.md:1075).
