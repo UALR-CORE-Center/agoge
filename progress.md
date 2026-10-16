@@ -59,7 +59,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **F1** Config and feature flag — spec + done-when at PRD.md:1001
 - [x] **F2** Error helper — spec + done-when at PRD.md:1003
 - [x] **F3** Audit helper — spec + done-when at PRD.md:1004
-- [ ] **F4** Event create — spec + done-when at PRD.md:1006
+- [x] **F4** Event create — spec + done-when at PRD.md:1006
 - [ ] **F5** Event read, update, delete — spec + done-when at PRD.md:1008
 - [ ] **F6** Event actions — spec + done-when at PRD.md:1009
 - [ ] **F7** Event reads for panels — spec + done-when at PRD.md:1011
@@ -402,3 +402,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - ESLint gate: "No files matching the pattern" for the CTF paths. This is expected because no Group I/J task is done.
   - tsc gate: 0 errors name a CTF file.
 - **Reopened:** none.
+
+### Iteration 31 — 2026-10-16
+- **Completed:** F4 — `api/core/ctf/event.py` `CtfEvent(env_dict=None, db=None, env=None).create(unit_id, user)` returns the new ctf_id. The checks run in the PRD's order, all before any write: unit missing → `NotFound`; `ctf` absent/null → `BadRequest`, and so is a malformed block (it goes through `ModelValidator(CtfSpecModel)`); caller not in `instructor_id` and not an admin → `Unauthorized`; no workouts → `BadRequest`; more than `ctf_max_boards` (from `env_dict`, default 100; an invalid value or a bool falls back to 100) → `BadRequest`; a workout already on an `active` board (queried with `in` in chunks of 30) → `Conflict` naming it; a missing or empty seed → `ServiceUnavailable` with the PRD's exact text. Workouts in DELETING_SERVERS/COMPLETED_DELETING_SERVERS/DELETED get no board. The writes are the digests, then the boards, then the event last. Each commit holds at most 500 writes, which keeps `batch_write` off its splitting path, because that path swallows errors. If a commit fails, the documents already committed are deleted (best effort) and the error is re-raised. `api/unit_tests/test_ctf_event_create.py` (32 tests, in-memory fake db) covers SC-1, SC-2, SC-4 (including the bare digest part of each value and the seed), the 701-write split into 500+201, the rollback, and every refusal writing nothing.
+- **Learned:** Digest docs are keyed by digest, and the digest depends only on (seed, seed_version, workout, flag id). So a workout's second event overwrites the first event's digest docs. **F5 delete must only delete digest docs whose `ctf_id` matches.** The Conflict check is not transactional, so two concurrent creates on the same unit could both pass. The PRD asks for no transaction here, so I left it as it is. Gates now: api 474, cloud_functions 417, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** F5 Event read, update, delete (PRD.md:1008). Add `get`/`list`/`update`/`delete` to `CtfEvent`, and reuse the instructor-or-admin check from `create`.
