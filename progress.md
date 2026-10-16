@@ -44,7 +44,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **D1** `set_metadata` — spec + done-when at PRD.md:979
 - [x] **D2** `get_guest_attributes` — spec + done-when at PRD.md:981
 - [x] **D3** Plant contract module — spec + done-when at PRD.md:982
-- [ ] **D4** Loader at build — spec + done-when at PRD.md:983
+- [x] **D4** Loader at build — spec + done-when at PRD.md:983
 
 ### Group E — Planting
 - [ ] **E1** Payload builder — spec + done-when at PRD.md:988
@@ -282,3 +282,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** The loaders contain no `exit`/`return` that escapes their scope, because `_merge_metadata_item` concatenates them with other scripts. The Linux loader starts with `#!/bin/bash`, which becomes a harmless comment when it is appended after other content. Gates now: api 383, cloud_functions 298, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** D4 Loader at build (`LabServerManager._add_metadata` + `_merge_metadata_item` concatenating `windows-startup-script-ps1`; tests in `cloud_functions/tests/test_ctf_loader_stub.py`, PRD.md:983). Note that the existing Windows assessment script uses `windows-startup-script-bat`, a different key that needs no change.
+
+### Iteration 20 — 2026-10-16
+- **Completed:** D4 — `LabServerManager._add_metadata` ends with `_add_ctf_loaders`, which appends `LINUX_LOADER` to `startup-script` and `WINDOWS_LOADER` as `windows-startup-script-ps1` on every lab server, after the spec, custom, Guacamole and assessment scripts. It skips a loader whose text is already in that key's value, so copied metadata never carries two. `_merge_metadata_item` is now a classmethod that concatenates both script keys (`_CONCATENATED_SCRIPT_KEYS`) and tolerates an existing `value: None`. `cloud_functions/tests/test_ctf_loader_stub.py` (10 tests) checks that custom, Guacamole and assessment scripts are kept in order with the loader last, that spec ps1 and two merged ps1 scripts are concatenated, that the Windows `windows-startup-script-bat` assessment key is untouched, that loaders are not duplicated, and that the concatenated script runs under bash: the original script runs, then the loader runs a fake-curl plant, with no stdout.
+- **Learned:** The loaders are not gated on the unit having a `ctf` block (PRD: "added to every lab server"). The guest agent runs only its own OS's key, and a missing `agoge-ctf-plant` key makes the loader a no-op. Assessment Linux scripts have no top-level `exit`, so an appended loader still runs. `ruff` is not installed in `./venv`. Gates now: api 383, cloud_functions 308, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** E1 Payload builder (`FlagPlanter.build_payload`, PRD.md:988). Ignore `file_mode`/`file_owner` except on Linux `file` placements (see Iteration 14).
