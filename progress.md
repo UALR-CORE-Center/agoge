@@ -24,7 +24,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **A1** CTF constants — spec + done-when at PRD.md:950
 - [x] **A2** CTF specification models — spec + done-when at PRD.md:952
 - [x] **A3** CTF stored models — spec + done-when at PRD.md:954
-- [ ] **A4** CTF request models — spec + done-when at PRD.md:955
+- [x] **A4** CTF request models — spec + done-when at PRD.md:955
 - [ ] **A5** CTF response models — spec + done-when at PRD.md:956
 - [ ] **A6** Spec block wiring — spec + done-when at PRD.md:957
 
@@ -172,3 +172,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Class-based `Config` (as the PRD specifies and existing models use) emits a Pydantic deprecation warning — harmless, matches house style. Gates now: api 130, cloud_functions 285, build_files 293, frontend 28.
 - **Blockers:** none.
 - **Next:** A4 CTF request models (PRD.md:955; definitions start at PRD.md:513).
+
+### Iteration 7 — 2026-10-16
+- **Completed:** A4 — `CtfCreateRequest`, `CtfUpdateRequest`, `CtfActionRequest`, `CtfReplantRequest`, `CtfHostResetRequest`, `CtfScoreAdjustRequest`, `CtfSubmitRequest` appended after `CtfLogModel` in `common/models/agoge.py` (verbatim from PRD.md:520-545); `api/unit_tests/test_ctf_request_models.py` (41 tests) covers the build-id pattern, Literal action/mode rejection, delta/reason/flag bounds, and that an explicit `scoreboard_frozen_at: null` shows up in `model_fields_set`.
+- **Learned:** The ruff PostToolUse hook flags a pre-existing unused `HttpUrl` import at `common/models/agoge.py:5` on every edit — not from CTF work. Gates now: api 171, cloud_functions 285, build_files 293, frontend 28.
+- **Blockers:** none.
+- **Next:** A5 CTF response models (PRD.md:956; definitions start at PRD.md:547, in `common/models/response.py`).

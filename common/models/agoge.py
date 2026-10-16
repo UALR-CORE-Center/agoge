@@ -898,6 +898,40 @@ class CtfLogModel(BaseModel):
     created_at: float = Field(...)
 
 
+class CtfCreateRequest(BaseModel):
+    unit_id: str = Field(..., pattern=r'^[a-z]{10}$')
+
+
+class CtfUpdateRequest(BaseModel):
+    """Only fields present in the body are applied (model_fields_set);
+    sending scoreboard_frozen_at: null unfreezes."""
+    ends_at: Optional[float] = None
+    scoreboard_frozen_at: Optional[float] = None
+    public_scoreboard_enabled: Optional[bool] = None
+
+
+class CtfActionRequest(BaseModel):
+    action: CtfAction
+
+
+class CtfReplantRequest(BaseModel):
+    workout_ids: Optional[List[str]] = Field(default=None, description="Null = every board")
+    servers: Optional[List[str]] = Field(default=None, description="Null = every flag-bearing server")
+
+
+class CtfHostResetRequest(BaseModel):
+    mode: ResetMode
+
+
+class CtfScoreAdjustRequest(BaseModel):
+    delta: int = Field(..., ge=-10000, le=10000)
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+class CtfSubmitRequest(BaseModel):
+    flag: str = Field(..., min_length=1, max_length=200)
+
+
 UnitModel.model_rebuild()
 AssessmentModel.model_rebuild()
 LMSIntegrationModel.model_rebuild()
