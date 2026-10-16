@@ -138,3 +138,40 @@ def test_ctf_enabled_required_sees_toggle_after_cache_expires(db, clock):
 
     clock.now += config.CACHE_SECONDS
     assert client.get("/ctf/thing").status_code == 200
+
+
+# --- budget_exceeded (CtfStateResponse banner) ---------------------------------------
+
+def test_budget_exceeded_shares_the_cached_admin_info_read(db, clock):
+    db.get.return_value = {"ctf_enabled": True, "budget_exceeded": True}
+
+    assert config.is_ctf_enabled() is True
+    assert config.is_budget_exceeded() is True
+    assert db.get.call_count == 1
+
+
+def test_budget_exceeded_change_is_seen_after_cache_expires(db, clock):
+    db.get.return_value = {"budget_exceeded": False}
+    assert config.is_budget_exceeded() is False
+
+    db.get.return_value = {"budget_exceeded": True}
+    clock.now += config.CACHE_SECONDS
+
+    assert config.is_budget_exceeded() is True
+
+
+@pytest.mark.parametrize("doc", [None, {}, {"budget_exceeded": "true"}, {"budget_exceeded": 1}])
+def test_budget_exceeded_is_false_unless_a_real_true(db, clock, doc):
+    db.get.return_value = doc
+
+    assert config.is_budget_exceeded() is False
+
+
+def test_budget_exceeded_read_failure_reports_false_and_is_not_cached(db, clock):
+    db.get.side_effect = RuntimeError("firestore down")
+    assert config.is_budget_exceeded() is False
+
+    db.get.side_effect = None
+    db.get.return_value = {"budget_exceeded": True}
+
+    assert config.is_budget_exceeded() is True
