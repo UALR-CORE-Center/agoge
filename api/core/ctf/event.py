@@ -2,6 +2,8 @@ import time
 from datetime import datetime, timezone
 from typing import List
 
+from google.cloud.firestore_v1 import FieldFilter
+from google.cloud.firestore_v1.field_path import FieldPath
 from pydantic import ValidationError
 
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections, DbOperationTypes, DbOperators
@@ -13,8 +15,10 @@ from common.models.agoge import (
     CtfEventModel,
     CtfFlagStateModel,
     CtfSpecModel,
+    CtfUpdateRequest,
 )
 from common.models.model_validators.model_validator import ModelValidator
+from common.models.response import CtfEventSummary
 from common.models.users import AgogeUser
 from common.utilities.ctf_flags import derive_flag_value, flag_digest
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
@@ -87,8 +91,7 @@ class CtfEvent:
         instructor_ids = unit.get('instructor_id') or []
         if isinstance(instructor_ids, str):
             instructor_ids = [instructor_ids]
-        if not user.is_admin and user.email not in instructor_ids:
-            raise Unauthorized(message=UNAUTHORIZED_MESSAGE)
+        self._authorize(instructor_ids, user)
 
         workouts = self._unit_workouts(unit_id)
         if not workouts:
@@ -130,6 +133,123 @@ class CtfEvent:
             unit_id=unit_id, boards=len(board_docs), digests=len(digest_docs),
         )
         return ctf_id
+
+    def get(self, ctf_id: str, user: AgogeUser) -> CtfEventModel:
+        """The event, for an admin or one of its instructors."""
+        event = self._load(ctf_id)
+        self._authorize(event.instructor_id, user)
+        return event
+
+    def list(self, user: AgogeUser) -> List[CtfEventSummary]:
+        """Every event the caller may operate (all of them for an admin), newest first.
+        A document that fails validation is skipped, so one bad event cannot hide the rest."""
+        filters = None if user.is_admin else [('instructor_id', DbOperators.ARRAY_CONTAINS, user.email)]
+        docs = self.db.query(collection_name=DbCollections.CTF, filters=filters) or []
+        events = ModelValidator(CtfEventModel, log_location=self.log_name).load(docs, halt_on_error=False)
+        # halt_on_error=False leaves None in place of each invalid document.
+        events = sorted((e for e in events if e is not None), key=lambda e: e.creation_timestamp, reverse=True)
+        return [self._summary(event) for event in events]
+
+    def update(self, ctf_id: str, request: CtfUpdateRequest, user: AgogeUser) -> CtfEventModel:
+        """Apply only the fields present in the request body (`model_fields_set`), so an explicit
+        `scoreboard_frozen_at: null` unfreezes while an absent one is left alone. ARCHIVED is
+        read-only. Read and write share one transaction so a concurrent archive is not overrun."""
+        fields = {name: getattr(request, name) for name in request.model_fields_set}
+        return self.db.transaction(lambda transaction: self._update_in_transaction(transaction, ctf_id, fields, user))
+
+    def _update_in_transaction(self, transaction, ctf_id: str, fields: dict, user: AgogeUser) -> CtfEventModel:
+        doc_ref = self.db.db.collection(DbCollections.CTF.value).document(ctf_id)
+        snapshot = doc_ref.get(transaction=transaction)
+        if not snapshot.exists:
+            raise NotFound(message="CTF event not found")
+        event = ModelValidator(CtfEventModel, log_location=self.log_name).load(snapshot.to_dict())
+        self._authorize(event.instructor_id, user)
+        if event.state == CtfStates.ARCHIVED.value:
+            raise Conflict(message="CTF event is ARCHIVED and read-only")
+        if not fields:
+            return event
+        updated = ModelValidator(CtfEventModel, log_location=self.log_name).load({**event.model_dump(), **fields})
+        dumped = updated.model_dump()
+        transaction.update(doc_ref, {name: dumped[name] for name in fields})
+        self.logger.info(f"{self.class_name}:{ctf_id} - Updated CTF event", fields=",".join(sorted(fields)))
+        return updated
+
+    def delete(self, ctf_id: str, user: AgogeUser) -> None:
+        """Admin only, DRAFT or ARCHIVED only. Deletes the rate-limit, digest and board documents,
+        then the event. Submissions and the event log are kept.
+
+        The event goes last: if a commit fails it is still there in a deletable state, and a retry
+        finds whatever is left because every document is located by query or by derived id.
+        """
+        if not user.is_admin:
+            raise Unauthorized(message=UNAUTHORIZED_MESSAGE)
+        event = self._load(ctf_id)
+        if event.state not in (CtfStates.DRAFT.value, CtfStates.ARCHIVED.value):
+            raise Conflict(
+                message=f"CTF event is {self._state_name(event.state)}; only DRAFT or ARCHIVED events can be deleted"
+            )
+        # A later event on the same workout overwrites these digest ids (the digest does not depend on
+        # the event), so only digests still owned by this event are deleted.
+        digests = self.db.query(
+            collection_name=DbCollections.CTF_DIGEST,
+            filters=[('ctf_id', DbOperators.EQUAL, ctf_id)],
+        ) or []
+        docs = [
+            *((DbCollections.CTF_RATE_LIMIT, doc_id) for doc_id in self._rate_limit_ids(ctf_id)),
+            *((DbCollections.CTF_DIGEST, digest['digest']) for digest in digests),
+            *((DbCollections.CTF_BOARD, f"{ctf_id}-{workout_id}") for workout_id in event.board_ids),
+            (DbCollections.CTF, ctf_id),
+        ]
+        for start in range(0, len(docs), self.MAX_WRITES_PER_COMMIT):
+            self.db.batch_write([
+                self._operation(collection, doc_id, DbOperationTypes.DELETE)
+                for collection, doc_id in docs[start:start + self.MAX_WRITES_PER_COMMIT]
+            ])
+        self.logger.info(
+            f"{self.class_name}:{ctf_id} - Deleted CTF event",
+            boards=len(event.board_ids), digests=len(digests), documents=len(docs),
+        )
+
+    def _rate_limit_ids(self, ctf_id: str) -> List[str]:
+        """Rate-limit documents carry no ctf_id field; their ids are `{ctf_id}-{workout_id}-{bucket}`
+        with an arbitrary submitted bucket, so they are found by document-id range. '.' is the
+        character after '-', which makes [ctf_id + '-', ctf_id + '.') exactly this event's ids."""
+        collection = self.db.db.collection(DbCollections.CTF_RATE_LIMIT.value)
+        query = collection.where(
+            filter=FieldFilter(FieldPath.document_id(), '>=', collection.document(f"{ctf_id}-"))
+        ).where(
+            filter=FieldFilter(FieldPath.document_id(), '<', collection.document(f"{ctf_id}."))
+        )
+        return [snapshot.id for snapshot in query.stream()]
+
+    def _load(self, ctf_id: str) -> CtfEventModel:
+        doc = self.db.get(collection_name=DbCollections.CTF, doc_id=ctf_id)
+        if not doc:
+            raise NotFound(message="CTF event not found")
+        return ModelValidator(CtfEventModel, log_location=self.log_name).load(doc)
+
+    @staticmethod
+    def _authorize(instructor_ids: List[str], user: AgogeUser) -> None:
+        if not user.is_admin and user.email not in instructor_ids:
+            raise Unauthorized(message=UNAUTHORIZED_MESSAGE)
+
+    @classmethod
+    def _summary(cls, event: CtfEventModel) -> CtfEventSummary:
+        return CtfEventSummary(
+            id=event.id,
+            name=event.spec.name,
+            unit_id=event.unit_id,
+            state=event.state,
+            state_name=cls._state_name(event.state),
+            board_count=len(event.board_ids),
+            creation_timestamp=event.creation_timestamp,
+            starts_at=event.starts_at,
+            ends_at=event.ends_at,
+        )
+
+    @staticmethod
+    def _state_name(state: int) -> str:
+        return CtfStates(state).name if state in CtfStates._value2member_map_ else str(state)
 
     def _new_board(self, event: CtfEventModel, workout: dict, seed: str):
         workout_id = workout['id']
@@ -184,7 +304,7 @@ class CtfEvent:
             busy.update(board['workout_id'] for board in boards)
         return [workout_id for workout_id in workout_ids if workout_id in busy]
 
-    def _commit(self, ctf_id: str, docs: list) -> None:
+    def _commit(self, ctf_id: str, docs: List[tuple]) -> None:
         """Set every (collection, doc_id, data) in commits of at most MAX_WRITES_PER_COMMIT.
         If a commit fails, the documents already committed are deleted (best effort) so an
         orphaned active board cannot block the next attempt with a Conflict."""
@@ -205,7 +325,7 @@ class CtfEvent:
             self._rollback(ctf_id, docs[:committed])
             raise
 
-    def _rollback(self, ctf_id: str, docs: list) -> None:
+    def _rollback(self, ctf_id: str, docs: List[tuple]) -> None:
         for start in range(0, len(docs), self.MAX_WRITES_PER_COMMIT):
             chunk = docs[start:start + self.MAX_WRITES_PER_COMMIT]
             try:
