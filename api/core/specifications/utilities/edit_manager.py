@@ -9,12 +9,13 @@ from common.constants.build_constants import BuildConstants
 from common.constants.database import DbCollections
 from common.constants.states import SpecificationStates
 from common.exceptions import AgogeValidationError
-from common.models.agoge import NetworkModel, FirewallRuleModel, RouteModel, ServerModel
+from common.models.agoge import CtfSpecModel, NetworkModel, FirewallRuleModel, RouteModel, ServerModel
 from common.models.users import AgogeUser
 from common.utilities.id_generator import IdGenerator
 
 from utilities.infrastructure_as_code.object_validators import (
     AssessmentValidator,
+    CtfValidator,
     FirewallRulesValidator,
     NetworksValidator,
     RoutesValidator,
@@ -291,6 +292,11 @@ class SpecEditManager(LabSpecBase):
             if self.spec.get('web_applications'):
                 web_apps = WebApplicationsValidator(self.spec).load()
                 self.spec.update(web_apps)
+
+        # Outside the build_type branch so no spec carrying a ctf block skips the flag path checks
+        if ctf := self.spec.get('ctf'):
+            CtfSpecModel(**ctf)
+            CtfValidator(self.spec).load()
 
     def _form_to_dict(
         self,

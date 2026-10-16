@@ -36,7 +36,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 
 ### Group C — Specification validation
 - [x] **C1** Flag validator — spec + done-when at PRD.md:972
-- [ ] **C2** Validator wiring — spec + done-when at PRD.md:974
+- [x] **C2** Validator wiring — spec + done-when at PRD.md:974
+
+- [ ] **BUG** `SpecEditManager.save` writes the spec to Firestore (catalog on publish, edits otherwise) *before* calling `is_valid()`, so an invalid spec is persisted and then the call raises. Callers in `lab_spec_edit.py` check `is_valid()` first, which masks it. Not CTF-specific.
 
 ### Group D — Compute primitives and the loader
 - [ ] **D1** `set_metadata` — spec + done-when at PRD.md:979
@@ -230,3 +232,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Paths use `re.fullmatch` since `$` alone accepts a trailing `\n`. `file_mode`/`file_owner` "Linux file placements only" is not in C1's rule list and is not enforced — E1 should ignore them off Linux `file`. Gates now: api 350, cloud_functions 285, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** C2 Validator wiring — call `CtfValidator(self.spec).load()` in `edit_manager._validate_spec` and `file_manager._validate_spec` when `ctf` is present (PRD.md:974).
+
+### Iteration 15 — 2026-10-16
+- **Completed:** C2 — `SpecEditManager._validate_spec` and `SpecFileManager._validate_spec` now run `CtfSpecModel(**ctf)` then `CtfValidator(self.spec).load()` whenever `ctf` is present, placed outside the unit/escape-room `build_type` branch so no spec with a ctf block skips it. `api/unit_tests/test_ctf_spec_save_validation.py` (8 tests; `LabSpecBase` GCP clients and non-CTF validators patched) shows each save path rejecting a bad path / unknown server via `is_valid()` and `save()`; 6 of 8 fail with the wiring reverted.
+- **Learned:** No prior tests constructed the spec managers; patch `CloudEnv`, `DocumentDatabaseFactory`, `PubSubManager`, `Logger` in `lab_spec_base` to build them offline. Found and queued an edit-manager save-before-validate bug. Gates now: api 358, cloud_functions 285, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** D1 `set_metadata` (PRD.md:979).
