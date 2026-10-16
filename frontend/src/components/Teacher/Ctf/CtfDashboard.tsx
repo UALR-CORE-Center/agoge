@@ -6,6 +6,7 @@ import {URL_ERROR} from "../../../router/urls";
 import {CtfStateResponse, CtfStates} from "../../../services/Ctf/ctf.model";
 import {ctfService} from "../../../services/Ctf/ctf.service";
 import HttpError from "../../Common/Errors/HttpError";
+import CtfEventControl from "./CtfEventControl";
 import CtfStateChip from "./CtfStateChip";
 import {formatDuration, remainingSeconds} from "./ctfTime";
 
@@ -99,6 +100,7 @@ const CtfDashboard: React.FC = () => {
                         </Typography>
                         <CtfStateChip state={event.state} />
                         <RemainingTime event={event} />
+                        <CtfEventControl ctfId={event.id} state={event.state} onActionComplete={fetchState} />
                     </Paper>
                 )}
             </Box>
