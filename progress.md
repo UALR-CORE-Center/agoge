@@ -67,7 +67,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - Reopened by verification: `_fail_unpublished` (api/core/ctf/event.py:299-315) runs only when `self.pubsub.msg(...)` raises *synchronously*. `PubSubManager.msg` (common/utilities/gcp/pubsub_manager.py:61-67) returns the `publisher.publish(...)` future and nothing ever calls `.result()` on it. google-cloud-pubsub reports real publish failures (network, permission, timeout, a missing topic) through that future, so in production the recovery never runs and the event still sticks in ARMING. The tests miss this because `FakePubSub.msg` (api/unit_tests/test_ctf_event_actions.py:87-89, :170, :223) raises in-line, which the real client does not do for these failures. Missing: resolve each publish future (for example, call `.result(timeout=...)` per message, or collect the futures and check them) and treat any that failed as unpublished. Add a test whose fake returns a future that fails.
 
 ### Group G — Hosts
-- [ ] **G1** Replant publish — spec + done-when at PRD.md:1015
+- [x] **G1** Replant publish — spec + done-when at PRD.md:1015
 - [ ] **G2** Host rows — spec + done-when at PRD.md:1016
 - [ ] **G3** Reset publish — spec + done-when at PRD.md:1017
 - [ ] **G4** Reset dispatcher — spec + done-when at PRD.md:1018
@@ -458,3 +458,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Any new code that publishes must resolve the future to detect failure; `msg` itself only raises for client-side errors. Gates now: api 597, cloud_functions 417, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** G1 Replant publish (PRD.md:1015).
+
+### Iteration 37 — 2026-10-16
+- **Completed:** G1 — `api/core/ctf/hosts.py` `CtfHosts(env_dict=None, db=None, pubsub=None).replant(ctf_id, workout_ids, servers, user)` returns the number of `CTF_PLANT` messages published. It reuses `CtfEvent` for the db, PubSub, `get` (`NotFound`, then `Unauthorized`) and its state naming. Replant is allowed only in ARMED/RUNNING/PAUSED/BROKEN; any other state → `Conflict` naming the state. `None` selects every board (`board_ids` order) or every flag-bearing spec server (decoy-only servers included). An empty list, an unknown board, or a server with no flags → `BadRequest`, before any publish. Duplicates are published once. Each message carries `SERVER_NAME`, so the handler plants only that server. Every publish future is resolved against one shared 30 s deadline, and the first error is raised after the others resolve; an in-line raise stops publishing. Nothing is written, because the planter sets `planting` itself. `api/unit_tests/test_ctf_hosts_replant.py` has 24 tests.
+- **Learned:** Every board carries every spec flag (`CtfEvent._new_board`), so the flag-bearing servers come from the spec without a board read. If board flag sets ever differ, filter per board as `board_servers` does. With no boards, replant returns 0 and does not raise; R1 should not present that as a successful replant. Gates now: api 621, cloud_functions 417, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** G2 Host rows (PRD.md:1016), `CtfHosts.hosts(ctf_id)` in the same file.
