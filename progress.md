@@ -30,7 +30,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 
 ### Group B — Flag derivation and state
 - [x] **B1** Derivation module — spec + done-when at PRD.md:962
-- [ ] **B2** Seed property — spec + done-when at PRD.md:964
+- [x] **B2** Seed property — spec + done-when at PRD.md:964
 - [ ] **B3** Seed provisioning — spec + done-when at PRD.md:965
 - [ ] **B4** CTF state manager — spec + done-when at PRD.md:967
 
@@ -206,3 +206,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - No TODO, stub or `NotImplemented` in the new code. The only TODO, at `agoge.py:699`, comes from `6296b93` and predates this work. No new test is skipped, xfailed or vacuous. Minor coverage gaps that don't block anything: no test accepts `reason` at exactly 500 characters or `flag` at exactly 200, and some response-model tests are thin.
 - **Gate results:** api/unit_tests 233 passed; cloud_functions/tests 285 passed; build_files/cloud_deployment/tests 293 passed; frontend `npm test` exited 0 with 4 files and 28 tests passed. ESLint gate: none of the CTF paths exist yet ("No files matching the pattern"), which is expected because no Group I/J task is done. tsc gate: 0 errors name a CTF file.
 - **Reopened:** none.
+
+### Iteration 11 — 2026-10-16
+- **Completed:** B2 — `ctf_flag_seed` lazy property on `CloudEnv` (`_ctf_flag_seed` cache, `get_secret('ctf_flag_seed')`), mirroring `openai_api_key`; `api/unit_tests/test_ctf_seed_property.py` (6 tests, Secret Manager client patched) covers no read at construction, tenant-project `latest` path, caching, `shared_api_secrets: ['ctf_flag_seed']` raising `ValueError`, tenant-local read when other secrets are shared, and a missing seed returning `None` uncached (retried next access).
+- **Learned:** `shared_api_secret_names` whitelists only sendgrid/openai/shodan, so the seed can never be routed to the parent project — no extra guard needed. Gates now: api 239, cloud_functions 285, build_files 293, frontend 28.
+- **Blockers:** none.
+- **Next:** B3 Seed provisioning (`ctf_enabled` in `environment_variables.py`, PRD.md:965).
