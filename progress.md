@@ -63,7 +63,8 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **F5** Event read, update, delete — spec + done-when at PRD.md:1008
 - [x] **F6** Event actions — spec + done-when at PRD.md:1009
 - [x] **F7** Event reads for panels — spec + done-when at PRD.md:1011
-- [x] **BUG3** An `arm` whose Pub/Sub publish fails partway (`CtfEvent._publish_arm`) leaves the event in ARMING with `boards_pending` above 0 and no way out, because ARMING→ARMING is not an allowed transition and only arm workers leave ARMING. It needs a recovery path, such as a re-publish for boards still `pending`, or a stale-ARMING sweep that moves the event to BROKEN. The PRD does not specify one.
+- [ ] **BUG3** An `arm` whose Pub/Sub publish fails partway (`CtfEvent._publish_arm`) leaves the event in ARMING with `boards_pending` above 0 and no way out, because ARMING→ARMING is not an allowed transition and only arm workers leave ARMING. It needs a recovery path, such as a re-publish for boards still `pending`, or a stale-ARMING sweep that moves the event to BROKEN. The PRD does not specify one.
+  - Reopened by verification: `_fail_unpublished` (api/core/ctf/event.py:299-315) runs only when `self.pubsub.msg(...)` raises *synchronously*. `PubSubManager.msg` (common/utilities/gcp/pubsub_manager.py:61-67) returns the `publisher.publish(...)` future and nothing ever calls `.result()` on it. google-cloud-pubsub reports real publish failures (network, permission, timeout, a missing topic) through that future, so in production the recovery never runs and the event still sticks in ARMING. The tests miss this because `FakePubSub.msg` (api/unit_tests/test_ctf_event_actions.py:87-89, :170, :223) raises in-line, which the real client does not do for these failures. Missing: resolve each publish future (for example, call `.result(timeout=...)` per message, or collect the futures and check them) and treat any that failed as unpublished. Add a test whose fake returns a future that fails.
 
 ### Group G — Hosts
 - [ ] **G1** Replant publish — spec + done-when at PRD.md:1015
@@ -433,3 +434,21 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** I picked recovery at the point of failure, not a stale-ARMING sweep. It needs no new state, transition or scheduler work, and it uses the board statuses that already exist. The remaining gap is a recovery transaction that fails too (Firestore down at the same moment). Only a sweep would cover that, and the PRD asks for none. Gates now: api 593, cloud_functions 417, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** G1 Replant publish (PRD.md:1015).
+
+### Verification — 2026-10-16 — FAIL
+- **Checked:** F4, F5, F6, F7 and BUG3, the `[x]` tasks added since the last verification. I read all of `api/core/ctf/event.py`, `common/utilities/ctf_state_manager.py`, the Firestore wrapper methods it calls (`query`, `operation`, `batch_write`/`_handle_batch_splitting`, `transaction`), `PubSubManager.msg`, the ArmWorker `run`/`_aggregate`, and the four `test_ctf_event_*.py` files, against PRD.md:1006-1011, the action map, the endpoint table and SC-1/2/4/13/14.
+  - F4: the checks run in the PRD order and all come before the first write. Commits are ≤ 500, which keeps `batch_write` off `_handle_batch_splitting`'s error-swallowing path (the split only happens at > 500). The event is written last, with a rollback. SC-1 uses the real `IdGenerator` with `fullmatch [a-z]{10}`. SC-2 covers both a missing `ctf` and `ctf: null`. SC-4 json-dumps every SET document from every commit, nested flags included, and also checks for the bare digest part and the seed.
+  - F5: `update` writes only the `model_fields_set` keys inside a transaction, and ARCHIVED → `Conflict`. `delete` is admin-only, DRAFT/ARCHIVED only, and removes rate-limit (doc-id range), owned digest and board docs, with the event last. Submissions and the log are kept, and tests assert this.
+  - F6: the `ACTIONS` From/To sets match the action map exactly, and every state write goes through `CtfStateManager.transition_in_transaction`. The side effects (`boards_pending`, board `arm_status`/`active`, `starts_at`, `paused_at`, the resume math, `ends_at`) are asserted against a fixed clock. SC-13 compares the full message list to exactly one `CTF_ARM_BOARD` per board, and SC-14 checks all 9 legal pairs publish nothing. 16 illegal pairs raise `Conflict` with the state name, and nothing is written.
+  - F7: `state()` is one event get plus one board query, and the test asserts the read list. Rows are newest first with a cap of 500, filters are validated, and `CtfFlagRow` has no digest field.
+  - BUG3: see Reopened.
+  - No TODO, stub, `NotImplemented` or hardcoded test-only value in the new code. (`raise NotImplemented` in `document_database.py:208` is pre-existing and not CTF code.)
+  - Non-blocking: the ArmWorker checks `arm_status` for a terminal value only before planting. A board that recovery marked `failed` while its worker is planting is still planted, but `_aggregate` re-checks inside its transaction, so it is not counted twice. `test_submissions_rejects_an_unknown_verdict` does not assert that no read happened (the log variant does).
+- **Gate results:**
+  - api/unit_tests: 593 passed.
+  - cloud_functions/tests: 417 passed.
+  - build_files/cloud_deployment/tests: 304 passed.
+  - frontend `npm test`: 4 files, 28 tests passed.
+  - ESLint gate: exit 2, "No files matching the pattern "src/components/Teacher/Ctf"". This is expected because no Group I/J task is done.
+  - tsc gate: 0 errors name a CTF file.
+- **Reopened:** BUG3. `_publish_arm` recovers only when `PubSubManager.msg` raises synchronously. `msg` (common/utilities/gcp/pubsub_manager.py:61-67) returns the `publisher.publish` future, and nothing calls `.result()` on it. Real publish failures (network, permission, timeout) surface through that future, so in production `_fail_unpublished` never runs and the event still sticks in ARMING with `boards_pending > 0`. The tests pass only because `FakePubSub.msg` raises in-line (test_ctf_event_actions.py:87-89).
