@@ -994,3 +994,22 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** The guide's JSON example was checked against both `CtfValidator` and `CtfSpecModel`; both accept it. Re-run that check if the spec model changes. The plant loader is added to every lab server at build (`LabServerManager._add_ctf_loaders`), so servers built before the CTF release cannot be planted, and the guide says to rebuild them. Docs only: no code changed, so no suites were re-run.
 - **Blockers:** none. I4b is still open: a human must do the browser checks. It is the only incomplete task, so the loop cannot reach ALL TASKS COMPLETE without it.
 - **Next:** I4b, the human browser checks listed on its queue line.
+
+### Verification — 2026-10-16 — PASS
+- **Checked:** J1, J2, J3, J4 and K1, the `[x]` tasks changed since the last verification (diff `31c0e48..2fbd178`). I compared `useCtfBoard.ts`, `CtfBanner.tsx`, `FlagSubmitCard.tsx`, `ChallengeList.tsx`, their tests, the `Workout.tsx` placement and `docs/guides/game-master-guide.md` with PRD.md:1072-1085.
+  - J1: `usePolling` runs at 15 s (`BOARD_POLL_INTERVAL_MS`) and its first tick is the mount read. It is independent of the 3.5 s workout poll. A not-enrolled answer disables polling, and a ref guard stops any tick that was already scheduled. The tests assert exact call counts with fake timers.
+  - J2: the banner is a `Paper component="section" aria-labelledby` rendered as the aside's first child, above `TimerBox`, only when `board` is set. It shows the name, a state chip, a countdown and the rules link. The link renders only for an http(s) URL.
+  - J3: there is one `TextField` and `flag_format` is shown verbatim. Verdicts go through `showModal(SimpleSnackbar, {severity})`. On a 429, `HttpError.message` carries the server's `detail` (`api-request.service.ts:31`, `http_errors.py:35`). The card is placed after `ConfigureAccess`.
+  - J4: the list shows category, points, solved state and a hint button. The hint goes through `ActionConfirmDialog`, which states the cost. There is no host or path column, and the API's challenge model has no such fields. When `public_scoreboard_enabled`, the standings are polled every 30 s and the `is_you` row is `selected` with `aria-current`. The list is placed after `WorkoutTable`.
+  - API contract: `ctf.model.ts:224-268` matches `common/models/response.py:261-306` field for field. The URLs and methods in `urls.ts:109-113` match `api/routers/ctf_board.py`.
+  - K1: all five required topics are covered. The guide's `ctf` JSON example passes both `CtfSpecModel.model_validate` and `CtfValidator(spec).load()`. I checked 14 factual claims against the code: the action and state tables, delete rules, board limit, reset modes and allowed states, rebuild staling, `failed` reason strings, the overnight-exemption states, seed creation, the score-adjust bound and flag normalization. All are correct. The guide is linked from `docs/README.md:10`.
+  - No TODO, FIXME, skip/only, `@ts-ignore`, `eslint-disable`, `as any` or `NotImplemented` in `components/Student/Ctf` or the guide.
+  - Not a reopen: the J2-J4 "verified in browser" done-when has not been met. That check is carried by I4b, which stays `[ ]`, the same treatment I5, I6, I9 and I10 received. Minor: the guide lists `file_mode` and `file_owner` as Linux `file` flags only, but neither the validator nor the model enforces this. The guide does not claim they do.
+- **Gate results:**
+  - api/unit_tests: 1100 passed.
+  - cloud_functions/tests: 449 passed.
+  - build_files/cloud_deployment/tests: 304 passed.
+  - frontend `npm test`: 24 files, 216 tests passed (exit 0).
+  - ESLint gate as written, now including `src/components/Student/Ctf`: exit 0 with 0 warnings.
+  - tsc gate: no tsc error names a CTF file (gate exit 0).
+- **Reopened:** none. I4b, the human browser checks, is the only open task.
