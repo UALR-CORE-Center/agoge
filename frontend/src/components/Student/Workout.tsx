@@ -12,6 +12,7 @@ import {InfoCard} from "../Common/InfoCard/InfoCard";
 import TimerBox from "../Common/Timer";
 import {ConfigureAccess} from "./ConfigureAccess";
 import CtfBanner from "./Ctf/CtfBanner";
+import FlagSubmitCard from "./Ctf/FlagSubmitCard";
 import {useCtfBoard} from "./Ctf/useCtfBoard";
 import WorkoutAssessment from "./WorkoutAssessment";
 import WorkoutTable from "./WorkoutTable";
@@ -27,7 +28,7 @@ const StudentWorkout: React.FC = () => {
     const [error, setError] = useState<HttpError | null>(null);
     const userIp = useUserIp();
     // Its own 15 s poll, independent of the workout poll below; one request only when the workout is not in a CTF.
-    const {board} = useCtfBoard(String(build_id));
+    const {board, refresh: refreshBoard} = useCtfBoard(String(build_id));
     const navigate = useNavigate();
 
     const workoutRef = useRef<HTMLDivElement>(null);
@@ -175,6 +176,10 @@ const StudentWorkout: React.FC = () => {
                             safeToConfigure={safeToConfigure}
                             currentState={currentState}
                         />
+
+                        {board && (
+                            <FlagSubmitCard workoutId={String(build_id)} board={board} onSubmitted={refreshBoard} />
+                        )}
 
                         <Box component="nav" aria-label="Assessment navigation">
                             <Button
