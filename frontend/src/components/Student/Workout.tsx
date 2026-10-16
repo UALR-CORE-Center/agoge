@@ -11,6 +11,7 @@ import HttpError from "../Common/Errors/HttpError";
 import {InfoCard} from "../Common/InfoCard/InfoCard";
 import TimerBox from "../Common/Timer";
 import {ConfigureAccess} from "./ConfigureAccess";
+import ChallengeList from "./Ctf/ChallengeList";
 import CtfBanner from "./Ctf/CtfBanner";
 import FlagSubmitCard from "./Ctf/FlagSubmitCard";
 import {useCtfBoard} from "./Ctf/useCtfBoard";
@@ -246,6 +247,9 @@ const StudentWorkout: React.FC = () => {
                                 isLoading={isLoading}
                             />
                             <WorkoutTable workoutFull={workoutFull} />
+                            {board && (
+                                <ChallengeList workoutId={String(build_id)} board={board} onChanged={refreshBoard} />
+                            )}
                         </Box>
 
                         <Box

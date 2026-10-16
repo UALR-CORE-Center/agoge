@@ -22,7 +22,8 @@ vi.mock("../../Common/InfoCard/InfoCard", () => ({InfoCard: () => null}));
 // A marker, so the flag card's position below it can be checked.
 vi.mock("../ConfigureAccess", () => ({ConfigureAccess: () => <div data-testid="configure-access" />}));
 vi.mock("mui-modal-provider", () => ({useModal: () => ({showModal: vi.fn()})}));
-vi.mock("../WorkoutTable", () => ({default: () => null}));
+// A marker, so the challenge list's position below it can be checked.
+vi.mock("../WorkoutTable", () => ({default: () => <div data-testid="workout-table" />}));
 vi.mock("../WorkoutAssessment", () => ({default: () => null}));
 
 const WORKOUT_ID = "workoutaaa";
@@ -131,5 +132,22 @@ describe("StudentWorkout CTF polling", () => {
         await advance(0);
 
         expect(screen.queryByRole("region", {name: "Submit a flag"})).toBeNull();
+    });
+    it("shows the challenge list below WorkoutTable for an enrolled workout", async () => {
+        vi.mocked(ctfBoardService.getBoard).mockResolvedValue(BOARD(true));
+        render(page());
+        await advance(0);
+
+        const list = screen.getByRole("region", {name: "Challenges"});
+        expect(screen.getByTestId("workout-table").nextElementSibling).toBe(list);
+        expect(screen.getByRole("region", {name: "Workout details"}).contains(list)).toBe(true);
+    });
+
+    it("renders no challenge list when the workout is not enrolled", async () => {
+        vi.mocked(ctfBoardService.getBoard).mockResolvedValue(BOARD(false));
+        render(page());
+        await advance(0);
+
+        expect(screen.queryByRole("region", {name: "Challenges"})).toBeNull();
     });
 });

@@ -97,7 +97,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I2** CTF transformer and service — spec + done-when at PRD.md:1050
 - [x] **I3** Feature flag hook — spec + done-when at PRD.md:1052
 - [x] **I4** Routes and menu — spec + done-when at PRD.md:1053 (split: this slice is `URL_TEACHER_CTF_BASE`, `URL_TEACHER_CTF_EVENT` and the flag-gated **Teachers** menu item; the two routes are I4b)
-- [ ] **I4b** (both routes are in as of iteration 61; only the browser checks remain, including I9's dashboard check and I10's disabled-actions check) Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route. Also verify in the browser that `Create CTF Event` is absent on a non-CTF unit's `TeacherUnit` page (I6 done-when), and that the student `CtfBanner` shows on an enrolled workout and is absent otherwise (J2 done-when). Also submit a flag through the student `FlagSubmitCard` and check the verdict snackbar (J3 done-when).
+- [ ] **I4b** (both routes are in as of iteration 61; only the browser checks remain, including I9's dashboard check and I10's disabled-actions check) Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route. Also verify in the browser that `Create CTF Event` is absent on a non-CTF unit's `TeacherUnit` page (I6 done-when), and that the student `CtfBanner` shows on an enrolled workout and is absent otherwise (J2 done-when). Also submit a flag through the student `FlagSubmitCard` and check the verdict snackbar (J3 done-when). Also check the student `ChallengeList` below `WorkoutTable`: take a hint through its confirm dialog, and with `public_scoreboard_enabled` on, confirm the caller's standings row is highlighted (J4 done-when).
 - [x] **I5** Events list page — spec + done-when at PRD.md:1055 (the list route is in; the browser check is carried by I4b)
 - [x] **I6** Create from unit — spec + done-when at PRD.md:1057 (the browser check that the button is absent on a non-CTF unit is carried by I4b)
 - [x] **I7** Action confirm dialog — spec + done-when at PRD.md:1059
@@ -118,7 +118,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **J1** Student CTF polling — spec + done-when at PRD.md:1075
 - [x] **J2** CTF banner — spec + done-when at PRD.md:1076 (the browser check is carried by I4b)
 - [x] **J3** Flag submission card — spec + done-when at PRD.md:1078 (the browser check is carried by I4b)
-- [ ] **J4** Challenge list — spec + done-when at PRD.md:1080
+- [x] **J4** Challenge list — spec + done-when at PRD.md:1080 (the browser check is carried by I4b)
 
 ### Group K — Documentation
 - [ ] **K1** Game master guide — spec + done-when at PRD.md:1085
@@ -961,3 +961,20 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** No existing frontend test rendered `useModal`, so any page test that mounts a component calling it needs that mock (there is no `ModalProvider` in tests). Gates: frontend 23 files / 198 tests. ESLint is clean on the CTF paths. `Workout.tsx` still has its 3 pre-existing lint problems and none new. tsc reports no CTF errors. No Python changed, so the Python suites were not re-run. `agoge-reviewer` found no defects.
 - **Blockers:** none. I4b is still open for a human to do the browser checks, which now include J3.
 - **Next:** J4 Challenge list (PRD.md:1080). Put `ChallengeList.tsx` in the main column below `WorkoutTable`. Hints go through `ctfBoardService.takeHint` behind `ActionConfirmDialog`, which states `hint_cost`. When `public_scoreboard_enabled`, add the standings from `getPublicScoreboard` with the `is_you` row highlighted. Pass it `board` and `refresh`.
+
+### Iteration 74 — 2026-10-16
+- **Completed:** J4.
+  - New `frontend/src/components/Student/Ctf/ChallengeList.tsx`. `Workout.tsx` renders it directly below `WorkoutTable`, inside the "Workout details" region, when `board` is set, and passes `refresh` as `onChanged`.
+  - A `Paper component="section"` labelled "Challenges" shows the team score and a plain MUI `Table` with the columns Challenge (`flag_id`), Category ("General" when null), Points, Status (Solved/Unsolved chip) and Hint. There is no host or path column, and a test asserts the exact header list.
+  - Hint cell:
+    - A taken hint (`board.hint`, or one taken in this session) shows its text.
+    - `!hint_available` shows "No hint".
+    - Otherwise there is a "Take hint (-N)" button, disabled unless `RUNNING`. It opens `ActionConfirmDialog` stating the cost ("free" when 0).
+    - On confirm it calls `ctfBoardService.takeHint`. A 409 or 404 shows the server message as a warning snackbar; anything else shows a generic error. Every attempt then calls `onChanged`.
+  - Standings: when `public_scoreboard_enabled`, `getPublicScoreboard` is polled every 30 s with `usePolling` and rendered as a "Standings" table. The `is_you` row is `selected` with `aria-current` and a "(you)" suffix.
+    - A 404 clears the standings, a later failure keeps the last good rows, and a failed first read shows "The standings are unavailable right now."
+    - Turning the flag off clears the standings and stops polling.
+  - Tests: `ChallengeList.test.tsx` (16), plus 2 in `WorkoutCtfPolling.test.tsx`. The `WorkoutTable` mock is now a marker div, used to check placement.
+- **Learned:** After an MUI `Dialog` closes, the page stays `aria-hidden` until the exit transition ends, so role queries on the page fail right after a confirm. Wait for `queryByRole("dialog")` to be null first. Gates: frontend 24 files / 216 tests. ESLint is clean on the CTF paths. `Workout.tsx` still has its 3 pre-existing lint problems and none new. tsc reports no CTF errors. No Python changed, so the Python suites were not re-run. `agoge-reviewer` found no house-rule issues. Its one defect (the standings were stuck on "Loading" after a failed first read) is fixed and tested.
+- **Blockers:** none. I4b is still open for a human to do the browser checks, which now include J4.
+- **Next:** K1 Game master guide (PRD.md:1085), `docs/guides/game-master-guide.md`.
