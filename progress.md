@@ -88,7 +88,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 ### Group R — Routers
 - [x] **R1** Instructor router — spec + done-when at PRD.md:1041
 - [x] **R2** Student router — spec + done-when at PRD.md:1042
-- [ ] **R3** Router registration — spec + done-when at PRD.md:1043
+- [x] **R3** Router registration — spec + done-when at PRD.md:1043
 - [ ] **R4** Router auth tests — spec + done-when at PRD.md:1044
 
 ### Group I — Game master UI
@@ -608,3 +608,10 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Neither router is registered in `api/main.py` yet; R3 must `include_router` both `ctf_router` and `ctf_board_router`. Gates now: api 875, cloud_functions 449, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** R3 Router registration (PRD.md:1043).
+
+### Iteration 50 — 2026-10-16
+- **Completed:** R3. `api/main.py` now imports and `include_router`s `ctf_router` (`/ctf`) and `ctf_board_router` (`/ctf-board`). The two lines sit alphabetically among the other routers, and no other router uses either prefix.
+  - `api/unit_tests/test_ctf_router_registration.py` (8 tests) imports the real `main` with `firebase_admin.initialize_app` patched. It asserts that every route on both routers is on `main.app`. With the two `include_router` lines removed, all 8 fail.
+- **Learned:** `main` can be imported in unit tests if `firebase_admin.initialize_app` is patched; AppConfig needs no env. The test pops `main` from `sys.modules` before and after, so no other test sees a cached app. Gates now: api 883, cloud_functions 449, build_files 304, frontend 28; tsc has no CTF errors.
+- **Blockers:** none.
+- **Next:** R4 Router auth tests (PRD.md:1044), `test_ctf_router_auth.py`. It could use the real `main.app` the same way, overriding `get_current_user` per role.
