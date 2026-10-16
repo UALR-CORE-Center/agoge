@@ -1,6 +1,7 @@
 import re
 
 from common.exceptions import AgogeValidationError
+from common.utilities.ctf_plant_contract import LOCATION_PATH_PATTERNS
 
 
 class CtfValidator:
@@ -9,15 +10,8 @@ class CtfValidator:
     so these patterns are the only thing keeping spec-authored strings from reaching a script unescaped.
     """
     WINDOWS_ONLY_LOCATIONS = ('registry', 'ads')
-    # (location_type, operating_system) -> path pattern, from the PRD's Flag Location Formats table
-    PATH_PATTERNS = {
-        ('file', 'linux'): r'^/[A-Za-z0-9_./-]+$',
-        ('file', 'windows'): r'^[A-Za-z]:\\[A-Za-z0-9_.\\ -]+$',
-        ('registry', 'windows'): r'^HKLM\\[A-Za-z0-9_\\ ]+:[A-Za-z0-9_]+$',
-        ('env', 'linux'): r'^[A-Z_][A-Z0-9_]{0,63}$',
-        ('env', 'windows'): r'^[A-Z_][A-Z0-9_]{0,63}$',
-        ('ads', 'windows'): r'^[A-Za-z]:\\[A-Za-z0-9_.\\ -]+:[A-Za-z0-9_]+$',
-    }
+    # Shared with FlagPlanter, which re-checks every path before it reaches a script
+    PATH_PATTERNS = LOCATION_PATH_PATTERNS
 
     def __init__(
         self,
