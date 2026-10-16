@@ -93,7 +93,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **BUG4** `AnonymousAppUser()` (common/models/users.py:124) cannot be constructed: it passes `uid=None`, `email=None`, `settings=None` to `AgogeUser`, whose fields are `str`/`str`/`Dict`, so Pydantic raises `ValidationError`. The `get_current_user` branch that returns it is unreachable today only because `HTTPBearer()` (auto_error) answers a missing token with 403 first. Not CTF-specific.
 
 ### Group I — Game master UI
-- [ ] **I1** CTF TypeScript models — spec + done-when at PRD.md:1049
+- [x] **I1** CTF TypeScript models — spec + done-when at PRD.md:1049
 - [ ] **I2** CTF transformer and service — spec + done-when at PRD.md:1050
 - [ ] **I3** Feature flag hook — spec + done-when at PRD.md:1052
 - [ ] **I4** Routes and menu — spec + done-when at PRD.md:1053
@@ -648,3 +648,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** A Pydantic v2 subclass can loosen a parent's field by re-annotating it, and the parent is unaffected. Gates now: api 1100, cloud_functions 449, build_files 304, frontend 28; tsc has no CTF errors; the eslint gate still has no CTF files.
 - **Blockers:** none.
 - **Next:** I1 CTF TypeScript models (PRD.md:1049).
+
+### Iteration 53 — 2026-10-16
+- **Completed:** I1. New file `frontend/src/services/Ctf/ctf.model.ts`. It has `export interface`s with snake_case keys for every CTF response model in `common/models/response.py` and every request model in `common/models/agoge.py`. It also covers the stored documents the API returns: `CtfEvent` (with `CtfSpec`/`CtfFlagSpec`/`CtfScoringSpec`), `CtfSubmission`, `CtfLogEntry`, `CtfIdResponse`, and the two dict envelopes, `CtfReplantResponse` `{messages}` and `CtfScoreAdjustResponse` `{workout_id, score}`. The Python `Literal`s are string unions. `CtfStates` is a `const` map, so I8/I10 can compare `state` numbers without magic values.
+- **Learned:** A Python `Optional[X]` with no default is always serialized, so it is typed `X | null`, not `?`. Only `CtfUpdateRequest` and `CtfReplantRequest` use `?`, because there an omitted key means "leave unchanged" or "all". `state_name` stays `string` because `_state_name` falls back to `str(state)`. Gates now: api 1100, cloud_functions 449, build_files 304, frontend 28; eslint on `src/services/Ctf` is clean; tsc has no CTF errors.
+- **Blockers:** none.
+- **Next:** I2 CTF transformer and service (PRD.md:1050), with `ctf.service.test.ts` modelled on `rubric.service.test.ts`.
