@@ -57,7 +57,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 
 ### Group F — Event core
 - [x] **F1** Config and feature flag — spec + done-when at PRD.md:1001
-- [ ] **F2** Error helper — spec + done-when at PRD.md:1003
+- [x] **F2** Error helper — spec + done-when at PRD.md:1003
 - [ ] **F3** Audit helper — spec + done-when at PRD.md:1004
 - [ ] **F4** Event create — spec + done-when at PRD.md:1006
 - [ ] **F5** Event read, update, delete — spec + done-when at PRD.md:1008
@@ -373,3 +373,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Tests swap in a fake db via `monkeypatch.setattr(config, "_db", fake)` and must call `config.reset_cache()`, because the cache is process-global and shared across tests. Gates now: api 397, cloud_functions 417, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** F2 Error helper (`api/utilities/http_errors.py` `to_http_exception(e)`, Error Handling table in PRD.md).
+
+### Iteration 29 — 2026-10-16
+- **Completed:** F2 — `api/utilities/http_errors.py` `to_http_exception(e)` *returns* an `HTTPException` (routers do `raise to_http_exception(e) from e`). Mapping follows the PRD table: `BadRequest`/`AgogeValidationError` 400, `NotFound` 404, `Conflict` 409 and `RateLimitExceeded` 429 all use the exception's message; `Unauthorized` 403, `Forbidden` 403 and `ServiceUnavailable` 503 use the table's fixed text. A pydantic `ValidationError` (a malformed `ctf` block coming out of `is_valid()`) maps to 400 with loc/msg only. An `HTTPException` passes through unchanged. Anything else, including unmapped `BaseAgogeException` subclasses such as `PreconditionFailed`, becomes a 500 with "Something went wrong" and the cause is logged. `api/unit_tests/test_http_errors.py` (17 tests) covers every row, the log on unhandled errors, and the `{"detail": ...}` wire shape through a real FastAPI app.
+- **Learned:** Custom pydantic `ValueError` validator messages can echo input into the 400 detail (reviewer note). The CTF spec models only use field constraints, so this is low risk. Gates now: api 414, cloud_functions 417, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** F3 Audit helper (`api/core/ctf/audit.py` `CtfAudit.action(...)`, PRD.md:1004).
