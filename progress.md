@@ -25,7 +25,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **A2** CTF specification models — spec + done-when at PRD.md:952
 - [x] **A3** CTF stored models — spec + done-when at PRD.md:954
 - [x] **A4** CTF request models — spec + done-when at PRD.md:955
-- [ ] **A5** CTF response models — spec + done-when at PRD.md:956
+- [x] **A5** CTF response models — spec + done-when at PRD.md:956
 - [ ] **A6** Spec block wiring — spec + done-when at PRD.md:957
 
 ### Group B — Flag derivation and state
@@ -178,3 +178,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** The ruff PostToolUse hook flags a pre-existing unused `HttpUrl` import at `common/models/agoge.py:5` on every edit — not from CTF work. Gates now: api 171, cloud_functions 285, build_files 293, frontend 28.
 - **Blockers:** none.
 - **Next:** A5 CTF response models (PRD.md:956; definitions start at PRD.md:547, in `common/models/response.py`).
+
+### Iteration 8 — 2026-10-16
+- **Completed:** A5 — the fifteen CTF response models (`CtfConfigResponse` … `CtfHintResponse`) appended to `common/models/response.py` verbatim from PRD.md:549-666, importing `ArmStatus`/`LocationType`/`PlantStatus` from `agoge.py`; `api/unit_tests/test_ctf_response_models.py` (29 tests) covers Literal rejection for arm/plant/location/verdict, nested board validation, the not-enrolled student board defaults, and the `AgogeResponse[...]` envelope.
+- **Learned:** Per the PRD, fields like `starts_at: Optional[float]` have no default, so they are *required* keys in Pydantic v2 — the core code building these responses must always pass them (a test pins this). `CtfSubmitResponse.verdict` deliberately excludes `cross_submission`/`rate_limited`/`closed`. Gates now: api 200, cloud_functions 285, build_files 293, frontend 28.
+- **Blockers:** none.
+- **Next:** A6 Spec block wiring (PRD.md:957).
