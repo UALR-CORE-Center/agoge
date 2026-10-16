@@ -10,7 +10,8 @@ from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 CACHE_SECONDS = 60
 
 _lock = threading.Lock()
-_cached_value = False
+# The whole admin-info document is cached so budget_exceeded rides on the same read.
+_cached_info = {}
 _expires_at = 0.0
 _db = None
 
@@ -28,23 +29,35 @@ def _get_db():
     return _db
 
 
-def is_ctf_enabled() -> bool:
-    """Whether CTF is enabled on admin-info/project; cached in-process for CACHE_SECONDS."""
-    global _cached_value, _expires_at
+def _admin_info():
+    """admin-info/project, cached in-process for CACHE_SECONDS; None when the read fails."""
+    global _cached_info, _expires_at
     with _lock:
         now = time.monotonic()
         if now < _expires_at:
-            return _cached_value
+            return _cached_info
         try:
             admin_info = _get_db().get(collection_name=DbCollections.ADMIN_INFO, doc_id=ADMIN_INFO_DOCUMENT)
         except Exception as e:
-            # Fail closed, and don't cache the failure, so the next request retries.
-            logger.error(f"CtfConfig - Failed to read ctf_enabled: {type(e).__name__}")
-            return False
-        # Only a real True enables the feature; a stray "false" string must not.
-        _cached_value = (admin_info or {}).get('ctf_enabled') is True
+            # Don't cache the failure, so the next request retries.
+            logger.error(f"CtfConfig - Failed to read admin-info: {type(e).__name__}")
+            return None
+        _cached_info = admin_info or {}
         _expires_at = now + CACHE_SECONDS
-        return _cached_value
+        return _cached_info
+
+
+def is_ctf_enabled() -> bool:
+    """Whether CTF is enabled on admin-info/project; cached in-process for CACHE_SECONDS.
+    Fails closed when admin-info cannot be read."""
+    # Only a real True enables the feature; a stray "false" string must not.
+    return (_admin_info() or {}).get('ctf_enabled') is True
+
+
+def is_budget_exceeded() -> bool:
+    """Whether BudgetManager has halted the Cloud Function. The function halts silently, so the
+    dashboard shows this as a banner. Unknown (a failed read) reports False."""
+    return (_admin_info() or {}).get('budget_exceeded') is True
 
 
 def reset_cache() -> None:

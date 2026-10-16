@@ -62,7 +62,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **F4** Event create — spec + done-when at PRD.md:1006
 - [x] **F5** Event read, update, delete — spec + done-when at PRD.md:1008
 - [x] **F6** Event actions — spec + done-when at PRD.md:1009
-- [ ] **F7** Event reads for panels — spec + done-when at PRD.md:1011
+- [x] **F7** Event reads for panels — spec + done-when at PRD.md:1011
 - [ ] **BUG3** An `arm` whose Pub/Sub publish fails partway (`CtfEvent._publish_arm`) leaves the event in ARMING with `boards_pending` above 0 and no way out, because ARMING→ARMING is not an allowed transition and only arm workers leave ARMING. It needs a recovery path, such as a re-publish for boards still `pending`, or a stale-ARMING sweep that moves the event to BROKEN. The PRD does not specify one.
 
 ### Group G — Hosts
@@ -421,3 +421,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** The action map's From sets are narrower than the state manager's allow-list: `start` from PAUSED and `resume` from ARMED would both pass `VALID_TRANSITIONS`. So the explicit From check in `process_action` is required; don't drop it. The board updates sit in the event's transaction, which is bounded by `ctf_max_boards`. A publish failure after the commit leaves the event stuck in ARMING; I filed this as BUG3. Gates now: api 548, cloud_functions 417, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** F7 Event reads for panels (`state()`, `boards()`, `flags()`, `log()`, `submissions()`, PRD.md:1011).
+
+### Iteration 34 — 2026-10-16
+- **Completed:** F7 — `CtfEvent.state/boards/flags/log/submissions(ctf_id, user, …)` in `api/core/ctf/event.py`. Each one goes through `get` (`NotFound`, then `Unauthorized` before any row read). `state()` is exactly one event get plus one board query (`ctf_id ==`), and the test asserts the read list. Boards come back in `board_ids` order; a stray board sorts last and an invalid one is skipped. Archived (inactive) boards still show. `CtfBoardStatus` counts flags in `failed` and in `stale`. `flags()` gives one `CtfFlagRow` per spec flag, decoys included, with each board's plant status and no digest. `log(action=)` and `submissions(verdict=)` validate the filter against `LogAction`/`Verdict` (otherwise `BadRequest`, before any read), query with equality filters only, and sort newest first in memory, capped at `MAX_PANEL_ROWS = 500`. `budget_exceeded` comes from the new `config.is_budget_exceeded()`. `config.py` now caches the whole admin-info doc, so the budget flag shares the read `ctf_enabled_required` already makes; a failed read reports False and isn't cached. Tests: `api/unit_tests/test_ctf_event_panels.py` (32) and 7 new tests in `test_ctf_config.py`.
+- **Learned:** Server-side `order_by` plus `limit` on `created_at`/`submitted_at` with a `ctf_id` filter would need a composite Firestore index, and the repo deploys none. So the log and submissions panels read every matching row on each call and cap in memory. That is fine at classroom scale; if submissions grow large, add the indexes and push the sort and limit into the query. R1 tests must monkeypatch `config.is_budget_exceeded`, because otherwise `state()` builds a real Firestore client. Gates now: api 587, cloud_functions 417, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** BUG3 (stuck-ARMING recovery), then G1 Replant publish (PRD.md:1015).

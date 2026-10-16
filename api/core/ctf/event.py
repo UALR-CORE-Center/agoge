@@ -1,6 +1,6 @@
 import time
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional, get_args
 
 from google.cloud.firestore_v1 import FieldFilter
 from google.cloud.firestore_v1.field_path import FieldPath
@@ -16,16 +16,27 @@ from common.models.agoge import (
     CtfDigestModel,
     CtfEventModel,
     CtfFlagStateModel,
+    CtfLogModel,
     CtfSpecModel,
+    CtfSubmissionModel,
     CtfUpdateRequest,
+    LogAction,
+    Verdict,
 )
 from common.models.model_validators.model_validator import ModelValidator
-from common.models.response import CtfEventSummary
+from common.models.response import (
+    CtfBoardStatus,
+    CtfEventSummary,
+    CtfFlagBoardStatus,
+    CtfFlagRow,
+    CtfStateResponse,
+)
 from common.models.users import AgogeUser
 from common.utilities.ctf_flags import derive_flag_value, flag_digest
 from common.utilities.ctf_state_manager import CtfStateManager
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.id_generator import IdGenerator
+from core.ctf import config
 
 UNAUTHORIZED_MESSAGE = "Requesting user is not authorized to make this request"
 NOT_PROVISIONED_MESSAGE = (
@@ -41,6 +52,8 @@ class CtfEvent:
     MAX_WRITES_PER_COMMIT = 500
     # Firestore's limit on the number of values in an `in` filter.
     MAX_IN_VALUES = 30
+    # Cap on the submissions and log panels (endpoint table: newest first, max 500).
+    MAX_PANEL_ROWS = 500
     # A workout being torn down gets no board: it can never be armed.
     EXCLUDED_WORKOUT_STATES = {
         WorkoutStates.DELETING_SERVERS.value,
@@ -286,6 +299,109 @@ class CtfEvent:
                 error_type=type(e).__name__, published=published, boards=len(event.board_ids),
             )
             raise
+
+    def state(self, ctf_id: str, user: AgogeUser) -> CtfStateResponse:
+        """The dashboard poll: one event read plus one board query, never a read per board."""
+        event = self.get(ctf_id, user)
+        return CtfStateResponse(
+            id=event.id,
+            state=event.state,
+            state_name=self._state_name(event.state),
+            state_timestamp=event.state_timestamp,
+            starts_at=event.starts_at,
+            ends_at=event.ends_at,
+            paused_at=event.paused_at,
+            accumulated_pause_seconds=event.accumulated_pause_seconds,
+            scoreboard_frozen_at=event.scoreboard_frozen_at,
+            public_scoreboard_enabled=event.public_scoreboard_enabled,
+            # From the cached admin-info read ctf_enabled_required already made, so no extra read.
+            budget_exceeded=config.is_budget_exceeded(),
+            boards=[self._board_status(board) for board in self._boards(event)],
+        )
+
+    def boards(self, ctf_id: str, user: AgogeUser) -> List[CtfBoardStatus]:
+        event = self.get(ctf_id, user)
+        return [self._board_status(board) for board in self._boards(event)]
+
+    def flags(self, ctf_id: str, user: AgogeUser) -> List[CtfFlagRow]:
+        """One row per spec flag, decoys included, each with every board's plant status for it."""
+        event = self.get(ctf_id, user)
+        boards = self._boards(event)
+        rows = []
+        for flag in event.spec.flags:
+            statuses = []
+            for board in boards:
+                state = next((f for f in board.flags if f.flag_id == flag.id), None)
+                if state is None:
+                    continue
+                statuses.append(CtfFlagBoardStatus(
+                    workout_id=board.workout_id,
+                    team_name=board.team_name,
+                    plant_status=state.plant_status,
+                    planted_at=state.planted_at,
+                    plant_error=state.plant_error,
+                    solved=state.solved,
+                ))
+            rows.append(CtfFlagRow(
+                flag_id=flag.id,
+                server=flag.server,
+                slot=flag.slot,
+                category=flag.category,
+                location_type=flag.location_type,
+                points=flag.points,
+                decoy=flag.decoy,
+                boards=statuses,
+            ))
+        return rows
+
+    def log(self, ctf_id: str, user: AgogeUser, action: Optional[str] = None) -> List[CtfLogModel]:
+        """The event's log rows, newest first, at most MAX_PANEL_ROWS, optionally one action only."""
+        if action is not None and action not in get_args(LogAction):
+            raise BadRequest(message=f"Unknown log action: {action}")
+        self.get(ctf_id, user)
+        rows = self._panel_rows(DbCollections.CTF_LOG, CtfLogModel, ctf_id, 'action', action)
+        return sorted(rows, key=lambda row: row.created_at, reverse=True)[:self.MAX_PANEL_ROWS]
+
+    def submissions(self, ctf_id: str, user: AgogeUser, verdict: Optional[str] = None) -> List[CtfSubmissionModel]:
+        """The event's submissions, newest first, at most MAX_PANEL_ROWS, optionally one verdict only."""
+        if verdict is not None and verdict not in get_args(Verdict):
+            raise BadRequest(message=f"Unknown verdict: {verdict}")
+        self.get(ctf_id, user)
+        rows = self._panel_rows(DbCollections.CTF_SUBMISSION, CtfSubmissionModel, ctf_id, 'verdict', verdict)
+        return sorted(rows, key=lambda row: row.submitted_at, reverse=True)[:self.MAX_PANEL_ROWS]
+
+    def _panel_rows(self, collection: DbCollections, model, ctf_id: str, field: str, value: Optional[str]) -> List:
+        # Equality filters only, sorted and capped here: a server-side order_by on created_at or
+        # submitted_at would need a composite index, and this repo deploys none.
+        filters = [('ctf_id', DbOperators.EQUAL, ctf_id)]
+        if value is not None:
+            filters.append((field, DbOperators.EQUAL, value))
+        docs = self.db.query(collection_name=collection, filters=filters) or []
+        rows = ModelValidator(model, log_location=self.log_name).load(docs, halt_on_error=False)
+        return [row for row in rows if row is not None]
+
+    def _boards(self, event: CtfEventModel) -> List[CtfBoardModel]:
+        """Every board of the event (archived ones too) in board_ids order, from one query.
+        An invalid board document is skipped so it cannot blank the whole dashboard."""
+        docs = self.db.query(
+            collection_name=DbCollections.CTF_BOARD,
+            filters=[('ctf_id', DbOperators.EQUAL, event.id)],
+        ) or []
+        boards = ModelValidator(CtfBoardModel, log_location=self.log_name).load(docs, halt_on_error=False)
+        order = {workout_id: index for index, workout_id in enumerate(event.board_ids)}
+        boards = [board for board in boards if board is not None]
+        return sorted(boards, key=lambda board: (order.get(board.workout_id, len(order)), board.workout_id))
+
+    @staticmethod
+    def _board_status(board: CtfBoardModel) -> CtfBoardStatus:
+        return CtfBoardStatus(
+            workout_id=board.workout_id,
+            team_name=board.team_name,
+            arm_status=board.arm_status,
+            arm_error=board.arm_error,
+            plant_failed_count=sum(1 for flag in board.flags if flag.plant_status == 'failed'),
+            plant_stale_count=sum(1 for flag in board.flags if flag.plant_status == 'stale'),
+        )
 
     def delete(self, ctf_id: str, user: AgogeUser) -> None:
         """Admin only, DRAFT or ARCHIVED only. Deletes the rate-limit, digest and board documents,
