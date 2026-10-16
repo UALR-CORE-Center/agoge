@@ -8,6 +8,7 @@ import {ctfService} from "../../../services/Ctf/ctf.service";
 import HttpError from "../../Common/Errors/HttpError";
 import CtfEventControl from "./CtfEventControl";
 import CtfFlagsPanel from "./CtfFlagsPanel";
+import CtfHostsPanel from "./CtfHostsPanel";
 import CtfStateChip from "./CtfStateChip";
 import ScoreboardSettings from "./ScoreboardSettings";
 import {formatDuration, remainingSeconds} from "./ctfTime";
@@ -142,6 +143,9 @@ const CtfDashboard: React.FC = () => {
                         >
                             {label === 'Flags' && event !== null && (
                                 <CtfFlagsPanel ctfId={event.id} state={event.state} active={selectedTab === index} />
+                            )}
+                            {label === 'Hosts' && event !== null && (
+                                <CtfHostsPanel ctfId={event.id} state={event.state} active={selectedTab === index} />
                             )}
                         </Box>
                     ))}

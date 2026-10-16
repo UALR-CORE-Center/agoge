@@ -107,7 +107,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I11** Scoreboard settings — spec + done-when at PRD.md:1065
 - [x] **I12** Flags panel — spec + done-when at PRD.md:1066
 - [x] **I13** Flags bulk replant — spec + done-when at PRD.md:1067
-- [ ] **I14** Hosts panel — spec + done-when at PRD.md:1068
+- [x] **I14** Hosts panel — spec + done-when at PRD.md:1068
 - [ ] **I15** Scoreboard panel — spec + done-when at PRD.md:1069
 - [ ] **I16** Event log panel — spec + done-when at PRD.md:1070
 - [ ] **I17** Submission log panel — spec + done-when at PRD.md:1071
@@ -845,3 +845,23 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - ESLint gate, as written: exit 2, "No files matching the pattern "src/components/Student/Ctf" were found". This is expected because J1 onward are not done. Run on the paths that exist, plus `ConfirmationDialog/Confirmation.tsx` and `router/AppRouter.tsx`, it exits 0 with 0 warnings.
   - tsc gate: no tsc error names a CTF file (gate exit 0).
 - **Reopened:** none.
+
+### Iteration 66 — 2026-10-16
+- **Completed:** I14.
+  - New `frontend/src/components/Teacher/Ctf/CtfHostsPanel.tsx` is mounted in the dashboard's Hosts `tabpanel`. It is a Community `StyledDataGrid` with one row per board per server (`getRowId` = `workout_id-server`) and these columns: Team, Server, Server state (`server_state_name`, or "Not built" when null), Flags (`flag_count`), and a Reset button.
+  - Reset menu: the Reset button opens a `Menu` with Replant, Restart and Rebuild. No mode is pre-selected.
+  - `resetBlocker` disables a mode, with its reason in a `Tooltip`, in the same cases the API refuses it:
+    - every mode on an unbuilt server (`server_state === null`, which the API answers with 404);
+    - Replant when `flag_count === 0` (400);
+    - Rebuild when `!rebuild_allowed` (WireGuard, 400).
+  - Confirmation: Replant and Restart use `ActionConfirmDialog`. Rebuild uses the type-to-confirm `ConfirmationDialog` (`action="rebuild"`, the server name as the expected text, `confirmLabel="Rebuild"`).
+  - Sending: the confirmed reset calls `ctfService.resetHost(ctfId, workout_id, server, {mode})`, shows a notice and re-reads the hosts. A reset error has its own dismissible `Alert`.
+  - Reset is enabled only in `RESET_STATES` (= `REPLANT_STATES`, matching `CtfHosts.reset`).
+  - Polling: every `HOSTS_POLL_INTERVAL_MS = 15000`, only while the Hosts tab is active. An ARCHIVED event gets one read.
+  - Tests: `CtfHostsPanel.test.tsx` (12) and one added `CtfDashboard` test for the Hosts tab. `getHosts` was added to the dashboard's service mock.
+- **Learned:**
+  - A disabled `MenuItem` has no pointer events, so its tooltip goes on a `<span>` wrapper. MUI `MenuList` arrow-key navigation skips such a span because it has no `tabindex`, so keyboard navigation still works.
+  - The `agoge-reviewer` caught that unbuilt rows (listed on purpose by `CtfHosts.hosts`) would offer resets that 404. Fixed.
+  - Gates: frontend 16 files / 136 tests; api 1100, cloud_functions 449, build_files 304. ESLint is clean on the CTF paths, and tsc reports no CTF errors.
+- **Blockers:** none. I4b is still open for a human to do the browser checks.
+- **Next:** I15 Scoreboard panel (PRD.md:1069). Use `ctfService` scoreboard getter, poll every 30 s, show a banner while `scoreboard_frozen_at` is set; add the getter to the dashboard test's service mock.
