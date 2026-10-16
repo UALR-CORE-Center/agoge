@@ -95,7 +95,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 ### Group I — Game master UI
 - [x] **I1** CTF TypeScript models — spec + done-when at PRD.md:1049
 - [x] **I2** CTF transformer and service — spec + done-when at PRD.md:1050
-- [ ] **I3** Feature flag hook — spec + done-when at PRD.md:1052
+- [x] **I3** Feature flag hook — spec + done-when at PRD.md:1052
 - [ ] **I4** Routes and menu — spec + done-when at PRD.md:1053
 - [ ] **I5** Events list page — spec + done-when at PRD.md:1055
 - [ ] **I6** Create from unit — spec + done-when at PRD.md:1057
@@ -665,3 +665,13 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** The eslint gate uses `--max-warnings 0` and `no-explicit-any` is a warning, so the transformers type their input as the wire model (`(data: CtfX): CtfX`), not `any`. `apiService` accepts that because its `transformFn` param is `(data: any) => T`. Gates now: frontend 5 files / 38 tests; eslint clean on `src/services/Ctf` and the transformer; tsc has no CTF errors. No Python files changed.
 - **Blockers:** none.
 - **Next:** I3 Feature flag hook (PRD.md:1052). `hooks/useCtfEnabled.tsx` should call `ctfService.getConfig()` once per session for instructors.
+
+### Iteration 55 — 2026-10-16
+- **Completed:** I3. New `frontend/src/hooks/useCtfEnabled.tsx` returns `{ctfEnabled, loading}`.
+  - It calls `ctfService.getConfig()` only for a signed-in user whose `permissions.instructor` or `permissions.admin` is true, because the route is `teacher_required`. Everyone else gets `{false, false}` and no request is sent.
+  - The answer is cached at module level and keyed by uid, so all consumers share one request per signed-in user for the life of the page. A different uid triggers a new request, and the previous user's answer is never shown, not even for one render. Signing out hides the feature at once.
+  - On an error it fails closed (`false`) and forgets the failure so a later mount can retry. `resetCtfEnabledCache` exists for tests.
+  - `useCtfEnabled.test.tsx` has 10 tests. Mutation check: removing the cache, or dropping the permission check, fails tests.
+- **Learned:** `useAuthContext().agogeUser.user` is `SafeAgogeUser | null` with `permissions: {[key]: boolean}`; mocking `../context/AuthContext` with a mutable `currentUser` plus `rerender()` simulates a user change. Gates now: frontend 6 files / 48 tests; eslint is clean on the hook; tsc has no CTF errors. No Python files changed.
+- **Blockers:** none.
+- **Next:** I4 Routes and menu (PRD.md:1053). Filter the Teachers `AppBarMenu` item on `useCtfEnabled().ctfEnabled`.
