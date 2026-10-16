@@ -4,7 +4,8 @@ from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import LoggerNames
 from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.constants.pub_sub import PubSub
-from common.constants.database import DbCollections, DATABASE_NAME, DatabaseTypes
+from common.constants.database import DbCollections, DbOperators, DATABASE_NAME, DatabaseTypes
+from common.constants.states import CtfStates
 from common.models.agoge import UnitModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.timestamps import Timestamps
@@ -18,6 +19,10 @@ from ..send_mail.send_mail import SendMail
 
 
 class DailyMaintenance:
+    # A board in one of these event states must stay up overnight: the game master
+    # has armed it or the clock is running, and a stop would break the plant.
+    CTF_KEEP_RUNNING_STATES = (CtfStates.ARMING, CtfStates.ARMED, CtfStates.RUNNING, CtfStates.PAUSED)
+
     def __init__(
         self,
         debug: bool = False,
@@ -51,10 +56,14 @@ class DailyMaintenance:
         self._update_nvd_database()
 
     def _stop_all(self):
+        ctf_workout_ids = self._ctf_workout_ids()
+
         # Stop any running workouts
         running_workouts = self.db_query.get_running(collection_name=DbCollections.WORKOUT)
         for workout in running_workouts:
             workout_id = workout['id']
+            if workout_id in ctf_workout_ids:
+                continue
             if self.debug:
                 workout_obj = WorkoutFactory.create_workout_object(workout_id=workout_id, env_dict=self.env_dict)
                 workout_obj.stop()
@@ -74,8 +83,26 @@ class DailyMaintenance:
         )
         image_mgr.stop_all_running()
 
-        # Stop any remaining compute instances
-        self.project_server_manager.stop_everything()
+        # Stop any remaining compute instances. Every workout instance is named
+        # f"{workout_id}-...", so the CTF boards' VMs are exempted by that prefix.
+        self.project_server_manager.stop_everything(
+            exempt_prefixes=[f"{workout_id}-" for workout_id in sorted(ctf_workout_ids)]
+        )
+
+    def _ctf_workout_ids(self) -> set:
+        """Workout ids of the active boards in every event that is armed or in play"""
+        events = self.db.query(
+            collection_name=DbCollections.CTF,
+            filters=[('state', DbOperators.IN, [state.value for state in self.CTF_KEEP_RUNNING_STATES])]
+        )
+        workout_ids = set()
+        for event in events:
+            boards = self.db.query(
+                collection_name=DbCollections.CTF_BOARD,
+                filters=[('ctf_id', DbOperators.EQUAL, event['id']), ('active', DbOperators.EQUAL, True)]
+            )
+            workout_ids.update(board['workout_id'] for board in boards)
+        return workout_ids
 
     def _notify_expiring_units(self):
         """
