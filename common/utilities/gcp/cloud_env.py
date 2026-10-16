@@ -41,6 +41,7 @@ class CloudEnv:
         # Secrets variables
         self._api_key = None
         self._auth_config = None
+        self._ctf_flag_seed = None
         self._openai_api_key = None
         self._sendgrid_api_key = None
         self._shodan_api_key = None
@@ -68,6 +69,13 @@ class CloudEnv:
                 'project_id': self.project
             }
         return self._auth_config
+
+    @property
+    def ctf_flag_seed(self):
+        # Root secret for CTF flag derivation; created by setup.py when ctf_enabled is set.
+        if self._ctf_flag_seed is None:
+            self._ctf_flag_seed = self.get_secret('ctf_flag_seed')
+        return self._ctf_flag_seed
 
     @property
     def guac_sql_root_password(self):
