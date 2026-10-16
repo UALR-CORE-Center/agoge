@@ -1,7 +1,7 @@
 import FlagIcon from "@mui/icons-material/Flag";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import {Alert, Box, Button, Chip, Tooltip, Typography} from "@mui/material";
-import {GridColDef} from "@mui/x-data-grid";
+import {GridColDef, GridRowSelectionModel} from "@mui/x-data-grid";
 import React, {useCallback, useEffect, useState} from "react";
 import {usePolling} from "../../../hooks/usePolling";
 import {CtfFlagBoardStatus, CtfFlagRow, CtfStates, PlantStatus} from "../../../services/Ctf/ctf.model";
@@ -30,6 +30,12 @@ export const flagProblems = (boards: CtfFlagBoardStatus[]): string | null => {
     const stale = boards.filter(board => board.plant_status === 'stale').length;
     const parts = [failed ? `${failed} failed` : null, stale ? `${stale} stale` : null].filter(Boolean);
     return parts.length ? parts.join(', ') : null;
+};
+
+// Replant works per server, so a selection of flags becomes the union of their servers, in row order.
+export const selectedServers = (flags: CtfFlagRow[], selection: GridRowSelectionModel): string[] => {
+    const ids = new Set(selection);
+    return [...new Set(flags.filter(row => ids.has(row.flag_id)).map(row => row.server))];
 };
 
 const BoardStatuses: React.FC<{boards: CtfFlagBoardStatus[]}> = ({boards}) => (
@@ -62,7 +68,8 @@ const CtfFlagsPanel: React.FC<CtfFlagsPanelProps> = ({ctfId, state, active}) => 
     const [replantError, setReplantError] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
     // Kept apart from `open` so the dialog text does not go blank while it fades out.
-    const [target, setTarget] = useState<CtfFlagRow | null>(null);
+    const [targets, setTargets] = useState<string[]>([]);
+    const [selection, setSelection] = useState<GridRowSelectionModel>([]);
     const [open, setOpen] = useState(false);
     const [replanting, setReplanting] = useState(false);
 
@@ -90,8 +97,10 @@ const CtfFlagsPanel: React.FC<CtfFlagsPanelProps> = ({ctfId, state, active}) => 
     }, [active, archived, fetchFlags]);
     const canReplant = REPLANT_STATES.includes(state);
 
-    const handleOpen = (row: CtfFlagRow) => {
-        setTarget(row);
+    const bulkServers = selectedServers(flags, selection);
+
+    const handleOpen = (servers: string[]) => {
+        setTargets(servers);
         setOpen(true);
     };
 
@@ -102,7 +111,7 @@ const CtfFlagsPanel: React.FC<CtfFlagsPanelProps> = ({ctfId, state, active}) => 
     };
 
     const handleConfirm = async () => {
-        if (!target) {
+        if (targets.length === 0) {
             return;
         }
         setReplanting(true);
@@ -110,9 +119,11 @@ const CtfFlagsPanel: React.FC<CtfFlagsPanelProps> = ({ctfId, state, active}) => 
         setNotice(null);
         try {
             // Replant is per server, not per flag: every flag on that host is planted again, on every board.
-            const {messages} = await ctfService.replant(ctfId, {servers: [target.server]});
-            setNotice(`Replant of ${target.server} started (${messages} plant ${messages === 1 ? 'request' : 'requests'}).`);
+            // One scoped PUT for the whole selection, so the audit log records a single FLAG_REPLANT.
+            const {messages} = await ctfService.replant(ctfId, {servers: targets});
+            setNotice(`Replant of ${targets.join(', ')} started (${messages} plant ${messages === 1 ? 'request' : 'requests'}).`);
             setOpen(false);
+            setSelection([]);
             await fetchFlags();
         } catch (err) {
             const {status, message} = (err ?? {}) as Partial<HttpError>;
@@ -172,7 +183,7 @@ const CtfFlagsPanel: React.FC<CtfFlagsPanelProps> = ({ctfId, state, active}) => 
                         size="small"
                         variant="outlined"
                         disabled={!canReplant || replanting}
-                        onClick={() => handleOpen(params.row)}
+                        onClick={() => handleOpen([params.row.server])}
                         aria-label={`Replant ${params.row.server} for flag ${params.row.flag_id}`}
                     >
                         Replant
@@ -194,9 +205,18 @@ const CtfFlagsPanel: React.FC<CtfFlagsPanelProps> = ({ctfId, state, active}) => 
                 columns={columns}
                 getRowId={(row: CtfFlagRow) => row.flag_id}
                 getRowHeight={() => 'auto'}
-                disableMultipleRowSelection={true}
-                disableSelectBtn={true}
-                disableCheckBoxes={true}
+                disableRowSelectionOnClick={true}
+                rowSelectionModel={selection}
+                onSelection={(model: GridRowSelectionModel) => setSelection(model)}
+                buttonsConfig={[{
+                    label: bulkServers.length ? `Replant selected (${bulkServers.length})` : 'Replant selected',
+                    variant: 'contained',
+                    color: 'primary',
+                    onClick: () => handleOpen(bulkServers),
+                    addTooltip: true,
+                    tooltip: 'Replant the servers of the selected flags, on every board',
+                    isDisabled: !canReplant || replanting || bulkServers.length === 0,
+                }]}
                 localeText={{noRowsLabel: "No flags in this event"}}
                 labelProps={{text: "Flags", icon: <FlagIcon fontSize={"large"} />}}
                 density={"comfortable"}
@@ -204,10 +224,10 @@ const CtfFlagsPanel: React.FC<CtfFlagsPanelProps> = ({ctfId, state, active}) => 
             />
             <ActionConfirmDialog
                 open={open}
-                title={`Replant ${target?.server ?? ''}`}
+                title={targets.length > 1 ? `Replant ${targets.length} servers` : `Replant ${targets[0] ?? ''}`}
                 message={
-                    `Plant every flag on ${target?.server ?? 'this server'} again, on every board. ` +
-                    `Each copy of the server restarts; the flag values stay the same.`
+                    `Plant every flag on ${targets.join(', ') || 'this server'} again, on every board. ` +
+                    `Each copy of ${targets.length > 1 ? 'these servers' : 'the server'} restarts; the flag values stay the same.`
                 }
                 confirmLabel="Replant"
                 onConfirm={handleConfirm}

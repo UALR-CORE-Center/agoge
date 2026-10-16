@@ -106,7 +106,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I10** Event Control panel — spec + done-when at PRD.md:1063 (the browser check that illegal actions are disabled is carried by I4b)
 - [x] **I11** Scoreboard settings — spec + done-when at PRD.md:1065
 - [x] **I12** Flags panel — spec + done-when at PRD.md:1066
-- [ ] **I13** Flags bulk replant — spec + done-when at PRD.md:1067
+- [x] **I13** Flags bulk replant — spec + done-when at PRD.md:1067
 - [ ] **I14** Hosts panel — spec + done-when at PRD.md:1068
 - [ ] **I15** Scoreboard panel — spec + done-when at PRD.md:1069
 - [ ] **I16** Event log panel — spec + done-when at PRD.md:1070
@@ -816,3 +816,13 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** The dashboard test's `ctfService` mock has to include every service function that a mounted panel calls. As I13-I17 fill their tabs, add each panel's getter there. Gates: frontend 15 files / 119 tests. ESLint is clean on the CTF paths, and tsc reports no CTF errors. No Python changed. `agoge-reviewer` found no defects; I applied its one minor note (separate replant error state).
 - **Blockers:** none. I4b is still open for a human to do the browser checks.
 - **Next:** I13 Flags bulk replant (PRD.md:1067). Turn on `checkboxSelection` in `CtfFlagsPanel` (drop `disableCheckBoxes`) and send one `PUT` with the union of the selected rows' `servers`.
+
+### Iteration 65 — 2026-10-16
+- **Completed:** I13.
+  - `CtfFlagsPanel` now uses Community `checkboxSelection`, with a controlled `rowSelectionModel` passed through `StyledDataGrid`'s prop spread. `disableRowSelectionOnClick` keeps a per-row Replant click from toggling the row's checkbox.
+  - A "Replant selected (N)" toolbar button (`buttonsConfig`) confirms through `ActionConfirmDialog`, then sends one `PUT /ctf/{id}/flags/` with `{servers}` set to `selectedServers(flags, selection)`. That is the de-duplicated union of the selected rows' servers, in row order, ignoring ids that have disappeared.
+  - The button is disabled outside `REPLANT_STATES`, while a request runs, and when nothing is selected. A success clears the selection. The per-row Replant uses the same `targets: string[]` path.
+  - 4 new tests: the `selectedServers` unit, a two-server bulk replant (one call, notice shown, selection cleared), one server shared by two flags, and the button disabled in ENDED.
+- **Learned:** `StyledDataGrid` ignores `disableMultipleRowSelection` (it reads `disableMultiRowSelection`), and a defined `isDisabled` in `buttonsConfig` overrides `requiresSelection`. Selected rows that the quick filter hides, or that sit on another page, stay selected; the dialog lists the server names so the user sees them before confirming. Gates: frontend 15 files / 123 tests. ESLint is clean on the CTF paths, and tsc reports no CTF errors. No Python changed. `agoge-reviewer` found no defects.
+- **Blockers:** none. I4b is still open for a human to do the browser checks.
+- **Next:** I14 Hosts panel (PRD.md:1068). Fill the Hosts `tabpanel` in `CtfDashboard` using `ctfService.getHosts`/`resetHost`, and add the getter to the dashboard test's service mock.
