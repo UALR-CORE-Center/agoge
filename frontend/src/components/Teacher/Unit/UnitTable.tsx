@@ -22,7 +22,7 @@ import {LinkButton} from "../../Buttons/LinkButton";
 import {ExpandableCell} from "../../Common/DataGrid/ExpandableCell";
 import StyledDataGrid, {ButtonConfig} from "../../Common/DataGrid/StyledDataGrid";
 import SimpleSnackbar from "../../Common/SnackBar/SnackBar";
-import {resolveStatus, StateMapping, StatusInfo} from "../../Common/Status/StateMapping";
+import {resolveStatus, StatusInfo} from "../../Common/Status/StateMapping";
 import StatusBadge from '../../Common/Status/StatusBadge';
 import AssessmentDialog from "./AssessmentDialog";
 
