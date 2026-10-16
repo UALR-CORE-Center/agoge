@@ -42,7 +42,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 
 ### Group D — Compute primitives and the loader
 - [x] **D1** `set_metadata` — spec + done-when at PRD.md:979
-- [ ] **D2** `get_guest_attributes` — spec + done-when at PRD.md:981
+- [x] **D2** `get_guest_attributes` — spec + done-when at PRD.md:981
 - [ ] **D3** Plant contract module — spec + done-when at PRD.md:982
 - [ ] **D4** Loader at build — spec + done-when at PRD.md:983
 
@@ -270,3 +270,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `items` defaults to `None` because E2's `finally` calls `set_metadata(name, remove=[...])` only. Gates now: api 362, cloud_functions 292, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** D2 `get_guest_attributes` (PRD.md:981).
+
+### Iteration 18 — 2026-10-16
+- **Completed:** D2 — `ComputeInstanceAPI.get_guest_attributes(resource_name, query_path, **kwargs)` sends `GetGuestAttributesInstanceRequest` through `_make_request` and returns `{entry.key: entry.value}` from `query_value.items`. GCE 404s an unwritten namespace with the same status as a missing instance, so the 404 is caught inside the client callable (no error log per poll) and the instance is re-read: an existing VM yields `{}`, a missing one raises `NotFound`. `cloud_functions/tests/test_compute_guest_attributes.py` (6 tests, real protos + real `_make_request`) covers the dict, request fields, project/zone overrides, an entry-less response, 404 → `{}` with no error log, 404 on a missing VM → `NotFound`, and other errors still raising.
+- **Learned:** E2's poller should treat `NotFound` from `get_guest_attributes` as a plant failure, not keep polling. Ruff flags a pre-existing F901 (`raise NotImplemented`) in `ComputeInstanceAPI.update`. Gates now: api 362, cloud_functions 298, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** D3 Plant contract module (`common/utilities/ctf_plant_contract.py`, PRD.md:982).

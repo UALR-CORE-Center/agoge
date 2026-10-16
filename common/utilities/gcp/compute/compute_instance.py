@@ -15,8 +15,10 @@ from google.cloud.compute_v1 import (
     AttachDiskInstanceRequest,
     Items,
     Metadata,
-    SetMetadataInstanceRequest
+    SetMetadataInstanceRequest,
+    GetGuestAttributesInstanceRequest
 )
+from google.api_core.exceptions import NotFound as GoogleNotFound
 from googleapiclient.discovery import Resource
 
 from common.constants.google import ResourceType, ClientType
@@ -389,3 +391,44 @@ class ComputeInstanceAPI(BaseComputeAPI):
                 )
 
 # [ eof ]
+
+    def get_guest_attributes(
+        self,
+        resource_name: str,
+        query_path: str,
+        **kwargs
+    ) -> dict:
+        """Returns the guest attributes under `query_path` (e.g. `agoge-ctf/`) as `{key: value}`.
+
+        Returns an empty dict when the VM has written nothing under the path yet. GCE answers that case
+        with a 404, the same status as a missing instance, so on a 404 the instance is re-read: a missing
+        instance still raises NotFound rather than looking like "no answer yet" to a poller.
+        """
+        client = self.client()
+        project = kwargs.get('project', self.project)
+        zone = kwargs.get('zone', self.zone)
+
+        def fetch(request):
+            # The 404 is caught here, not in _make_request, so routine polling of an empty path logs no error.
+            try:
+                return client.get_guest_attributes(request=request)
+            except GoogleNotFound:
+                return None
+
+        request = GetGuestAttributesInstanceRequest(
+            instance=resource_name,
+            project=project,
+            zone=zone,
+            query_path=query_path
+        )
+        attributes = self._make_request(
+            client_request=fetch,
+            action='get guest attributes',
+            resource=resource_name,
+            wait=False,
+            request=request
+        )
+        if attributes is None:
+            self.get(resource_name=resource_name, project=project, zone=zone)
+            return {}
+        return {entry.key: entry.value for entry in attributes.query_value.items}
