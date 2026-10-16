@@ -4,6 +4,7 @@ import {
     GridColDef,
     GridColumnVisibilityModel,
     GridRenderCellParams,
+    GridRowHeightReturnValue,
     GridRowParams,
 } from "@mui/x-data-grid";
 import React, {useCallback, useEffect, useMemo, useState} from "react";
@@ -58,7 +59,9 @@ const StackedRow: React.FC<StackedRowProps> = ({params, columns}) => {
             return col.renderCell(cellParams as GridRenderCellParams);
         }
         if ('getActions' in col && typeof col.getActions === 'function') {
-            return <Box sx={{display: 'flex', flexWrap: 'wrap'}}>{col.getActions({id: params.id, row: params.row, columns: [col]} as GridRowParams)}</Box>;
+            const actions = col.getActions({id: params.id, row: params.row, columns: [col]} as GridRowParams);
+            // The grid keys action items itself; outside it they need keys.
+            return <Box sx={{display: 'flex', flexWrap: 'wrap'}}>{React.Children.toArray(actions)}</Box>;
         }
         const value = cellParams.formattedValue ?? cellParams.value;
         if (typeof value === 'boolean') {
@@ -123,7 +126,15 @@ interface Options {
     initialVisibilityModel?: GridColumnVisibilityModel;
     onColumnVisibilityModelChange?: (model: GridColumnVisibilityModel, details: GridCallbackDetails) => void;
     enabled: boolean;
+    /** Whether rows size to their content in table mode too (StyledDataGrid's default). */
+    autoRowHeight?: boolean;
 }
+
+// Stable identities: the grid re-applies row heights when getRowHeight changes,
+// which must happen exactly when switching between cards and the table.
+const autoRowHeightFn = (): GridRowHeightReturnValue => 'auto';
+// null means "the grid's standard row height for the current density".
+const standardRowHeightFn = (): GridRowHeightReturnValue => null;
 
 export const useResponsiveColumns = ({
     columns,
@@ -131,6 +142,7 @@ export const useResponsiveColumns = ({
     initialVisibilityModel,
     onColumnVisibilityModelChange,
     enabled,
+    autoRowHeight = false,
 }: Options) => {
     const [containerWidth, setContainerWidth] = useState<number | null>(null);
     const [stacked, setStacked] = useState(false);
@@ -219,11 +231,39 @@ export const useResponsiveColumns = ({
         onColumnVisibilityModelChange?.(model, details);
     }, [stacked, onColumnVisibilityModelChange]);
 
-    return {
-        containerRef,
-        stacked,
+    // Everything a DataGrid needs for the responsive layout, so callers that use
+    // DataGrid directly and StyledDataGrid behave identically. Spread it after the
+    // caller's own props; merge `sx` with the caller's sx.
+    const gridProps = {
         columns: gridColumns,
         columnVisibilityModel,
         onColumnVisibilityModelChange: handleVisibilityChange,
+        // Always passed, never omitted: the grid caches measured heights, so
+        // simply dropping 'auto' after leaving card mode left rows squeezed to
+        // their content instead of returning to the standard height.
+        // Cards are taller than table rows and always size to their content.
+        getRowHeight: stacked || autoRowHeight ? autoRowHeightFn : standardRowHeightFn,
+        ...(stacked && {
+            // The header holds at most the select-all checkbox, and column
+            // choices make no sense while every row is a card.
+            columnHeaderHeight: 40,
+            disableColumnSelector: true,
+        }),
+        sx: {
+            [`& .${STACKED_CELL_CLASS}`]: {
+                whiteSpace: 'normal',
+                lineHeight: 'normal',
+                display: 'block',
+            },
+            ...(stacked && !checkboxSelection && {
+                '& .MuiDataGrid-columnHeaders': {display: 'none'},
+            }),
+        },
+    };
+
+    return {
+        containerRef,
+        stacked,
+        gridProps,
     };
 };

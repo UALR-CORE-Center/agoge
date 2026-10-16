@@ -14,13 +14,12 @@ import {useTheme} from "@mui/material/styles";
 import { SxProps } from "@mui/system";
 import {
     DataGrid,
-    GridRowHeightReturnValue,
     GridToolbar,
     DataGridProps as MuiDataGridProps,
 } from "@mui/x-data-grid";
 import React, {useState, useEffect, useId} from "react";
 import {CustomPagination} from "./CustomPagination";
-import {STACKED_CELL_CLASS, useResponsiveColumns} from "./useResponsiveColumns";
+import {useResponsiveColumns} from "./useResponsiveColumns";
 
 
 interface DataGridProps extends MuiDataGridProps {
@@ -157,13 +156,14 @@ const StyledDataGrid: React.FC<DataGridProps> = ({
         initialVisibilityModel: props.columnVisibilityModel ?? props.initialState?.columns?.columnVisibilityModel,
         onColumnVisibilityModelChange: props.onColumnVisibilityModelChange,
         enabled: !props.disableResponsiveLayout,
+        autoRowHeight: !props.disableAutoHeight,
     });
 
     const autoHeightProps = () => {
         // Stacked cards are taller than a table row, so they always size to content.
         if (!props.disableAutoHeight || responsive.stacked) {
+            // getRowHeight itself comes from responsive.gridProps.
             return {
-                getRowHeight: (): GridRowHeightReturnValue => 'auto',
                 getEstimatedRowHeight: () => 100,
                 autoHeight: true,
             };
@@ -182,26 +182,13 @@ const StyledDataGrid: React.FC<DataGridProps> = ({
                     aria-labelledby={props.labelProps?.text ? headingId : undefined}
                     {...props}
                     {...autoHeightProps()}
-                    columns={responsive.columns}
-                    columnVisibilityModel={responsive.columnVisibilityModel}
-                    onColumnVisibilityModelChange={responsive.onColumnVisibilityModelChange}
-                    // Column choices make no sense while every row is a card.
-                    disableColumnSelector={responsive.stacked || props.disableColumnSelector}
-                    // In card mode the header holds at most the select-all checkbox.
-                    columnHeaderHeight={responsive.stacked ? 40 : props.columnHeaderHeight}
+                    {...responsive.gridProps}
                     sx={{
                         ...props.sx,
-                        ...(responsive.stacked && !checkboxSelection && {
-                            '& .MuiDataGrid-columnHeaders': { display: 'none' },
-                        }),
+                        ...responsive.gridProps.sx,
                         ...(!props.disableAutoHeight && {
                             '& .MuiDataGrid-cell': { whiteSpace: 'normal', overflowWrap: 'break-word' },
                         }),
-                        [`& .${STACKED_CELL_CLASS}`]: {
-                            whiteSpace: 'normal',
-                            lineHeight: 'normal',
-                            display: 'block',
-                        },
                         '&.MuiDataGrid-root--densityCompact .MuiDataGrid-cell': { py: '8px' },
                         '&.MuiDataGrid-root--densityStandard .MuiDataGrid-cell': { py: '15px' },
                         '&.MuiDataGrid-root--densityComfortable .MuiDataGrid-cell': { py: '22px' },

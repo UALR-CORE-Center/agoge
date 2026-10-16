@@ -29,6 +29,7 @@ import { Unit } from "../../services/Unit/unit.model";
 import { unitService } from '../../services/Unit/unit.service';
 import { AppUiObjectNames } from "../../types/AppObjectNames";
 import {LinkButton} from "../Buttons/LinkButton";
+import {useResponsiveColumns} from "../Common/DataGrid/useResponsiveColumns";
 import ConfirmationDialog from "../Common/Dialogs/ConfirmationDialog/Confirmation";
 import EditFormDialog from "../Common/FormInputs/EditFormDialog";
 import SimpleSnackbar from "../Common/SnackBar/SnackBar";
@@ -154,6 +155,7 @@ const UnitManagerTab: React.FC<UnitManagerTabProps> = memo(({ viewType }) => {
             field: 'lms_integration',
             headerName: 'LMS Course',
             width: 150,
+            minWidth: 120,
             renderCell: ( cellValues: any) => (
                 <Box
                     sx={{
@@ -179,6 +181,7 @@ const UnitManagerTab: React.FC<UnitManagerTabProps> = memo(({ viewType }) => {
             field: 'name',
             headerName: 'Name',
             width: 200,
+            minWidth: 140,
             renderCell: (cellValues: any) => (
                 <Box sx={{
                     display: 'flex',
@@ -200,6 +203,7 @@ const UnitManagerTab: React.FC<UnitManagerTabProps> = memo(({ viewType }) => {
             field: 'creation_timestamp',
             headerName: 'Created',
             width: 140,
+            minWidth: 120,
             valueGetter: (value: any) => value ? value * 1000 : value,
             valueFormatter: (value?: number) => value == null ? '' : new Date(value).toLocaleDateString("en-US", {
                 month: 'short',
@@ -212,6 +216,7 @@ const UnitManagerTab: React.FC<UnitManagerTabProps> = memo(({ viewType }) => {
             field: 'workspace_settings',
             headerName: 'Expires',
             width: 140,
+            minWidth: 120,
             valueGetter: (params: any) => {
                 const timestamp = params.expires;
                 return timestamp ? timestamp * 1000 : timestamp;
@@ -229,6 +234,7 @@ const UnitManagerTab: React.FC<UnitManagerTabProps> = memo(({ viewType }) => {
             field: 'instructor_id',
             headerName: 'Instructor',
             width: 240,
+            minWidth: 180,
             editable: true,
             renderCell: (cellValues: any) => {
                 // If there is a single instructor and returns a string, this forces it to be put into an array
@@ -267,6 +273,7 @@ const UnitManagerTab: React.FC<UnitManagerTabProps> = memo(({ viewType }) => {
             type: 'actions',
             headerName: 'Actions',
             width: 90,
+            minWidth: 80,
             getActions: ({ id }) => {
                 const isInEditMode = rowModesModel[id]?.mode === GridRowModes.Edit;
 
@@ -293,8 +300,10 @@ const UnitManagerTab: React.FC<UnitManagerTabProps> = memo(({ viewType }) => {
         },
     ];
 
+    const responsive = useResponsiveColumns({columns, checkboxSelection: true, enabled: true});
+
     return (
-        <Box sx={{ height: '100%', p: { xs: 1, sm: 2 }, minWidth: 0 }}>
+        <Box ref={responsive.containerRef} sx={{ height: '100%', p: { xs: 1, sm: 2 }, minWidth: 0 }}>
             <Stack
                 alignItems={"center"}
                 direction={"row"}
@@ -331,10 +340,12 @@ const UnitManagerTab: React.FC<UnitManagerTabProps> = memo(({ viewType }) => {
                     <Skeleton variant="rectangular" width="100%" height="100%" />
                 </Box>
             ) : (
-                <Box sx={{ height: 500, width: '100%', minWidth: 0 }}>
+                // Cards size to their content instead of scrolling inside a fixed-height box.
+                <Box sx={{ height: responsive.stacked ? 'auto' : 500, width: '100%', minWidth: 0 }}>
                     <DataGrid
                         rows={unitList}
-                        columns={columns}
+                        {...responsive.gridProps}
+                        autoHeight={responsive.stacked}
                         density="comfortable"
                         apiRef={apiRef}
                         checkboxSelection={true}

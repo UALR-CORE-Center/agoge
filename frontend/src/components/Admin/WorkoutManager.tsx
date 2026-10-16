@@ -27,6 +27,7 @@ import { unitService } from "../../services/Unit/unit.service";
 import { Workout } from "../../services/Workout/workout.model";
 import { AppUiObjectNames } from "../../types/AppObjectNames";
 import {LinkButton} from "../Buttons/LinkButton";
+import {useResponsiveColumns} from "../Common/DataGrid/useResponsiveColumns";
 import ConfirmationDialog from "../Common/Dialogs/ConfirmationDialog/Confirmation";
 import EditFormDialog from "../Common/FormInputs/EditFormDialog";
 import SimpleSnackbar from "../Common/SnackBar/SnackBar";
@@ -153,6 +154,7 @@ const WorkoutManagerTab: React.FC<WorkoutManagerTabProps> = memo(({ viewType }) 
             field: 'id',
             headerName: 'ID',
             width: 160,
+            minWidth: 150,
             editable: false,
             sortable: true,
             renderCell: (params) => {
@@ -169,6 +171,7 @@ const WorkoutManagerTab: React.FC<WorkoutManagerTabProps> = memo(({ viewType }) 
             field: 'name',
             headerName: 'Name',
             flex: 200,
+            minWidth: 140,
             editable: false,
             renderCell: (params) => {
                 return (
@@ -192,6 +195,7 @@ const WorkoutManagerTab: React.FC<WorkoutManagerTabProps> = memo(({ viewType }) 
             field: 'student_email',
             headerName: 'Student Email',
             width: 220,
+            minWidth: 200,
             editable: false,
             renderCell: (params) => {
                 return (
@@ -208,6 +212,7 @@ const WorkoutManagerTab: React.FC<WorkoutManagerTabProps> = memo(({ viewType }) 
             field: 'state',
             headerName: 'State',
             width: 100,
+            minWidth: 110,
             editable: false,
             renderCell: (params) => {
                 return (
@@ -224,6 +229,7 @@ const WorkoutManagerTab: React.FC<WorkoutManagerTabProps> = memo(({ viewType }) 
             field: 'expires',
             headerName: 'Expires',
             width: 140,
+            minWidth: 120,
             editable: false,
             valueGetter: (value: any) => value ? value * 1000 : value,
             valueFormatter: (value: number) => value == null ? "" : new Date(value).toLocaleDateString("en-US", {
@@ -238,6 +244,7 @@ const WorkoutManagerTab: React.FC<WorkoutManagerTabProps> = memo(({ viewType }) 
             type: 'actions',
             headerName: 'Actions',
             width: 90,
+            minWidth: 80,
             getActions: ({id}) => {
                 const isInEditMode = rowModesModel[id]?.mode === GridRowModes.Edit;
 
@@ -266,8 +273,10 @@ const WorkoutManagerTab: React.FC<WorkoutManagerTabProps> = memo(({ viewType }) 
         },
     ];
 
+    const responsive = useResponsiveColumns({columns, checkboxSelection: true, enabled: true});
+
     return (
-        <Box sx={{ height: '100%', p: { xs: 1, sm: 2 }, minWidth: 0 }}>
+        <Box ref={responsive.containerRef} sx={{ height: '100%', p: { xs: 1, sm: 2 }, minWidth: 0 }}>
             <Stack
                 alignItems={"center"}
                 direction={"row"}
@@ -307,10 +316,12 @@ const WorkoutManagerTab: React.FC<WorkoutManagerTabProps> = memo(({ viewType }) 
                     <Skeleton variant="rectangular" width="100%" height="100%" />
                 </Box>
             ) : (
-                <Box sx={{ height: 500, width: '100%', minWidth: 0 }}>
+                // Cards size to their content instead of scrolling inside a fixed-height box.
+                <Box sx={{ height: responsive.stacked ? 'auto' : 500, width: '100%', minWidth: 0 }}>
                     <DataGrid
                         rows={rows}
-                        columns={columns}
+                        {...responsive.gridProps}
+                        autoHeight={responsive.stacked}
                         editMode={"cell"}
                         density="comfortable"
                         checkboxSelection={true}
