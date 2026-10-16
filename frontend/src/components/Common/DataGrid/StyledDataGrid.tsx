@@ -20,6 +20,7 @@ import {
 } from "@mui/x-data-grid";
 import React, {useState, useEffect, useId} from "react";
 import {CustomPagination} from "./CustomPagination";
+import {STACKED_CELL_CLASS, useResponsiveColumns} from "./useResponsiveColumns";
 
 
 interface DataGridProps extends MuiDataGridProps {
@@ -42,6 +43,8 @@ interface DataGridProps extends MuiDataGridProps {
     buttonsConfig?: ButtonConfig[];
     showCellBorder?: boolean;
     disableAutoHeight?: boolean;
+    /** Keep fixed column widths and horizontal scrolling instead of fluid columns that stack into cards when they no longer fit. */
+    disableResponsiveLayout?: boolean;
 
     // Could be updated to be JSX.Element for customizing
     refreshing?: boolean;
@@ -147,8 +150,18 @@ const StyledDataGrid: React.FC<DataGridProps> = ({
         );
     };
 
+    const checkboxSelection = props.disableCheckBoxes === undefined ? true : !props.disableCheckBoxes;
+    const responsive = useResponsiveColumns({
+        columns: props.columns,
+        checkboxSelection,
+        initialVisibilityModel: props.columnVisibilityModel ?? props.initialState?.columns?.columnVisibilityModel,
+        onColumnVisibilityModelChange: props.onColumnVisibilityModelChange,
+        enabled: !props.disableResponsiveLayout,
+    });
+
     const autoHeightProps = () => {
-        if (!props.disableAutoHeight) {
+        // Stacked cards are taller than a table row, so they always size to content.
+        if (!props.disableAutoHeight || responsive.stacked) {
             return {
                 getRowHeight: (): GridRowHeightReturnValue => 'auto',
                 getEstimatedRowHeight: () => 100,
@@ -169,13 +182,31 @@ const StyledDataGrid: React.FC<DataGridProps> = ({
                     aria-labelledby={props.labelProps?.text ? headingId : undefined}
                     {...props}
                     {...autoHeightProps()}
+                    columns={responsive.columns}
+                    columnVisibilityModel={responsive.columnVisibilityModel}
+                    onColumnVisibilityModelChange={responsive.onColumnVisibilityModelChange}
+                    // Column choices make no sense while every row is a card.
+                    disableColumnSelector={responsive.stacked || props.disableColumnSelector}
+                    // In card mode the header holds at most the select-all checkbox.
+                    columnHeaderHeight={responsive.stacked ? 40 : props.columnHeaderHeight}
                     sx={{
                         ...props.sx,
+                        ...(responsive.stacked && !checkboxSelection && {
+                            '& .MuiDataGrid-columnHeaders': { display: 'none' },
+                        }),
+                        ...(!props.disableAutoHeight && {
+                            '& .MuiDataGrid-cell': { whiteSpace: 'normal', overflowWrap: 'break-word' },
+                        }),
+                        [`& .${STACKED_CELL_CLASS}`]: {
+                            whiteSpace: 'normal',
+                            lineHeight: 'normal',
+                            display: 'block',
+                        },
                         '&.MuiDataGrid-root--densityCompact .MuiDataGrid-cell': { py: '8px' },
                         '&.MuiDataGrid-root--densityStandard .MuiDataGrid-cell': { py: '15px' },
                         '&.MuiDataGrid-root--densityComfortable .MuiDataGrid-cell': { py: '22px' },
                     }}
-                    checkboxSelection={props.disableCheckBoxes === undefined ? true : !props.disableCheckBoxes}
+                    checkboxSelection={checkboxSelection}
                     rows={props.data}
                     loading={!!props.loading}
                     filterDebounceMs={60}
@@ -243,9 +274,9 @@ const StyledDataGrid: React.FC<DataGridProps> = ({
 
     const theme = useTheme();
     return (
-        // minWidth: 0 lets the grid shrink inside flex parents; columns wider than
-        // the screen then scroll horizontally within the grid, not the page.
-        <Box sx={{ width: '100%', minWidth: 0 }}>
+        // minWidth: 0 lets the grid shrink inside flex parents. The ref measures the
+        // width the grid actually gets, which decides between columns and cards.
+        <Box ref={responsive.containerRef} sx={{ width: '100%', minWidth: 0 }}>
             {renderLabel()}
             <Box sx={{ py: 2 }}>
                 <Stack direction={'row'} alignItems={'center'} justifyContent={'space-between'} flexWrap={'wrap'} gap={1}>

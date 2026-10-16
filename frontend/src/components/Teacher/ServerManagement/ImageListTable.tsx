@@ -515,7 +515,7 @@ const ImageListTable: React.FC = () => {
             field: 'state',
             headerName: 'State',
             align: 'center',
-            minWidth: 120,
+            minWidth: 110,
             renderCell: (params: any) => {
                 const isLoading = ![0, 4, 6, 11].includes(params.value);
                 const status = resolveStatus("server",params.value)
@@ -556,6 +556,8 @@ const ImageListTable: React.FC = () => {
         {
             field: 'is_shared',
             headerName: 'Used by',
+            width: 180,
+            // Fits the full "Shared across sites" chip.
             minWidth: 180,
             type: 'boolean',
             renderCell: (params) => (
@@ -567,7 +569,7 @@ const ImageListTable: React.FC = () => {
         {
             field: 'status',
             headerName: 'Availability',
-            minWidth: 120,
+            minWidth: 110,
             renderCell: (params: any) => {
                 const status = resolveStatus("image", params.value);
                 return (
@@ -589,6 +591,7 @@ const ImageListTable: React.FC = () => {
             field: 'in_use_by',
             headerName: 'In use by',
             width: 200,
+            minWidth: 150,
             filterable: true,
             sortable:true,
             renderCell: (params: any) => (
@@ -603,6 +606,7 @@ const ImageListTable: React.FC = () => {
             field: 'imageDetails',
             headerName: 'Details',
             width: 150,
+            minWidth: 130,
             filterable: false,
             sortable: false,
             renderCell: (params: any) => (
@@ -615,6 +619,7 @@ const ImageListTable: React.FC = () => {
             field: 'connect',
             headerName: 'Connect',
             width: 150,
+            minWidth: 130,
             renderCell: (params: any) => (
                 params.row.is_shared && !params.row.can_edit_shared ? null : <ServerConnectButton item={params.row} />
             )
@@ -622,7 +627,9 @@ const ImageListTable: React.FC = () => {
         {
             field: 'imageActions',
             headerName: 'Actions',
-            minWidth: 310,
+            // Row actions wrap onto a second line rather than needing the full row of icons.
+            width: 310,
+            minWidth: 170,
             filterable: false,
             sortable: false,
             renderCell: (params: any) => <Box sx={{display: 'flex', alignItems: 'center', flexWrap: 'wrap', height: '100%'}}>{imageRowActions(params.row)}</Box>

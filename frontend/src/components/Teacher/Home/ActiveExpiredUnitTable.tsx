@@ -191,12 +191,14 @@ const ActiveExpiredUnitTable: React.FC = () => {
             field: 'id',
             headerName: 'ID',
             renderCell: (params: { row: any; }) => generateUnitLink(params.row.id),
+            // The link button is a fixed 140px.
             minWidth: 160
         },
         {
             field: 'summaryName',
             headerName: 'Name',
             width: 200,
+            minWidth: 130,
             renderCell: (params: any) => (
                 <Tooltip title={params.value}>
                     <span>{params.value}</span>
@@ -206,7 +208,7 @@ const ActiveExpiredUnitTable: React.FC = () => {
         {
             field: 'lmsIntegrationName',
             headerName: 'LMS Course',
-            minWidth: 50,
+            minWidth: 100,
             renderCell: (params: any) => (
                 <Tooltip title={params.value}>
                     <span>{params.value}</span>
@@ -214,7 +216,7 @@ const ActiveExpiredUnitTable: React.FC = () => {
             )
         },
         {
-            field: 'summaryDescription', headerName: 'Description', width: 250, renderCell: (params: any) => (
+            field: 'summaryDescription', headerName: 'Description', width: 250, minWidth: 140, renderCell: (params: any) => (
                 <Tooltip title={params.value}>
                     <span>{params.value}</span>
                 </Tooltip>
@@ -225,6 +227,7 @@ const ActiveExpiredUnitTable: React.FC = () => {
             headerName: 'Created',
             type: 'dateTime',
             width:150,
+            minWidth: 110,
             valueFormatter: (value?: number) => {
                 return convertTimestamp(value)
             }
@@ -234,6 +237,7 @@ const ActiveExpiredUnitTable: React.FC = () => {
             headerName: 'Expires',
             type: 'dateTime',
             width:150,
+            minWidth: 110,
             valueFormatter: (value?: number) => {
                 return convertTimestamp(value)
             }
@@ -242,6 +246,7 @@ const ActiveExpiredUnitTable: React.FC = () => {
             field: 'instructorId',
             headerName: 'Instructor',
             width: 240,
+            minWidth: 180,
             editable: true,
             renderCell: (cellValues: any) => {
                 let instructorList = [];
@@ -294,6 +299,7 @@ const ActiveExpiredUnitTable: React.FC = () => {
             type: 'actions',
             headerName: 'Actions',
             width: 90,
+            minWidth: 80,
             renderCell: (params: { id: GridRowId }) => {
                 const { id } = params;
                 const isInEditMode = rowModesModel[id]?.mode === GridRowModes.Edit;

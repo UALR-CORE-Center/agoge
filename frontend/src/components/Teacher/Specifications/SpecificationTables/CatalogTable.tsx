@@ -181,7 +181,7 @@ const CatalogTable: React.FC = () => {
             field: 'name',
             headerName: 'Name',
             flex: 1,
-            minWidth: 180,
+            minWidth: 160,
             filterable: true,
             sortable: true,
             renderCell: (params: any) => (
@@ -191,6 +191,7 @@ const CatalogTable: React.FC = () => {
         {
             field: 'discriminator',
             headerName: 'Discriminator',
+            minWidth: 110,
             sortable: false,
             filterable: false,
             renderCell: (cellValues: any) => (
@@ -218,7 +219,7 @@ const CatalogTable: React.FC = () => {
             field: 'assessment_type',
             headerName: 'Assessment',
             flex: 1,
-            minWidth: 150,
+            minWidth: 140,
             filterable: true,
             sortable: true,
             renderCell: (params: GridRenderCellParams) => (
@@ -234,7 +235,8 @@ const CatalogTable: React.FC = () => {
         {
             field: 'actions',
             headerName: 'Actions',
-            minWidth: 180,
+            width: 180,
+            minWidth: 140,
             renderCell: (params: any) => {
                 return renderLabRowActions(params.row);
             }
@@ -243,6 +245,7 @@ const CatalogTable: React.FC = () => {
             field: 'description',
             headerName: 'Description',
             width: 150,
+            minWidth: 130,
             filterable: false,
             sortable: false,
             renderCell: (params: GridRenderCellParams) => {
