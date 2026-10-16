@@ -9,6 +9,7 @@ from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 
 from cloud_fn_utilities.course_objects.ctf.arm_worker import ArmWorker
 from cloud_fn_utilities.course_objects.ctf.flag_planter import FlagPlanter, board_servers
+from cloud_fn_utilities.course_objects.ctf.host_reset import HostReset
 
 
 class CtfHandler:
@@ -54,10 +55,10 @@ class CtfHandler:
             )
             raise ValueError("CTF id or workout id missing from CTF event attributes.")
 
-        # CTF_HOST_RESET (host_reset, G4) is added when that dispatcher lands
         self.action_map = {
             str(PubSub.Actions.CTF_ARM_BOARD.value): self._arm_board,
             str(PubSub.Actions.CTF_PLANT.value): self._plant,
+            str(PubSub.Actions.CTF_HOST_RESET.value): self._host_reset,
         }
 
     def route(self) -> None:
@@ -91,6 +92,14 @@ class CtfHandler:
 
         servers = [self.server_name] if self.server_name else board_servers(event, board)
         FlagPlanter(event, env_dict=self.env_dict, db=self.db).plant(board, servers)
+
+    def _host_reset(self) -> None:
+        """
+        CTF_HOST_RESET: resets SERVER_NAME on one board in RESET_MODE. HostReset loads the event, board and
+        server itself and raises ValueError for a missing server name or an unknown mode before any read.
+        """
+        HostReset(env_dict=self.env_dict, db=self.db).run(self.ctf_id, self.workout_id, self.server_name,
+                                                           self.reset_mode)
 
     def _load_event(self) -> CtfEventModel:
         data = self.db.get(DbCollections.CTF, self.ctf_id)

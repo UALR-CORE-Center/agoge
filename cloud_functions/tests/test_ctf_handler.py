@@ -1,4 +1,4 @@
-"""CtfHandler routing and the Handlers.CTF branch in main.py (E3, E4b). FlagPlanter, ArmWorker and Firestore are mocked."""
+"""CtfHandler routing and the Handlers.CTF branch in main.py (E3, E4b, G4b). FlagPlanter, ArmWorker, HostReset and Firestore are mocked."""
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -86,6 +86,12 @@ def arm_worker():
         yield worker_cls
 
 
+@pytest.fixture
+def host_reset():
+    with patch.object(ctf_handler_module, "HostReset") as reset_cls:
+        yield reset_cls
+
+
 def _handler(attributes, db=None):
     return CtfHandler(attributes, env_dict=ENV, db=db if db is not None else _db())
 
@@ -165,12 +171,52 @@ def test_arm_worker_errors_propagate(arm_worker):
         _handler(_attributes(action=PubSub.Actions.CTF_ARM_BOARD)).route()
 
 
+@pytest.mark.parametrize("mode", ["replant", "restart", "rebuild"])
+def test_ctf_host_reset_reaches_host_reset_with_server_and_mode(planter, arm_worker, host_reset, mode):
+    db = _db()
+    _handler(_attributes(action=PubSub.Actions.CTF_HOST_RESET, **{
+        PubSub.EventAttributes.SERVER_NAME: 'web',
+        PubSub.EventAttributes.RESET_MODE: mode,
+    }), db=db).route()
+
+    host_reset.assert_called_once_with(env_dict=ENV, db=db)
+    host_reset.return_value.run.assert_called_once_with(CTF_ID, WORKOUT_ID, 'web', mode)
+    # HostReset does its own loads and its own replant, so the handler neither reads nor plants
+    db.get.assert_not_called()
+    planter.assert_not_called()
+    arm_worker.assert_not_called()
+
+
+def test_ctf_host_reset_passes_missing_server_and_mode_through(host_reset):
+    # HostReset rejects a missing server or mode with ValueError; the handler must not substitute defaults
+    _handler(_attributes(action=PubSub.Actions.CTF_HOST_RESET)).route()
+
+    host_reset.return_value.run.assert_called_once_with(CTF_ID, WORKOUT_ID, None, None)
+
+
+def test_host_reset_errors_propagate(host_reset):
+    host_reset.return_value.run.side_effect = ValueError("Unsupported reset mode")
+
+    with pytest.raises(ValueError):
+        _handler(_attributes(action=PubSub.Actions.CTF_HOST_RESET, **{
+            PubSub.EventAttributes.SERVER_NAME: 'web',
+            PubSub.EventAttributes.RESET_MODE: 'explode',
+        })).route()
+
+
+def test_ctf_plant_does_not_reach_host_reset(planter, host_reset):
+    _handler(_attributes()).route()
+
+    host_reset.assert_not_called()
+
+
 @pytest.mark.parametrize("action", ["999", str(PubSub.Actions.START.value), str(PubSub.Actions.NUKE.value)])
-def test_unknown_action_raises_value_error(planter, arm_worker, action):
+def test_unknown_action_raises_value_error(planter, arm_worker, host_reset, action):
     with pytest.raises(ValueError):
         _handler(_attributes(action=action)).route()
     planter.assert_not_called()
     arm_worker.assert_not_called()
+    host_reset.assert_not_called()
 
 
 def test_missing_action_raises_value_error():
