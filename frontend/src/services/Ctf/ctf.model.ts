@@ -6,7 +6,9 @@ export type LocationType = 'file' | 'registry' | 'env' | 'ads';
 export type OperatingSystem = 'linux' | 'windows';
 export type PlantStatus = 'pending' | 'planting' | 'planted' | 'failed' | 'stale';
 export type ArmStatus = 'pending' | 'arming' | 'armed' | 'failed';
-export type Verdict = 'correct' | 'incorrect' | 'duplicate' | 'decoy' | 'cross_submission' | 'rate_limited' | 'closed';
+// A runtime list, not just a type, so the Submissions panel can offer every verdict as a filter.
+export const VERDICTS = ['correct', 'incorrect', 'duplicate', 'decoy', 'cross_submission', 'rate_limited', 'closed'] as const;
+export type Verdict = typeof VERDICTS[number];
 export type CtfAction = 'arm' | 'start' | 'pause' | 'resume' | 'end' | 'archive';
 export type ResetMode = 'replant' | 'restart' | 'rebuild';
 // A runtime list, not just a type, so the Event Log panel can offer every action as a filter.

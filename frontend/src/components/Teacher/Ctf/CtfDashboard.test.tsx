@@ -16,7 +16,7 @@ import {SCOREBOARD_POLL_INTERVAL_MS} from "./CtfScoreboardPanel";
 import {formatDuration, remainingSeconds} from "./ctfTime";
 
 vi.mock("../../../services/Ctf/ctf.service", () => ({
-    ctfService: {getFlags: vi.fn(), getHosts: vi.fn(), getLog: vi.fn(), getScoreboard: vi.fn(), getState: vi.fn(), processAction: vi.fn()},
+    ctfService: {getFlags: vi.fn(), getHosts: vi.fn(), getLog: vi.fn(), getScoreboard: vi.fn(), getState: vi.fn(), getSubmissions: vi.fn(), processAction: vi.fn()},
 }));
 
 const NOW = 1_800_000_000;
@@ -175,6 +175,31 @@ describe("CtfDashboard", () => {
         await flush();
         expect(ctfService.getLog).toHaveBeenCalledWith("eventevent", undefined);
         expect(within(screen.getByRole("tabpanel")).getByText("No actions logged yet")).toBeInTheDocument();
+    });
+
+    it("mounts the Submissions panel with team names from the state poll", async () => {
+        vi.mocked(ctfService.getState).mockResolvedValue(stateResponse({
+            boards: [
+                {workout_id: "boardaaaaa", team_name: "Red", arm_status: "armed", arm_error: null, plant_failed_count: 0, plant_stale_count: 0},
+                {workout_id: "boardbbbbb", team_name: "Blue", arm_status: "armed", arm_error: null, plant_failed_count: 0, plant_stale_count: 0},
+            ],
+        }));
+        vi.mocked(ctfService.getFlags).mockResolvedValue([]);
+        vi.mocked(ctfService.getSubmissions).mockResolvedValue([{
+            id: "sub-1", ctf_id: "eventevent", workout_id: "boardaaaaa", flag_id: "web-1", submitted_digest: "d",
+            verdict: "cross_submission", matched_workout_id: "boardbbbbb", points_awarded: 0,
+            submitted_at: NOW - 30, origin_ip: null,
+        }]);
+        renderDashboard();
+        await flush();
+        expect(ctfService.getSubmissions).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole("tab", {name: "Submissions"}));
+        await flush();
+        expect(ctfService.getSubmissions).toHaveBeenCalledWith("eventevent", undefined);
+        const panel = within(screen.getByRole("tabpanel"));
+        expect(panel.getByRole("gridcell", {name: "Red"})).toBeInTheDocument();
+        expect(panel.getByRole("gridcell", {name: "Blue"})).toBeInTheDocument();
     });
 
     it("counts down between polls and re-reads state every 10 s", async () => {

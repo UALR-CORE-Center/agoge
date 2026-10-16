@@ -110,7 +110,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I14** Hosts panel — spec + done-when at PRD.md:1068
 - [x] **I15** Scoreboard panel — spec + done-when at PRD.md:1069
 - [x] **I16** Event log panel — spec + done-when at PRD.md:1070
-- [ ] **I17** Submission log panel — spec + done-when at PRD.md:1071
+- [x] **I17** Submission log panel — spec + done-when at PRD.md:1071
 
 - [ ] **LINT1** `frontend/src/utilities/transformers/unit.transform.test.ts:2` fails eslint `import/order` (`./unit.transform` should come after `./specificationEdit.transform`). This was already the case before I6. Not CTF-specific, and it is outside the CTF lint gate.
 
@@ -889,3 +889,15 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `usePolling` does not re-run when the polled function changes, and it skips a poll while one is pending. So a filter change has to call the fetch itself, and the stale-response guard has to live in the panel. Gates: frontend 18 files / 152 tests. ESLint is clean on the CTF paths, and tsc reports no CTF errors. No Python changed, so the Python suites were not re-run. `agoge-reviewer` found no defects. I applied its one wording nit: the "filter to see older" hint is hidden when a filter is already set.
 - **Blockers:** none. I4b is still open for a human to do the browser checks.
 - **Next:** I17 Submission log panel (PRD.md:1071). Mirror `CtfEventLogPanel`: a verdict filter (`ctfService.getSubmissions(ctfId, verdict?)`), newest first by `submitted_at`, and show the matched team on `cross_submission` rows. Add the getter to the dashboard test's service mock.
+
+### Iteration 69 — 2026-10-16
+- **Completed:** I17.
+  - New `frontend/src/components/Teacher/Ctf/CtfSubmissionLogPanel.tsx` is mounted in the dashboard's Submissions `tabpanel`. It is a Community `StyledDataGrid` (`getRowId` = `id`) with Time, Team, Flag, Verdict (an outlined `Chip`), Matched team, Points and Origin IP.
+  - Team names come from the dashboard's 10 s state poll (`event.boards`, passed as `boards`), so they cost no extra read. An unknown board falls back to its workout id. Matched team is filled only on `cross_submission` rows.
+  - Filter: a Verdict `TextField select` with "All verdicts" plus every `VERDICTS` member, applied server-side through `ctfService.getSubmissions(ctfId, verdict)`. It has the same `filterRef` stale-response guard as the Event Log panel.
+  - Order and polling: newest first by `submitted_at`, polled every 15 s only while the tab is active, and an ARCHIVED event is read once. A note shows at the 500-row cap.
+  - `Verdict` in `ctf.model.ts` now derives from a runtime `VERDICTS` array.
+  - Tests: `CtfSubmissionLogPanel.test.tsx` (10) and one added `CtfDashboard` test that checks team names flowing from the state poll. `getSubmissions` was added to the dashboard's service mock.
+- **Learned:** `CtfStateResponse.boards` already carries `workout_id` → `team_name` for every board, so a panel that needs team names should take it as a prop rather than add a read. Gates: frontend 19 files / 163 tests. ESLint is clean on the CTF paths, and tsc reports no CTF errors. No Python changed, so the Python suites were not re-run. `agoge-reviewer` found no defects.
+- **Blockers:** none. I4b is still open for a human to do the browser checks.
+- **Next:** LINT1 (a one-line import-order fix), then J1 Student CTF polling (PRD.md:1075).
