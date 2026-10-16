@@ -1,13 +1,15 @@
+import math
 import time
 from typing import Optional, Tuple
 
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections, DbOperators
 from common.constants.states import CtfStates
-from common.exceptions.agoge import Conflict, NotFound
+from common.exceptions.agoge import Conflict, NotFound, RateLimitExceeded
 from common.models.agoge import (
     CtfBoardModel,
     CtfDigestModel,
     CtfEventModel,
+    CtfRateLimitModel,
     CtfSubmissionModel,
     Verdict,
 )
@@ -18,6 +20,8 @@ from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.id_generator import IdGenerator
 
 SUBMISSIONS_CLOSED_MESSAGE = "Submissions are closed."
+RATE_LIMIT_WINDOW_SECONDS = 60
+UNPARSED_BUCKET = "unparsed"
 
 
 class CtfScoring:
@@ -60,6 +64,22 @@ class CtfScoring:
             self._record(event.id, workout_id, digest, 'closed', parsed_flag_id, origin_ip)
             raise Conflict(message=SUBMISSIONS_CLOSED_MESSAGE)
 
+        # Step 2: a Firestore transaction, not an in-memory limiter, because Cloud Run runs several
+        # instances. Values that don't parse share one bucket, so guessing can't dodge the limit.
+        bucket = parsed_flag_id or UNPARSED_BUCKET
+        retry_after = self.db.transaction(
+            lambda transaction: self._rate_limit_in_transaction(
+                transaction, event.id, workout_id, bucket, event.spec.scoring.submission_rate_limit,
+            )
+        )
+        if retry_after is not None:
+            self._record(event.id, workout_id, digest, 'rate_limited', parsed_flag_id, origin_ip)
+            self.logger.warning(f"{self.class_name}:{event.id} - Submission rate limited",
+                                workout_id=workout_id, bucket=bucket)
+            raise RateLimitExceeded(
+                message=f"Too many submissions for this challenge. Try again in {retry_after} seconds."
+            )
+
         # Steps 3-5: one digest read resolves the value to the board and flag it was derived for.
         match = self._digest(digest)
         matched_workout_id = None
@@ -92,6 +112,29 @@ class CtfScoring:
             points_awarded=shown_points,
             message=self.MESSAGES[shown],
         )
+
+    def _rate_limit_in_transaction(
+        self, transaction, ctf_id: str, workout_id: str, bucket: str, limit: int
+    ) -> Optional[int]:
+        """Count this submission in its 60 s window; return seconds until the window ends when over the limit."""
+        doc_id = f"{ctf_id}-{workout_id}-{bucket}"
+        doc_ref = self.db.db.collection(DbCollections.CTF_RATE_LIMIT.value).document(doc_id)
+        snapshot = doc_ref.get(transaction=transaction)
+        current = None
+        if snapshot.exists:
+            # An unreadable counter is treated as a fresh window rather than blocking the team.
+            current = ModelValidator(CtfRateLimitModel, log_location=self.log_name).load(
+                snapshot.to_dict(), halt_on_error=False
+            )
+        now = time.time()
+        if current is None or now - current.window_start >= RATE_LIMIT_WINDOW_SECONDS:
+            transaction.set(doc_ref, CtfRateLimitModel(id=doc_id, window_start=now, count=1).model_dump())
+            return None
+        if current.count >= limit:
+            # A refused submission is not counted, so hammering cannot push the window's end back.
+            return max(1, math.ceil(current.window_start + RATE_LIMIT_WINDOW_SECONDS - now))
+        transaction.update(doc_ref, {'count': current.count + 1})
+        return None
 
     def _award_in_transaction(
         self, transaction, event: CtfEventModel, board_id: str, flag_id: str, parsed_flag_id: Optional[str]

@@ -79,7 +79,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 ### Group H — Scoring
 - [x] **H1** Submission resolve — spec + done-when at PRD.md:1026
 - [x] **H2** Solve award — spec + done-when at PRD.md:1028
-- [ ] **H3** Rate limiting — spec + done-when at PRD.md:1030
+- [x] **H3** Rate limiting — spec + done-when at PRD.md:1030
 - [ ] **H4** Hints — spec + done-when at PRD.md:1032
 - [ ] **H5** Student board read — spec + done-when at PRD.md:1033
 - [ ] **H6** Scoreboards — spec + done-when at PRD.md:1035
@@ -521,3 +521,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** The PRD increments `attempts` only inside step 6 (same-board matches), so wrong guesses don't count. That follows the algorithm literally and keeps the "at most one board transaction" budget. The ctf_enabled check is left to the student router (R2), as with the other core classes. Gates now: api 688, cloud_functions 449, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** H3 Rate limiting. Insert step 2 between the closed check and the digest read in `CtfScoring.submit`: a transaction on `agoge-ctf-rate-limit/{ctf_id}-{workout_id}-{bucket}`, record `rate_limited`, raise `RateLimitExceeded`. PRD.md:1030.
+
+### Iteration 43 — 2026-10-16
+- **Completed:** H3 — step 2 of `CtfScoring.submit` (`api/core/ctf/scoring.py` `_rate_limit_in_transaction`). It runs after the closed check and before the digest read. It is one `db.transaction` on `agoge-ctf-rate-limit/{ctf_id}-{workout_id}-{bucket}`, with bucket = parsed flag id or `"unparsed"`. If there is no counter, or the window is ≥60 s old, it `set`s a fresh window with count=1. Otherwise, at `count >= submission_rate_limit` it records `rate_limited` and raises `RateLimitExceeded("Too many submissions for this challenge. Try again in <n> seconds.")`, where n = ceil(seconds left, min 1). Otherwise it increments. A refused submission is not counted, so the window's end can't be pushed back. An unreadable counter starts a fresh window. `FakeDb` in `test_ctf_scoring_submit.py` now supports `transaction.set`, and it counts board transactions (`transactions`) separately from `rate_limit_transactions`. It has 10 new tests: SC-11, retry-after, a new window resetting the count, per-flag, per-board, the unparsed bucket, the configured limit, a corrupt counter, and the closed check skipping the limiter.
+- **Learned:** `http_errors` already maps `RateLimitExceeded` → 429, so R2 just needs to use it. Gates now: api 698, cloud_functions 449, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** H4 Hints (PRD.md:1032).
