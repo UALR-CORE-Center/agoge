@@ -69,7 +69,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 ### Group G — Hosts
 - [x] **G1** Replant publish — spec + done-when at PRD.md:1015
 - [x] **G2** Host rows — spec + done-when at PRD.md:1016
-- [ ] **G3** Reset publish — spec + done-when at PRD.md:1017
+- [x] **G3** Reset publish — spec + done-when at PRD.md:1017
 - [ ] **G4** Reset dispatcher — spec + done-when at PRD.md:1018
 - [ ] **G4b** Route `CTF_HOST_RESET` → the `host_reset` dispatcher (with `SERVER_NAME`, `RESET_MODE`) in `CtfHandler.action_map`, with a test showing it reaches it (E3 done-when, PRD.md:992)
 - [ ] **G5** Reset `replant` — spec + done-when at PRD.md:1020
@@ -470,3 +470,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Server docs are keyed `f"{workout_id}-{name}"` with `parent_id = workout_id`. I read them as raw dicts, not through `ModelValidator(ServerModel)`, so a legacy server doc can't blank the panel. G3 should look up the target with `db.get(SERVER, f"{workout_id}-{server}")` and refuse `rebuild` with the same `wireguard_endpoint_id` check. Gates now: api 636, cloud_functions 417, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** G3 Reset publish (PRD.md:1017), `CtfHosts.reset(ctf_id, workout_id, server, mode, user)`.
+
+### Iteration 39 — 2026-10-16
+- **Completed:** G3 — `CtfHosts.reset(ctf_id, workout_id, server, mode, user)` in `api/core/ctf/hosts.py` publishes exactly one `CTF_HOST_RESET` (handler `CTF`, `CTF_ID`, `WORKOUT_ID`, `SERVER_NAME`, `RESET_MODE`) through the shared `_publish`, which resolves the future. All checks run before the publish, in this order: an unknown mode → `BadRequest` (before any read); `get` (`NotFound`, then `Unauthorized`); state not in `REPLANT_STATES` (ARMED/RUNNING/PAUSED/BROKEN) → `Conflict` naming the state; a workout not in `board_ids` → `NotFound`; no `SERVER` doc at `f"{workout_id}-{server}"` → `NotFound`; `replant` on a server with no spec flags → `BadRequest`; `rebuild` with a `wireguard_endpoint_id` → `BadRequest`. Nothing is written. Reads are exactly the event get and the one target server get (an SC-9 style assertion). `api/unit_tests/test_ctf_hosts_reset.py` has 28 tests.
+- **Learned:** The PRD gives no state rule for resets, so they reuse the replant states: before ARMED nothing is planted (and ARMING would race the arm worker), and after PAUSED the exercise is over. restart and rebuild are allowed on servers with no flags, and restart is allowed on WireGuard servers. The core takes `mode` as a str and checks it against `get_args(ResetMode)`, so a caller other than the router can't bypass it. Gates now: api 664, cloud_functions 417, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** G4 Reset dispatcher (`cloud_functions/.../ctf/host_reset.py` mode → method map; SC-9; an unknown mode → `ValueError`), PRD.md:1018.
