@@ -26,6 +26,20 @@ UnitTypeValue = Literal[
     BuildConstants.UnitType.COMMUNITY.value,
 ]
 
+# CTF value sets, shared by the specification, stored, and request models below.
+LocationType = Literal['file', 'registry', 'env', 'ads']
+OperatingSystem = Literal['linux', 'windows']
+PlantStatus = Literal['pending', 'planting', 'planted', 'failed', 'stale']
+ArmStatus = Literal['pending', 'arming', 'armed', 'failed']
+Verdict = Literal['correct', 'incorrect', 'duplicate', 'decoy',
+                  'cross_submission', 'rate_limited', 'closed']
+CtfAction = Literal['arm', 'start', 'pause', 'resume', 'end', 'archive']
+ResetMode = Literal['replant', 'restart', 'rebuild']
+LogAction = Literal['CTF_CREATE', 'CTF_UPDATE', 'CTF_ARM', 'CTF_START', 'CTF_PAUSE',
+                    'CTF_RESUME', 'CTF_END', 'CTF_ARCHIVE', 'CTF_DELETE',
+                    'FLAG_REPLANT', 'FLAG_REVEAL', 'HOST_RESET', 'SCORE_ADJUST']
+LogResult = Literal['OK', 'DENIED', 'ERROR']
+
 
 class CloudEnvModel(BaseModel):
     @model_validator(mode='before')
@@ -453,6 +467,42 @@ class PuzzleModel(BaseModel):
         if v == "":
             return None
         return v
+
+
+# The `ctf` block of a lab specification. Authored in the spec JSON, copied into the unit on build,
+# and into the event on event creation. Cross-field rules (path format per location_type, unique ids,
+# points sign, unlocks_after references) live in the specification validator, not here.
+class CtfFlagSpecModel(BaseModel):
+    id: str = Field(..., pattern=r'^[a-z0-9][a-z0-9-]{1,31}$', description="Stable slug, unique within the spec; appears inside the flag value")
+    server: str = Field(..., description="ServerModel.name this flag is planted on")
+    slot: int = Field(..., ge=1, le=9, description="Difficulty tier within the host; slot 1 is reachable by the initial foothold")
+    category: Optional[str] = Field(default=None, max_length=32, description="Board grouping, e.g. 'Web', 'Windows', 'Forensics'")
+    location_type: LocationType = Field(..., description="Where the planter writes the value; see Flag Location Formats")
+    path: str = Field(..., description="Locator in the format its location_type requires")
+    operating_system: OperatingSystem = Field(...)
+    access_level: Literal['user', 'root', 'admin'] = Field(default='user', description="Documentation only; the planter always writes as the boot account")
+    points: int = Field(..., description="Awarded on a correct submission. Must be > 0 unless decoy is true; a decoy may be negative.")
+    decoy: bool = Field(default=False, description="Deliberately out-of-scope flag; never listed to students; submitting it is recorded as a scope observation")
+    hint: Optional[str] = Field(default=None, max_length=1000)
+    hint_cost: int = Field(default=0, ge=0)
+    unlocks_after: Optional[List[str]] = Field(default=None, description="Flag ids that must be solved before this one is listed to the team")
+    file_mode: Optional[str] = Field(default=None, pattern=r'^0[0-7]{3}$', description="Linux file placements only")
+    file_owner: Optional[str] = Field(default=None, pattern=r'^[a-z_][a-z0-9_-]*:[a-z_][a-z0-9_-]*$', description="Linux file placements only")
+
+
+class CtfScoringSpecModel(BaseModel):
+    flag_prefix: str = Field(default="agoge", pattern=r'^[a-z][a-z0-9]{1,15}$', description="Literal prefix of every flag value")
+    submission_rate_limit: int = Field(default=10, ge=1, le=100, description="Maximum submissions per flag id, per board, per 60 seconds")
+    reveal_decoy_penalty: bool = Field(default=False, description="Whether a decoy verdict shows its negative value to the student")
+
+
+class CtfSpecModel(BaseModel):
+    """The `ctf` block of a lab specification. Its presence makes a unit CTF-capable."""
+    name: str = Field(..., max_length=100)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    rules_url: Optional[str] = Field(default=None, description="Link to rules of engagement shown on the student banner")
+    flags: List[CtfFlagSpecModel] = Field(..., min_length=1, max_length=200)
+    scoring: CtfScoringSpecModel = Field(default_factory=CtfScoringSpecModel)
 
 
 class UnitModel(BaseModel):

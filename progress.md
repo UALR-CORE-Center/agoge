@@ -22,7 +22,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 
 ### Group A — Contracts and constants
 - [x] **A1** CTF constants — spec + done-when at PRD.md:950
-- [ ] **A2** CTF specification models — spec + done-when at PRD.md:952
+- [x] **A2** CTF specification models — spec + done-when at PRD.md:952
 - [ ] **A3** CTF stored models — spec + done-when at PRD.md:954
 - [ ] **A4** CTF request models — spec + done-when at PRD.md:955
 - [ ] **A5** CTF response models — spec + done-when at PRD.md:956
@@ -149,3 +149,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `common/tests/` is not in any gate; put new common-code tests in `api/unit_tests/` (where the PRD's structure puts `test_ctf_*.py`). Gates now: api 66, cloud_functions 285, build_files 293, frontend 28. The frontend lint and type-check gates target CTF paths that don't exist yet.
 - **Blockers:** none.
 - **Next:** A2 CTF specification models (PRD.md:952).
+
+### Iteration 5 — 2026-10-16
+- **Completed:** A2 — the nine CTF `Literal` aliases (below `UnitTypeValue`) and `CtfFlagSpecModel`/`CtfScoringSpecModel`/`CtfSpecModel` (just above `UnitModel`, so A6 can reference them without forward refs) in `common/models/agoge.py`, verbatim from PRD.md:356-393; `api/unit_tests/test_ctf_spec_models.py` (34 tests) rejects bad flag ids, unknown `location_type`, malformed `file_mode`, plus range/pattern checks.
+- **Learned:** Spec models are plain `BaseModel` (no `from_attributes` Config) per PRD; the points-sign, path-per-location_type, and unique-id rules are deliberately left to C1's validator. Gates now: api 100, cloud_functions 285, build_files 293, frontend 28.
+- **Blockers:** none.
+- **Next:** A3 CTF stored models (PRD.md:954; definitions at PRD.md:399-515).
