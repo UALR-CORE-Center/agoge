@@ -1,6 +1,13 @@
 import {ListItem, ListItemText, Stack, styled, Theme, Typography} from "@mui/material";
 import MuiChip from "@mui/material/Chip";
 
+// Detail rows keep fluid 30/70 columns until the row itself is too narrow for
+// both, then stack the key above its value. This is a container query on the
+// row rather than a viewport breakpoint because the rows live in a dialog whose
+// width is not the screen width. Mirrors ReviewCommonStyles.
+const ROW_STACK_BELOW = 360;
+const ROW_CONTAINER = 'detail-row';
+
 export const HeaderKey = styled(ListItemText)(({theme}: {
     theme: Theme
 }) => ({
@@ -79,9 +86,28 @@ export const NestedListItem = styled(Stack, {
         backgroundColor: !disableAlternatingColors ? theme.palette.background.default : undefined,
     },
     border: '1px solid ' + theme.palette.divider,
-    // Stack key above value on phones so neither column gets squeezed to a few characters.
-    [theme.breakpoints.down('sm')]: {
-        flexDirection: 'column',
+    containerType: 'inline-size',
+    containerName: ROW_CONTAINER,
+    flexWrap: 'wrap',
+    '& > .MuiListItemText-root': {
+        // Lets columns shrink below their longest word (image paths, JSON).
+        minWidth: 0,
+    },
+    '& > .MuiListItemText-root:first-of-type': {
+        flex: '0 0 30%',
+    },
+    '& > .MuiListItemText-root:not(:first-of-type)': {
+        flex: '1 1 0',
+    },
+    [theme.containerQueries(ROW_CONTAINER).down(ROW_STACK_BELOW)]: {
+        '& > .MuiListItemText-root, & > .MuiListItemText-root:first-of-type, & > .MuiListItemText-root:not(:first-of-type)': {
+            flexBasis: '100%',
+            borderLeft: 'none',
+        },
+        '& > .MuiListItemText-root:first-of-type > .MuiTypography-root': {
+            fontWeight: 600,
+            color: theme.palette.text.secondary,
+        },
     },
 }));
 
@@ -101,13 +127,10 @@ export const SectionLabel = styled(Typography)<{ theme?: Theme }>(({theme}) => (
 export const ItemKeyWrapper = styled(ListItemText)(({theme}: {
     theme: Theme
 }) => ({
-    width: '30%',
     paddingLeft: theme.spacing(1),
+    paddingRight: theme.spacing(1),
     display: 'flex',
     alignItems: 'center',
-    [theme.breakpoints.down('sm')]: {
-        width: 'auto',
-    },
 }));
 
 
@@ -115,7 +138,6 @@ export const ItemKeyWrapper = styled(ListItemText)(({theme}: {
 export const ItemValue = styled(ListItemText)(({theme}: {
     theme: Theme
 }) => ({
-    width: '70%',
     minWidth: 0,
     '& .MuiTypography-root': {
         fontSize: theme.typography.body2.fontSize,
