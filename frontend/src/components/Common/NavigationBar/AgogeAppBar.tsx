@@ -1,6 +1,7 @@
 import {
     AccountCircle,
     AdminPanelSettings,
+    Flag,
     Lightbulb,
     LoginRounded,
     ManageAccounts,
@@ -29,8 +30,10 @@ import {useNavigate, useLocation, Link} from 'react-router-dom';
 
 import { useAuthContext } from '../../../context/AuthContext';
 import { THEME_MODE_CYCLE, ThemeMode, useThemeMode } from '../../../context/ThemeModeContext';
+import { useCtfEnabled } from "../../../hooks/useCtfEnabled";
 import {useLocalStorage} from "../../../hooks/useLocalStorage";
 import {
+    URL_TEACHER_CTF_BASE,
     URL_TEACHER_HOME,
     URL_TEACHER_SERVERS,
     URL_TEACHER_SETTINGS,
@@ -63,6 +66,7 @@ const AgogeAppBar: React.FC<AgogeAppBarProps> = ({ onSidebarToggle }) => {
     const nextThemeMode = THEME_MODE_CYCLE[(THEME_MODE_CYCLE.indexOf(themeMode) + 1) % THEME_MODE_CYCLE.length];
     const themeModeLabel = `Theme: ${THEME_MODE_DISPLAY[themeMode].label} (switch to ${THEME_MODE_DISPLAY[nextThemeMode].label})`;
     const { showDrawerButton, openDrawer, drawerData, closeDrawer, isOpen } = useDrawer();
+    const { ctfEnabled } = useCtfEnabled();
 
     const handleLogin = () => {
         setItem('redirectAfterLogin', location.pathname);
@@ -100,7 +104,13 @@ const AgogeAppBar: React.FC<AgogeAppBarProps> = ({ onSidebarToggle }) => {
                                 label: 'Manage Servers',
                                 icon: <ComputerIcon fontSize="small" />,
                                 to: URL_TEACHER_SERVERS
-                            }
+                            },
+                            // Hidden unless the project has CTF turned on (fails closed while loading).
+                            ...(ctfEnabled ? [{
+                                label: 'CTF Events',
+                                icon: <Flag fontSize="small" />,
+                                to: URL_TEACHER_CTF_BASE
+                            }] : [])
                         ]}
                         edge="end"
                         color="inherit"

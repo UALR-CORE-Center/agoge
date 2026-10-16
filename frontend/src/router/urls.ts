@@ -20,6 +20,9 @@ export const
     URL_TEACHER_SERVERS: string = `${URL_TEACHER_BASE}/servers/manage`,
     URL_TEACHER_SERVERS_CREATE: string = `${URL_TEACHER_BASE}/servers/create`,
     URL_TEACHER_SERVERS_EDITOR: string = `${URL_TEACHER_BASE}/servers/edit`,
+    URL_TEACHER_CTF_BASE: string = `${URL_TEACHER_BASE}/ctf`,
+    // The dashboard route is `${URL_TEACHER_CTF_EVENT}/:ctf_id`, as the unit page is `${URL_TEACHER_UNIT}/:build_id`.
+    URL_TEACHER_CTF_EVENT: string = `${URL_TEACHER_CTF_BASE}/event`,
 
     // Student Routes
     URL_STUDENT_BASE: string = `/${Users.STUDENT.toLowerCase()}`,
