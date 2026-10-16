@@ -122,15 +122,13 @@ class SafeAgogeUser(BaseModel):
 
 
 class AnonymousAppUser(AgogeUser):
+    # An anonymous caller has no identity. None (not '') keeps an empty string from ever
+    # matching a stored uid or student_email.
+    uid: Optional[str] = None
+    email: Optional[str] = None
+
     def __init__(self):
-        super().__init__(
-            uid=None,
-            email=None,
-            name='Anonymous User',
-            permissions={},
-            settings=None
-        )
-        self.set_default_name_or_email()
+        super().__init__(name='Anonymous User', permissions={})
 
     @property
     def is_authenticated(self) -> bool:

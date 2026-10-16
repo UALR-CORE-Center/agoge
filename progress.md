@@ -90,7 +90,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **R2** Student router — spec + done-when at PRD.md:1042
 - [x] **R3** Router registration — spec + done-when at PRD.md:1043
 - [x] **R4** Router auth tests — spec + done-when at PRD.md:1044
-- [ ] **BUG4** `AnonymousAppUser()` (common/models/users.py:124) cannot be constructed: it passes `uid=None`, `email=None`, `settings=None` to `AgogeUser`, whose fields are `str`/`str`/`Dict`, so Pydantic raises `ValidationError`. The `get_current_user` branch that returns it is unreachable today only because `HTTPBearer()` (auto_error) answers a missing token with 403 first. Not CTF-specific.
+- [x] **BUG4** `AnonymousAppUser()` (common/models/users.py:124) cannot be constructed: it passes `uid=None`, `email=None`, `settings=None` to `AgogeUser`, whose fields are `str`/`str`/`Dict`, so Pydantic raises `ValidationError`. The `get_current_user` branch that returns it is unreachable today only because `HTTPBearer()` (auto_error) answers a missing token with 403 first. Not CTF-specific.
 
 ### Group I — Game master UI
 - [ ] **I1** CTF TypeScript models — spec + done-when at PRD.md:1049
@@ -640,3 +640,11 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `AnonymousAppUser()` raises `ValidationError`, so tests can't use it; it is filed as BUG4. Gates now: api 1094, cloud_functions 449, build_files 304, frontend 28; tsc has no CTF errors.
 - **Blockers:** none.
 - **Next:** BUG4 (small), or I1 CTF TypeScript models (PRD.md:1049), which starts Group I.
+
+### Iteration 52 — 2026-10-16
+- **Completed:** BUG4. `AnonymousAppUser` (common/models/users.py) now overrides `uid`/`email` as `Optional[str] = None` on the subclass only and lets `settings` take the parent's default factory, so `AnonymousAppUser()` constructs. `AgogeUser` still requires both fields. It uses None rather than `''` so an anonymous caller can never match a stored `student_email`.
+  - New `api/unit_tests/test_anonymous_user.py` (6 tests; 4 fail on the old code) covers construction, no permissions, default LMS settings, the parent staying strict, `get_current_user(token=None)` returning the anonymous user, and a missing header still getting 403 from `HTTPBearer`.
+  - `test_ctf_router_auth.py` now uses the real `AnonymousAppUser()` in place of the stand-in user. Its pytest id falls back to "anonymous".
+- **Learned:** A Pydantic v2 subclass can loosen a parent's field by re-annotating it, and the parent is unaffected. Gates now: api 1100, cloud_functions 449, build_files 304, frontend 28; tsc has no CTF errors; the eslint gate still has no CTF files.
+- **Blockers:** none.
+- **Next:** I1 CTF TypeScript models (PRD.md:1049).
