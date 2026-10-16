@@ -87,7 +87,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 
 ### Group R — Routers
 - [x] **R1** Instructor router — spec + done-when at PRD.md:1041
-- [ ] **R2** Student router — spec + done-when at PRD.md:1042
+- [x] **R2** Student router — spec + done-when at PRD.md:1042
 - [ ] **R3** Router registration — spec + done-when at PRD.md:1043
 - [ ] **R4** Router auth tests — spec + done-when at PRD.md:1044
 
@@ -595,3 +595,16 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** In HOST_RESET rows, the server name goes in `target`, not `detail`, because `add_detail` rejects flag-shaped text and a strange path segment would otherwise be a 500. Gates now: api 851, cloud_functions 449, build_files 304, frontend 28. The reveal `workout_id` query is checked against the build-id pattern before the audit, for the same reason.
 - **Blockers:** none.
 - **Next:** R2 Student router (PRD.md:1042). It should reuse `_parse` (or the same pattern) for `CtfSubmitRequest`, and pass `request.client.host` as `origin_ip`. R3 must `include_router(ctf_router)`.
+
+### Iteration 49 — 2026-10-16
+- **Completed:** R2. `api/routers/ctf_board.py` (`ctf_board_router`, prefix `/ctf-board`) adds the four student routes. None of them requires auth, as the PRD specifies.
+  - `GET /{wid}/` has no `ctf_enabled_required`. When CTF is disabled it returns `enrolled: false` without constructing `CtfScoring` (SC-19). Otherwise it returns `CtfScoring.board`.
+  - `POST /{wid}/submit/`, `POST /{wid}/hint/{flag_id}/` and `GET /{wid}/scoreboard/` are gated by `ctf_enabled_required`, so they return 404 when disabled.
+  - The submit body is validated with `routers.ctf._parse`: a malformed body gives 400 and the value is never echoed. `origin_ip` is `request.client.host`.
+  - The scoreboard returns `{'items': [...]}`.
+  - `flag_id` uses the `CtfFlagSpecModel.id` pattern. Path ids are validated, so a malformed one gives 422 without reaching core.
+  - Failures log only the exception type name, so a flag value never reaches the log.
+  - `api/unit_tests/test_ctf_board_router.py` has 24 tests.
+- **Learned:** Neither router is registered in `api/main.py` yet; R3 must `include_router` both `ctf_router` and `ctf_board_router`. Gates now: api 875, cloud_functions 449, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** R3 Router registration (PRD.md:1043).
