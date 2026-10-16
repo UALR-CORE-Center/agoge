@@ -28,6 +28,7 @@ from common.models.response import (
     CtfBoardStatus,
     CtfEventSummary,
     CtfFlagBoardStatus,
+    CtfFlagRevealResponse,
     CtfFlagRow,
     CtfStateResponse,
 )
@@ -116,12 +117,13 @@ class CtfEvent:
             self._env = CloudEnv(log_name=self.log_name, env_dict=self.env_dict)
         return self._env
 
-    def create(self, unit_id: str, user: AgogeUser) -> str:
+    def create(self, unit_id: str, user: AgogeUser, ctf_id: Optional[str] = None) -> str:
         """Create a DRAFT event from a unit's `ctf` block with one board per workout and one
         digest document per board per flag. Returns the new ctf_id.
 
-        Every check runs before the first write. Flag values are derived only to hash them
-        and are never stored.
+        `ctf_id` lets the router choose the id up front so its CTF_CREATE audit row carries it even
+        when creation fails. Every check runs before the first write. Flag values are derived only
+        to hash them and are never stored.
         """
         unit = self.db.get(collection_name=DbCollections.UNIT, doc_id=unit_id)
         if not unit:
@@ -154,7 +156,7 @@ class CtfEvent:
         if not seed:
             raise ServiceUnavailable(message=NOT_PROVISIONED_MESSAGE)
 
-        ctf_id = IdGenerator.build_id()
+        ctf_id = ctf_id or IdGenerator.build_id()
         event = CtfEventModel(
             id=ctf_id,
             unit_id=unit_id,
@@ -476,6 +478,25 @@ class CtfEvent:
             plant_failed_count=sum(1 for flag in board.flags if flag.plant_status == 'failed'),
             plant_stale_count=sum(1 for flag in board.flags if flag.plant_status == 'stale'),
         )
+
+    def reveal(self, ctf_id: str, flag_id: str, workout_id: str, user: AgogeUser) -> CtfFlagRevealResponse:
+        """Admin only: re-derive one board's flag value from the seed. The value is never stored
+        (only its digest is), so this is the one place an instructor-side read can see it; the
+        router audits every call as FLAG_REVEAL."""
+        if not user.is_admin:
+            raise Unauthorized(message=UNAUTHORIZED_MESSAGE)
+        event = self._load(ctf_id)
+        if not any(flag.id == flag_id for flag in event.spec.flags):
+            raise NotFound(message="Flag not found")
+        if workout_id not in event.board_ids:
+            raise NotFound(message="Board not found")
+        seed = self.env.ctf_flag_seed
+        if not seed:
+            raise ServiceUnavailable(message=NOT_PROVISIONED_MESSAGE)
+        value = derive_flag_value(seed, workout_id, flag_id, event.seed_version, event.spec.scoring.flag_prefix)
+        # The value itself is never logged.
+        self.logger.info(f"{self.class_name}:{ctf_id} - Revealed flag", flag_id=flag_id, workout_id=workout_id)
+        return CtfFlagRevealResponse(flag_id=flag_id, workout_id=workout_id, value=value)
 
     def delete(self, ctf_id: str, user: AgogeUser) -> None:
         """Admin only, DRAFT or ARCHIVED only. Deletes the rate-limit, digest and board documents,
