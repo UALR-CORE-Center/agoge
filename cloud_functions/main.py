@@ -5,6 +5,7 @@ from cloud_fn_utilities.budget_manager import BudgetManager
 from handlers.build_handler import BuildHandler
 from handlers.maintenance_handler import MaintenanceHandler
 from handlers.control_handler import ControlHandler
+from handlers.ctf_handler import CtfHandler
 
 logger = Logger(LoggerNames.CLOUD_FN, class_name="main")
 
@@ -67,6 +68,8 @@ def agoge_cloud_function(event, context, debug_mode: bool = False):
             ControlHandler(event['attributes'], debug=debug_mode).route()
         elif handler == PubSub.Handlers.MAINTENANCE:
             MaintenanceHandler(debug=debug_mode).route()
+        elif handler == PubSub.Handlers.CTF:
+            CtfHandler(event['attributes'], debug=debug_mode).route()
         elif handler == PubSub.Handlers.AGENCY:
             pass
         else:
