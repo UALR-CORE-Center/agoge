@@ -288,3 +288,20 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** The loaders are not gated on the unit having a `ctf` block (PRD: "added to every lab server"). The guest agent runs only its own OS's key, and a missing `agoge-ctf-plant` key makes the loader a no-op. Assessment Linux scripts have no top-level `exit`, so an appended loader still runs. `ruff` is not installed in `./venv`. Gates now: api 383, cloud_functions 308, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** E1 Payload builder (`FlagPlanter.build_payload`, PRD.md:988). Ignore `file_mode`/`file_owner` except on Linux `file` placements (see Iteration 14).
+
+### Verification — 2026-10-16 — PASS
+- **Checked:** BUG, D1, D2, D3 and D4, the `[x]` tasks added since the last verification. I read commits `4259276`, `b40b633`, `e9ac553`, `baad49e` and `1128f22` against PRD.md:977-984 and :795-840.
+  - BUG: `SpecEditManager.save` now calls `is_valid()` and raises before any `db.update`/`db.delete`, and the old check after the write is gone. `test_spec_edit_save_order.py` covers an invalid spec on both the edit path and the publish path, and checks that nothing is written.
+  - D1: `set_metadata` re-reads the instance on each attempt, merges `items` over the existing keys, drops `remove`, and writes with the fingerprint it just read. On `PreconditionFailed` it retries once, and a second failure re-raises. `_make_request` maps Google 412 to the new `PreconditionFailed`, which is a `BaseAgogeException` subclass. The tests cover keeping unrelated keys, one re-read and retry on 412, and no third attempt. `items` is optional where the PRD signature has `items: dict`. This is harmless because E2's `finally` calls it with `remove=` only.
+  - D2: `get_guest_attributes` returns `{key: value}` from `query_value.items`. When GCE answers with a 404, it re-reads the instance: it returns `{}` if the instance exists and raises `NotFound` if it is gone. The method body was added after the `# [ eof ]` marker, which is cosmetic only (it is still inside the class).
+  - D3: `ctf_plant_contract.py` matches the PRD.md:797-810 table. The key is `agoge-ctf-plant`, the enable pair is `enable-guest-attributes=TRUE`, the result path is `agoge-ctf/plant-result`, and the results are `ok:<nonce>` / `error:<nonce>:<msg≤200>`. The Linux loader fetches the key with `curl -f`, does nothing when the key is absent, writes the payload to a 0600 temp file, runs it with all output silenced, and deletes the file. The Windows loader is a scoped script block that writes to a directory only SYSTEM can access (by ACL) and runs, then deletes, the file with output going to `*> $null`.
+  - D4: `_add_metadata` calls `_add_ctf_loaders` last. `_merge_metadata_item` now concatenates both `startup-script` and `windows-startup-script-ps1`. The tests cover keeping the existing startup and assessment scripts with the loader appended last, and two ps1 scripts concatenated rather than overwritten. One test runs the concatenated script under real bash. That test's `skipif` only triggers when bash is absent, and bash is present here.
+  - No new TODO, stub or `NotImplemented`. The only hits, `compute_instance.py:177` and `edit_manager.py:40`, come from `6296b93` and predate this work.
+- **Gate results:**
+  - api/unit_tests: 383 passed.
+  - cloud_functions/tests: 308 passed.
+  - build_files/cloud_deployment/tests: 304 passed.
+  - frontend `npm test`: exit 0, 4 files, 28 tests passed.
+  - ESLint gate: "No files matching the pattern" for the CTF paths. This is expected because no Group I/J task is done.
+  - tsc gate: 0 errors name a CTF file.
+- **Reopened:** none.
