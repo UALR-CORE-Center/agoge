@@ -7,6 +7,7 @@ from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 
+from cloud_fn_utilities.course_objects.ctf.arm_worker import ArmWorker
 from cloud_fn_utilities.course_objects.ctf.flag_planter import FlagPlanter, board_servers
 
 
@@ -53,8 +54,9 @@ class CtfHandler:
             )
             raise ValueError("CTF id or workout id missing from CTF event attributes.")
 
-        # CTF_ARM_BOARD (ArmWorker, E4) and CTF_HOST_RESET (host_reset, G4) are added as those classes land
+        # CTF_HOST_RESET (host_reset, G4) is added when that dispatcher lands
         self.action_map = {
+            str(PubSub.Actions.CTF_ARM_BOARD.value): self._arm_board,
             str(PubSub.Actions.CTF_PLANT.value): self._plant,
         }
 
@@ -68,6 +70,13 @@ class CtfHandler:
             raise ValueError(f"Unsupported CTF action: {self.action}")
 
         action_func()
+
+    def _arm_board(self) -> None:
+        """
+        CTF_ARM_BOARD: arms one team board. ArmWorker loads the event and board itself, because it must
+        skip a stale message (event no longer ARMING) before touching anything.
+        """
+        ArmWorker(env_dict=self.env_dict, db=self.db).run(self.ctf_id, self.workout_id)
 
     def _plant(self) -> None:
         """

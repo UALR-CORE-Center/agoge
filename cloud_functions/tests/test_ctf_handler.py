@@ -1,4 +1,4 @@
-"""CtfHandler routing and the Handlers.CTF branch in main.py (E3). FlagPlanter and Firestore are mocked."""
+"""CtfHandler routing and the Handlers.CTF branch in main.py (E3, E4b). FlagPlanter, ArmWorker and Firestore are mocked."""
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -80,6 +80,12 @@ def planter():
         yield planter_cls
 
 
+@pytest.fixture
+def arm_worker():
+    with patch.object(ctf_handler_module, "ArmWorker") as worker_cls:
+        yield worker_cls
+
+
 def _handler(attributes, db=None):
     return CtfHandler(attributes, env_dict=ENV, db=db if db is not None else _db())
 
@@ -134,11 +140,37 @@ def test_planter_errors_propagate(planter):
         _handler(_attributes()).route()
 
 
+def test_ctf_arm_board_reaches_arm_worker(planter, arm_worker):
+    db = _db()
+    _handler(_attributes(action=PubSub.Actions.CTF_ARM_BOARD), db=db).route()
+
+    arm_worker.assert_called_once_with(env_dict=ENV, db=db)
+    arm_worker.return_value.run.assert_called_once_with(CTF_ID, WORKOUT_ID)
+    # ArmWorker does its own loads (it must skip stale messages first), so the handler neither reads nor plants
+    db.get.assert_not_called()
+    planter.assert_not_called()
+
+
+def test_ctf_plant_does_not_reach_arm_worker(planter, arm_worker):
+    _handler(_attributes()).route()
+
+    arm_worker.assert_not_called()
+    planter.return_value.plant.assert_called_once()
+
+
+def test_arm_worker_errors_propagate(arm_worker):
+    arm_worker.return_value.run.side_effect = NotFound("missing")
+
+    with pytest.raises(NotFound):
+        _handler(_attributes(action=PubSub.Actions.CTF_ARM_BOARD)).route()
+
+
 @pytest.mark.parametrize("action", ["999", str(PubSub.Actions.START.value), str(PubSub.Actions.NUKE.value)])
-def test_unknown_action_raises_value_error(planter, action):
+def test_unknown_action_raises_value_error(planter, arm_worker, action):
     with pytest.raises(ValueError):
         _handler(_attributes(action=action)).route()
     planter.assert_not_called()
+    arm_worker.assert_not_called()
 
 
 def test_missing_action_raises_value_error():

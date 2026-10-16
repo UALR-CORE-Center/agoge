@@ -51,7 +51,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **E2** Plant procedure — spec + done-when at PRD.md:990
 - [x] **E3** CTF handler — spec + done-when at PRD.md:992 (split: this slice is the handler, the `main.py` branch, `CTF_PLANT` routing and unknown action → `ValueError`; the other two routes are E4b and G4b)
 - [x] **E4** Arm worker — spec + done-when at PRD.md:994
-- [ ] **E4b** Route `CTF_ARM_BOARD` → `ArmWorker.run(ctf_id, workout_id)` in `CtfHandler.action_map`, with a test showing it reaches ArmWorker (E3 done-when, PRD.md:992)
+- [x] **E4b** Route `CTF_ARM_BOARD` → `ArmWorker.run(ctf_id, workout_id)` in `CtfHandler.action_map`, with a test showing it reaches ArmWorker (E3 done-when, PRD.md:992)
 - [ ] **E5** Overnight exemption — spec + done-when at PRD.md:996
 
 ### Group F — Event core
@@ -331,3 +331,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** The PRD does not define a board as `armed`. I chose "at least one flag planted" (a playable board; failed flags stay visible and replantable), with `arm_error` "N of M flags failed to plant". Zero planted → `failed`, "No flags planted: <first plant_error>". Gates now: api 383, cloud_functions 397, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** E4b — add `CTF_ARM_BOARD` → `ArmWorker(env_dict=self.env_dict, db=self.db).run(self.ctf_id, self.workout_id)` to `CtfHandler.action_map`, with a handler test (patch `ArmWorker` in `ctf_handler_module`).
+
+### Iteration 25 — 2026-10-16
+- **Completed:** E4b — `CtfHandler.action_map` routes `CTF_ARM_BOARD` to `_arm_board`, which calls `ArmWorker(env_dict=self.env_dict, db=self.db).run(self.ctf_id, self.workout_id)`. The handler does no reads of its own for this action, because ArmWorker has to skip a stale message before it touches anything. `cloud_functions/tests/test_ctf_handler.py` (19 tests) adds: arm reaches ArmWorker with the handler's env/db and the ids, with no handler reads and no planting; plant does not reach ArmWorker; ArmWorker errors propagate; and an unknown action reaches neither class.
+- **Learned:** No circular import (`arm_worker` imports `flag_planter`; the handler imports both). Gates now: api 383, cloud_functions 400, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** E5 Overnight exemption (PRD.md:996). G4b remains queued until the G4 `host_reset` dispatcher exists.
