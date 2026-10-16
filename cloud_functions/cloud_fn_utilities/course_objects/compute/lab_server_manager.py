@@ -13,6 +13,12 @@ from common.constants.states import ServerStates
 from common.document_database import DocumentDatabaseFactory
 from common.exceptions import Conflict, NotFound, BadRequest, BaseAgogeException
 from common.services.wireguard_endpoint import WireGuardEndpointRegistry
+from common.utilities.ctf_plant_contract import (
+    LINUX_LOADER,
+    LINUX_LOADER_METADATA_KEY,
+    WINDOWS_LOADER,
+    WINDOWS_LOADER_METADATA_KEY,
+)
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.compute.resources.attached_disk_resource import AttachedDiskResource
@@ -327,17 +333,34 @@ class LabServerManager(BaseComputeManager):
         assessment_startup_script = self.assessment.get_startup_scripts(server_name=self.server_spec.name)
         if assessment_startup_script:
             self._merge_metadata_item(metadata['items'], assessment_startup_script)
+        self._add_ctf_loaders(metadata['items'])
         self.server_spec.metadata = metadata
 
-    @staticmethod
-    def _merge_metadata_item(items: list, item: dict) -> None:
+    _CONCATENATED_SCRIPT_KEYS = frozenset({'startup-script', 'windows-startup-script-ps1'})
+
+    @classmethod
+    def _add_ctf_loaders(cls, items: list) -> None:
+        """Append the fixed CTF loaders last, so they run after every other boot script.
+
+        Every lab server gets both: the guest agent only runs the key for its own OS, and a
+        loader with no `agoge-ctf-plant` key present does nothing. A CTF event can only plant
+        servers built with these loaders, so they are not gated on the unit having a ctf block.
+        """
+        for key, loader in ((LINUX_LOADER_METADATA_KEY, LINUX_LOADER), (WINDOWS_LOADER_METADATA_KEY, WINDOWS_LOADER)):
+            # Spec metadata copied from an already-built server may carry the loader; one copy only.
+            if any(item.get('key') == key and loader in (item.get('value') or '') for item in items):
+                continue
+            cls._merge_metadata_item(items, {'key': key, 'value': loader})
+
+    @classmethod
+    def _merge_metadata_item(cls, items: list, item: dict) -> None:
         """Keep metadata keys unique, concatenating multiple startup scripts."""
         if not isinstance(item, dict) or not item.get('key'):
             return
         for existing in items:
             if existing.get('key') == item['key']:
-                if item['key'] == 'startup-script' and item.get('value'):
-                    existing['value'] = f"{existing.get('value', '').rstrip()}\n{item['value'].lstrip()}"
+                if item['key'] in cls._CONCATENATED_SCRIPT_KEYS and item.get('value'):
+                    existing['value'] = f"{(existing.get('value') or '').rstrip()}\n{item['value'].lstrip()}"
                 else:
                     existing.update(item)
                 return
