@@ -238,3 +238,23 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** No prior tests constructed the spec managers; patch `CloudEnv`, `DocumentDatabaseFactory`, `PubSubManager`, `Logger` in `lab_spec_base` to build them offline. Found and queued an edit-manager save-before-validate bug. Gates now: api 358, cloud_functions 285, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** D1 `set_metadata` (PRD.md:979).
+
+### Verification — 2026-10-16 — PASS
+- **Checked:** B2, B3, B4, C1 and C2, the `[x]` tasks added since the last verification. I read commits `a59bac0`, `ffec6cf`, `bf90592`, `46d8023` and `4dd94af` against PRD.md:964-975, :688-712, :842-852, :159, :1168, :1265 and :1286.
+  - B2: `CloudEnv.ctf_flag_seed` (`cloud_env.py:73-78`) uses the same lazy, cached `get_secret` pattern as `openai_api_key`, and there is no write path. The tests patch only `SecretManagerServiceClient`.
+  - B3: `_ensure_ctf_flag_seed` uses `secrets.token_hex(32)` and stores it only when `get_secret` returns `None`. `get_secret` catches only `NotFound`, so other errors cannot cause an overwrite. The seed is created before `ctf_enabled` is written, and the seed value is never printed. The create-once/no-overwrite test runs the real methods against an in-memory fake Secret Manager. A grep finds nothing in `api/`, `cloud_functions/` or `frontend/` that creates the seed.
+  - B4: `VALID_TRANSITIONS` matches the PRD table pair for pair (14 pairs). The manager is standalone, not a `BaseStateManager` subclass. It reads inside the transaction, raises `NotFound` and `Conflict`, revalidates with `ModelValidator(CtfEventModel)`, writes through a field mask and stamps an ISO-UTC `state_timestamp`. The tests cover all 64 pairs and check what was written.
+  - C1: `PATH_PATTERNS` matches all five Flag Location Formats rows character for character and uses `re.fullmatch`. All 8 rules are implemented, and each test asserts that the flag id appears in the error message. The cycle check is a three-colour DFS, and a diamond dependency graph is accepted. Server names are checked against the spec's real `servers[].name`.
+  - C2: both `SpecEditManager._validate_spec` and `SpecFileManager._validate_spec` run `CtfSpecModel` and `CtfValidator` outside the `build_type` branch. The tests run the real `_validate_spec` on each path.
+  - No TODO, stub, `NotImplemented` or hardcoded test-only value in the new code.
+  - Non-blocking observations:
+    1. On both save paths, a structurally malformed `ctf` block (for example empty `flags`) raises a pydantic `ValidationError` out of `is_valid()` instead of returning `(False, msg)`. That is the same pattern as the existing `UnitModel(**spec)` call, and the spec is still rejected. Later router work (R1) should make sure it maps to a 4xx.
+    2. The `SpecEditManager.save` write-before-validate problem is already queued as **BUG**.
+- **Gate results:**
+  - api/unit_tests: 358 passed.
+  - cloud_functions/tests: 285 passed.
+  - build_files/cloud_deployment/tests: 304 passed.
+  - frontend `npm test`: exit 0, 4 files, 28 tests passed.
+  - ESLint gate: "No files matching the pattern" for the CTF paths. This is expected, because no Group I/J task is done.
+  - tsc gate: 0 errors name a CTF file.
+- **Reopened:** none.
