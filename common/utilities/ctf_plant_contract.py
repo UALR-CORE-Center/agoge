@@ -22,6 +22,18 @@ RESULT_OK = "ok"
 RESULT_ERROR = "error"
 MAX_RESULT_MESSAGE_LENGTH = 200
 
+# (location_type, operating_system) -> path pattern, from the PRD's Flag Location Formats table.
+# The spec validator enforces these at save time and FlagPlanter re-checks them before a path
+# reaches a script; always match with re.fullmatch ('$' alone accepts a trailing newline).
+LOCATION_PATH_PATTERNS = {
+    ('file', 'linux'): r'^/[A-Za-z0-9_./-]+$',
+    ('file', 'windows'): r'^[A-Za-z]:\\[A-Za-z0-9_.\\ -]+$',
+    ('registry', 'windows'): r'^HKLM\\[A-Za-z0-9_\\ ]+:[A-Za-z0-9_]+$',
+    ('env', 'linux'): r'^[A-Z_][A-Z0-9_]{0,63}$',
+    ('env', 'windows'): r'^[A-Z_][A-Z0-9_]{0,63}$',
+    ('ads', 'windows'): r'^[A-Za-z]:\\[A-Za-z0-9_.\\ -]+:[A-Za-z0-9_]+$',
+}
+
 LINUX_LOADER_METADATA_KEY = "startup-script"
 WINDOWS_LOADER_METADATA_KEY = "windows-startup-script-ps1"
 
