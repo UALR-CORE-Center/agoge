@@ -124,6 +124,10 @@ class SpecEditManager(LabSpecBase):
         return True, "Spec is valid"
 
     def save(self) -> None:
+        # Validate before any write so an invalid spec is never persisted to the edits or catalog collection
+        if not self.is_valid()[0]:
+            raise AgogeValidationError("Cannot save invalid spec")
+
         if self.catalog:
             edit_id = self.edit_id
 
@@ -147,10 +151,6 @@ class SpecEditManager(LabSpecBase):
                 doc_id=self.edit_id,
                 data=self.spec
             )
-
-        if not self.is_valid()[0]:
-            raise AgogeValidationError("Cannot save invalid spec")
-        return
 
     def delete(
         self,
