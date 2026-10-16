@@ -183,6 +183,105 @@ def test_arm_publish_failure_is_raised_after_the_transition(db):
     assert event(db)["state"] == CtfStates.ARMING.value
 
 
+# --- BUG3: a partial arm publish must not leave the event in ARMING for good ------------
+
+def board(db, workout_id):
+    return db.collection(DbCollections.CTF_BOARD)[f"{CTF_ID}-{workout_id}"]
+
+
+def finish_board(db, workout_id, status):
+    """What an arm worker's aggregation does for one board (ArmWorker._aggregate)."""
+    board(db, workout_id)["arm_status"] = status
+    event(db)["boards_pending"] -= 1
+
+
+def test_arm_publish_failure_fails_the_unpublished_boards_and_counts_them_down(db):
+    seed(db, CtfStates.DRAFT)
+    with pytest.raises(RuntimeError, match="publish failed"):
+        act(db, FakePubSub(fail_after=1), "arm")
+    assert board(db, BOARDS[0])["arm_status"] == "pending"  # its worker will still count it down
+    for workout_id in BOARDS[1:]:
+        assert board(db, workout_id)["arm_status"] == "failed"
+        assert board(db, workout_id)["arm_error"] == CtfEvent.ARM_PUBLISH_FAILED
+    assert event(db)["state"] == CtfStates.ARMING.value
+    assert event(db)["boards_pending"] == 1
+
+
+def test_arm_publish_failing_on_the_first_board_moves_the_event_to_broken(db):
+    seed(db, CtfStates.DRAFT)
+    with pytest.raises(RuntimeError):
+        act(db, FakePubSub(fail_after=0), "arm")
+    assert all(b["arm_status"] == "failed" for b in boards(db))
+    assert event(db)["state"] == CtfStates.BROKEN.value
+    assert event(db)["boards_pending"] == 0
+
+
+def test_arm_publish_failure_after_an_armed_board_moves_the_event_to_armed(db):
+    seed(db, CtfStates.DRAFT)
+
+    class FastWorker(FakePubSub):
+        def msg(self, **attrs):
+            super().msg(**attrs)
+            finish_board(db, attrs[PubSub.EventAttributes.WORKOUT_ID], "armed")
+
+    with pytest.raises(RuntimeError):
+        act(db, FastWorker(fail_after=1), "arm")
+    assert [b["arm_status"] for b in boards(db)] == ["armed", "failed", "failed"]
+    assert event(db)["state"] == CtfStates.ARMED.value
+    assert event(db)["boards_pending"] == 0
+
+
+def test_arm_publish_failure_leaves_a_board_its_worker_already_finished(db):
+    # The publish that raised may still have been delivered; that board must not be counted twice.
+    seed(db, CtfStates.DRAFT)
+
+    class DeliveredThenRaised(FakePubSub):
+        def msg(self, **attrs):
+            if len(self.messages) == 1:
+                finish_board(db, attrs[PubSub.EventAttributes.WORKOUT_ID], "armed")
+            super().msg(**attrs)
+
+    with pytest.raises(RuntimeError):
+        act(db, DeliveredThenRaised(fail_after=1), "arm")
+    assert [b["arm_status"] for b in boards(db)] == ["pending", "armed", "failed"]
+    assert board(db, BOARDS[1])["arm_error"] is None  # arm reset it; recovery never wrote this board
+    assert event(db)["state"] == CtfStates.ARMING.value
+    assert event(db)["boards_pending"] == 1
+
+
+def test_arm_publish_failure_after_the_event_left_arming_only_marks_boards(db):
+    seed(db, CtfStates.DRAFT)
+
+    class ArchivedMeanwhile(FakePubSub):
+        def msg(self, **attrs):
+            event(db)["state"] = CtfStates.BROKEN.value
+            super().msg(**attrs)
+
+    with pytest.raises(RuntimeError):
+        act(db, ArchivedMeanwhile(fail_after=0), "arm")
+    assert all(b["arm_status"] == "failed" for b in boards(db))
+    assert event(db)["state"] == CtfStates.BROKEN.value
+    assert event(db)["boards_pending"] == len(BOARDS)
+
+
+def test_arm_publish_failure_still_raises_the_publish_error_when_recovery_fails(db):
+    seed(db, CtfStates.DRAFT)
+    transaction = db.transaction
+    calls = []
+
+    def failing_recovery(operation_func):
+        calls.append(operation_func)
+        if len(calls) > 1:
+            raise OSError("firestore unavailable")
+        return transaction(operation_func)
+
+    db.transaction = failing_recovery
+    with pytest.raises(RuntimeError, match="publish failed"):
+        act(db, FakePubSub(fail_after=1), "arm")
+    assert len(calls) == 2
+    assert event(db)["state"] == CtfStates.ARMING.value
+
+
 def test_arm_with_no_boards_is_refused_without_a_write(db, pubsub):
     seed(db, CtfStates.DRAFT, board_ids=())
     with pytest.raises(BadRequest):

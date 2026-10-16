@@ -61,6 +61,10 @@ class CtfEvent:
         WorkoutStates.DELETED.value,
     }
 
+    # Board arm statuses an arm worker has already aggregated into boards_pending.
+    TERMINAL_ARM_STATUSES = ('armed', 'failed')
+    ARM_PUBLISH_FAILED = "Arm message could not be published"
+
     S = CtfStates
     # action -> (states it may start from, target state). The From sets are narrower than the
     # state manager's allow-list: (PAUSED, RUNNING) is legal there but only `resume` may use it.
@@ -293,12 +297,60 @@ class CtfEvent:
                 })
                 published += 1
         except Exception as e:
-            # The event is already ARMING; boards without a message keep boards_pending above 0.
             self.logger.error(
                 f"{self.class_name}:{event.id} - Arm publish failed",
                 error_type=type(e).__name__, published=published, boards=len(event.board_ids),
             )
+            # The event is already ARMING and only arm workers count boards_pending down, so the boards
+            # that got no message are counted down here; otherwise the event would stay ARMING for good.
+            try:
+                self.db.transaction(
+                    lambda transaction: self._fail_unpublished(transaction, event.id, event.board_ids[published:])
+                )
+            except Exception as recovery_error:
+                self.logger.error(
+                    f"{self.class_name}:{event.id} - Could not fail unpublished boards; event may stay ARMING",
+                    error_type=type(recovery_error).__name__,
+                )
             raise
+
+    def _fail_unpublished(self, transaction, ctf_id: str, workout_ids: List[str]) -> None:
+        """Mark boards whose arm message was never published `failed` and count them off boards_pending,
+        moving the event to ARMED/BROKEN at 0 — the same aggregation an arm worker does for its board.
+
+        The board whose publish raised may still have been delivered, so a board an arm worker already
+        finished (terminal status) is left alone and not counted twice; a worker that finishes later finds
+        this board terminal and skips its own aggregation.
+        """
+        collection = self.db.db.collection(DbCollections.CTF.value)
+        boards = self.db.db.collection(DbCollections.CTF_BOARD.value)
+        snapshot = collection.document(ctf_id).get(transaction=transaction)
+        if not snapshot.exists:
+            return
+        stored = snapshot.to_dict()
+        statuses = {}
+        for workout_id in stored.get('board_ids', []):
+            board = boards.document(f"{ctf_id}-{workout_id}").get(transaction=transaction)
+            statuses[workout_id] = board.to_dict().get('arm_status') if board.exists else None
+        to_fail = [w for w in workout_ids if statuses.get(w) not in (None, *self.TERMINAL_ARM_STATUSES)]
+
+        # Every read is done; Firestore requires that before the first write in a transaction.
+        for workout_id in to_fail:
+            transaction.update(
+                boards.document(f"{ctf_id}-{workout_id}"),
+                {'arm_status': 'failed', 'arm_error': self.ARM_PUBLISH_FAILED},
+            )
+        if not to_fail or stored.get('state') != CtfStates.ARMING.value:
+            return
+        boards_pending = max(int(stored.get('boards_pending', 0)) - len(to_fail), 0)
+        if boards_pending > 0:
+            transaction.update(collection.document(ctf_id), {'boards_pending': boards_pending})
+            return
+        any_armed = any(status == 'armed' for w, status in statuses.items() if w not in to_fail)
+        self.state_manager.transition_in_transaction(
+            transaction, ctf_id, CtfStates.ARMED if any_armed else CtfStates.BROKEN,
+            event=stored, boards_pending=0,
+        )
 
     def state(self, ctf_id: str, user: AgogeUser) -> CtfStateResponse:
         """The dashboard poll: one event read plus one board query, never a read per board."""
