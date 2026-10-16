@@ -7,6 +7,7 @@ import {CtfStateResponse, CtfStates} from "../../../services/Ctf/ctf.model";
 import {ctfService} from "../../../services/Ctf/ctf.service";
 import HttpError from "../../Common/Errors/HttpError";
 import CtfEventControl from "./CtfEventControl";
+import CtfEventLogPanel from "./CtfEventLogPanel";
 import CtfFlagsPanel from "./CtfFlagsPanel";
 import CtfHostsPanel from "./CtfHostsPanel";
 import CtfScoreboardPanel from "./CtfScoreboardPanel";
@@ -155,6 +156,9 @@ const CtfDashboard: React.FC = () => {
                                     scoreboardFrozenAt={event.scoreboard_frozen_at}
                                     active={selectedTab === index}
                                 />
+                            )}
+                            {label === 'Event Log' && event !== null && (
+                                <CtfEventLogPanel ctfId={event.id} state={event.state} active={selectedTab === index} />
                             )}
                         </Box>
                     ))}

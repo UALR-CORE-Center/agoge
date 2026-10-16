@@ -16,7 +16,7 @@ import {SCOREBOARD_POLL_INTERVAL_MS} from "./CtfScoreboardPanel";
 import {formatDuration, remainingSeconds} from "./ctfTime";
 
 vi.mock("../../../services/Ctf/ctf.service", () => ({
-    ctfService: {getFlags: vi.fn(), getHosts: vi.fn(), getScoreboard: vi.fn(), getState: vi.fn(), processAction: vi.fn()},
+    ctfService: {getFlags: vi.fn(), getHosts: vi.fn(), getLog: vi.fn(), getScoreboard: vi.fn(), getState: vi.fn(), processAction: vi.fn()},
 }));
 
 const NOW = 1_800_000_000;
@@ -161,6 +161,20 @@ describe("CtfDashboard", () => {
         });
         await flush();
         expect(ctfService.getScoreboard).toHaveBeenCalledTimes(2);
+    });
+
+    it("mounts the Event Log panel and reads the log only once its tab is opened", async () => {
+        vi.mocked(ctfService.getState).mockResolvedValue(stateResponse());
+        vi.mocked(ctfService.getFlags).mockResolvedValue([]);
+        vi.mocked(ctfService.getLog).mockResolvedValue([]);
+        renderDashboard();
+        await flush();
+        expect(ctfService.getLog).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole("tab", {name: "Event Log"}));
+        await flush();
+        expect(ctfService.getLog).toHaveBeenCalledWith("eventevent", undefined);
+        expect(within(screen.getByRole("tabpanel")).getByText("No actions logged yet")).toBeInTheDocument();
     });
 
     it("counts down between polls and re-reads state every 10 s", async () => {

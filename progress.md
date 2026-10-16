@@ -109,7 +109,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I13** Flags bulk replant — spec + done-when at PRD.md:1067
 - [x] **I14** Hosts panel — spec + done-when at PRD.md:1068
 - [x] **I15** Scoreboard panel — spec + done-when at PRD.md:1069
-- [ ] **I16** Event log panel — spec + done-when at PRD.md:1070
+- [x] **I16** Event log panel — spec + done-when at PRD.md:1070
 - [ ] **I17** Submission log panel — spec + done-when at PRD.md:1071
 
 - [ ] **LINT1** `frontend/src/utilities/transformers/unit.transform.test.ts:2` fails eslint `import/order` (`./unit.transform` should come after `./specificationEdit.transform`). This was already the case before I6. Not CTF-specific, and it is outside the CTF lint gate.
@@ -875,3 +875,17 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Existing panels use the `Ctf*Panel.tsx` naming, not the PRD layout's `ScoreboardPanel.tsx`; I followed the code. Gates: frontend 17 files / 143 tests; api 1100, cloud_functions 449, build_files 304. ESLint is clean on the CTF paths, and tsc reports no CTF errors. `agoge-reviewer` found no defects.
 - **Blockers:** none. I4b is still open for a human to do the browser checks.
 - **Next:** I16 Event log panel (PRD.md:1070). Use `ctfService.getLog(ctfId, action?)`, show newest first, and add an action filter. Add `getLog` to the dashboard test's service mock.
+
+### Iteration 68 — 2026-10-16
+- **Completed:** I16.
+  - New `frontend/src/components/Teacher/Ctf/CtfEventLogPanel.tsx` is mounted in the dashboard's Event Log `tabpanel`. It is a Community `StyledDataGrid` (`getRowId` = `id`) with these columns: Time, Action (readable label), Result (an outlined `Chip`: OK success, DENIED warning, ERROR error), Actor, Target and Detail (`key: value` pairs).
+  - Order: rows are sorted newest first by `created_at` (`newestFirst`), even though the API already returns them that way.
+  - Filter: an Action `TextField select` with "All actions" plus every `LOG_ACTIONS` member. The filter is applied server-side through `ctfService.getLog(ctfId, action)`, and a filter change reads at once.
+  - Stale responses: `filterRef` drops any response for a filter the user has since changed (success, error and loading paths).
+  - Polling: every `LOG_POLL_INTERVAL_MS = 15000`, only while the tab is active. An ARCHIVED event gets one read.
+  - A note shows when the 500-row cap (`CtfEvent.MAX_PANEL_ROWS`) is reached.
+  - `LogAction` in `ctf.model.ts` now derives from a runtime `LOG_ACTIONS` array.
+  - Tests: `CtfEventLogPanel.test.tsx` (8). One added `CtfDashboard` test. `getLog` was added to the dashboard's service mock.
+- **Learned:** `usePolling` does not re-run when the polled function changes, and it skips a poll while one is pending. So a filter change has to call the fetch itself, and the stale-response guard has to live in the panel. Gates: frontend 18 files / 152 tests. ESLint is clean on the CTF paths, and tsc reports no CTF errors. No Python changed, so the Python suites were not re-run. `agoge-reviewer` found no defects. I applied its one wording nit: the "filter to see older" hint is hidden when a filter is already set.
+- **Blockers:** none. I4b is still open for a human to do the browser checks.
+- **Next:** I17 Submission log panel (PRD.md:1071). Mirror `CtfEventLogPanel`: a verdict filter (`ctfService.getSubmissions(ctfId, verdict?)`), newest first by `submitted_at`, and show the matched team on `cross_submission` rows. Add the getter to the dashboard test's service mock.
