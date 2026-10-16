@@ -56,7 +56,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **BUG2** `ProjectServerManager.stop_everything` calls `self.db.batch_write(operations)` inside the image loop (wrong indentation), so the growing batch is rewritten once per checked-out image. Not CTF-specific.
 
 ### Group F — Event core
-- [ ] **F1** Config and feature flag — spec + done-when at PRD.md:1001
+- [x] **F1** Config and feature flag — spec + done-when at PRD.md:1001
 - [ ] **F2** Error helper — spec + done-when at PRD.md:1003
 - [ ] **F3** Audit helper — spec + done-when at PRD.md:1004
 - [ ] **F4** Event create — spec + done-when at PRD.md:1006
@@ -367,3 +367,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `stop_everything` loads images with the default `halt_on_error=True`, so one invalid image doc raises and aborts the sync for the rest — pre-existing behavior, outside this bug, left as-is. Gates now: api 383, cloud_functions 417, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** F1 Config and feature flag (PRD.md:1001).
+
+### Iteration 28 — 2026-10-16
+- **Completed:** F1 — `api/core/ctf/__init__.py` + `config.py`: `is_ctf_enabled()` reads `admin-info/project` through a lazily built module-level Firestore client and caches the result in-process for `CACHE_SECONDS = 60` (`time.monotonic`, lock-guarded). Only a real `True` enables CTF. A read error fails closed and is *not* cached, so the next request retries. `reset_cache()` is there for tests. `ctf_enabled_required` lives in `api/dependencies.py` (not core, so FastAPI types stay out of `api/core/`) and raises a 404 when the flag is off. `api/unit_tests/test_ctf_config.py` (14 tests, fake clock + fake db) shows that a changed flag is seen only once the cache expires, both directly and through the dependency on a real FastAPI app, and covers absent/non-bool flags, a missing doc, and a read failure.
+- **Learned:** Tests swap in a fake db via `monkeypatch.setattr(config, "_db", fake)` and must call `config.reset_cache()`, because the cache is process-global and shared across tests. Gates now: api 397, cloud_functions 417, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** F2 Error helper (`api/utilities/http_errors.py` `to_http_exception(e)`, Error Handling table in PRD.md).
