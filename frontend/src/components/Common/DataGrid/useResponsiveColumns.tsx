@@ -138,19 +138,19 @@ export const useResponsiveColumns = ({
     // leaving stacked mode, which temporarily hides every real column.
     const [userVisibility, setUserVisibility] = useState<GridColumnVisibilityModel>(initialVisibilityModel ?? {});
 
-    // A callback ref, because the grid container mounts only after the loading skeleton.
-    const [observer] = useState(() =>
-        typeof ResizeObserver === 'undefined'
-            ? null
-            : new ResizeObserver(([entry]) => setContainerWidth(entry.contentRect.width))
-    );
-    const containerRef = useCallback((node: HTMLElement | null) => {
-        observer?.disconnect();
-        if (node) {
-            observer?.observe(node);
+    // The container element is held in state (the ref callback is the setter) and
+    // the observer lives in an effect keyed on it. That way StrictMode's dev-only
+    // unmount/remount, or the element being replaced, tears the observer down and
+    // builds a fresh one, instead of leaving a disconnected observer behind.
+    const [container, containerRef] = useState<HTMLElement | null>(null);
+    useEffect(() => {
+        if (!container || typeof ResizeObserver === 'undefined') {
+            return;
         }
-    }, [observer]);
-    useEffect(() => () => observer?.disconnect(), [observer]);
+        const observer = new ResizeObserver(([entry]) => setContainerWidth(entry.contentRect.width));
+        observer.observe(container);
+        return () => observer.disconnect();
+    }, [container]);
 
     const visibleColumns = useMemo(
         () => columns.filter((col) => userVisibility[col.field] !== false),
