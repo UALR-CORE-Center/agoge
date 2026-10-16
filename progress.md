@@ -50,7 +50,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **E1** Payload builder — spec + done-when at PRD.md:988
 - [x] **E2** Plant procedure — spec + done-when at PRD.md:990
 - [x] **E3** CTF handler — spec + done-when at PRD.md:992 (split: this slice is the handler, the `main.py` branch, `CTF_PLANT` routing and unknown action → `ValueError`; the other two routes are E4b and G4b)
-- [ ] **E4** Arm worker — spec + done-when at PRD.md:994
+- [x] **E4** Arm worker — spec + done-when at PRD.md:994
 - [ ] **E4b** Route `CTF_ARM_BOARD` → `ArmWorker.run(ctf_id, workout_id)` in `CtfHandler.action_map`, with a test showing it reaches ArmWorker (E3 done-when, PRD.md:992)
 - [ ] **E5** Overnight exemption — spec + done-when at PRD.md:996
 
@@ -325,3 +325,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** ArmWorker and host_reset don't exist yet. Rather than reference modules that are missing, I queued their routes as E4b and G4b. Pub/Sub retry is not configured anywhere in build_files, so raising from the handler does not loop. Gates now: api 383, cloud_functions 376, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** E4 Arm worker (PRD.md:994, aggregation at PRD.md:720). Pass the event read before the board write as `event=` to `transition_in_transaction` (Iteration 13). Then E4b.
+
+### Iteration 24 — 2026-10-16
+- **Completed:** E4 — `cloud_functions/cloud_fn_utilities/course_objects/ctf/arm_worker.py` `ArmWorker(env_dict=None, db=None, compute_api=None).run(ctf_id, workout_id)`. A stale message (event not `ARMING`) is skipped with no writes; a board already `armed`/`failed` (redelivery) is skipped too. Otherwise the board goes `arming`, then: inactive board / missing workout / workout not `RUNNING` → `failed` with no plant; else `FlagPlanter.plant` on every flag-bearing server. One aggregation transaction (all reads before writes) re-checks the stored board status so a concurrent duplicate never double-decrements, writes `arm_status`/`arm_error`, decrements `boards_pending`, and at 0 reads the other boards and transitions `ARMED`/`BROKEN` through `CtfStateManager.transition_in_transaction(event=...)`. An unexpected error aggregates the board as `failed` ("Arm aborted by an internal error") before re-raising, so the event never sticks in `ARMING`. `_board_servers` moved from `CtfHandler` to module-level `flag_planter.board_servers`, which both use. `cloud_functions/tests/test_ctf_arm_worker.py` (22 tests; the fake transaction asserts read-before-write) covers SC-15 all-armed / mixed / zero-armed, last-board-failed-but-earlier-armed → ARMED, and the edge cases above.
+- **Learned:** The PRD does not define a board as `armed`. I chose "at least one flag planted" (a playable board; failed flags stay visible and replantable), with `arm_error` "N of M flags failed to plant". Zero planted → `failed`, "No flags planted: <first plant_error>". Gates now: api 383, cloud_functions 397, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** E4b — add `CTF_ARM_BOARD` → `ArmWorker(env_dict=self.env_dict, db=self.db).run(self.ctf_id, self.workout_id)` to `CtfHandler.action_map`, with a handler test (patch `ArmWorker` in `ctf_handler_module`).

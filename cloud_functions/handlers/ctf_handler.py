@@ -1,5 +1,3 @@
-from typing import List
-
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections
 from common.constants.pub_sub import PubSub
 from common.document_database import DocumentDatabaseFactory
@@ -9,7 +7,7 @@ from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 
-from cloud_fn_utilities.course_objects.ctf.flag_planter import FlagPlanter
+from cloud_fn_utilities.course_objects.ctf.flag_planter import FlagPlanter, board_servers
 
 
 class CtfHandler:
@@ -82,7 +80,7 @@ class CtfHandler:
             self.logger.warning(f"{self.class_name}:{self.ctf_id} - board {board.id} is not active; plant skipped")
             return
 
-        servers = [self.server_name] if self.server_name else self._board_servers(event, board)
+        servers = [self.server_name] if self.server_name else board_servers(event, board)
         FlagPlanter(event, env_dict=self.env_dict, db=self.db).plant(board, servers)
 
     def _load_event(self) -> CtfEventModel:
@@ -99,9 +97,3 @@ class CtfHandler:
             self.logger.error(f"{self.class_name}:{self.ctf_id} - CTF board {board_id} not found")
             raise NotFound(f"CTF board {board_id} not found")
         return ModelValidator(model=CtfBoardModel, log_location=LoggerNames.CLOUD_FN).load(data=data)
-
-    @staticmethod
-    def _board_servers(event: CtfEventModel, board: CtfBoardModel) -> List[str]:
-        """Spec servers carrying at least one of the board's flags, in spec flag order."""
-        board_flag_ids = {flag.flag_id for flag in board.flags}
-        return list(dict.fromkeys(f.server for f in event.spec.flags if f.id in board_flag_ids))
