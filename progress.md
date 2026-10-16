@@ -60,7 +60,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **F2** Error helper — spec + done-when at PRD.md:1003
 - [x] **F3** Audit helper — spec + done-when at PRD.md:1004
 - [x] **F4** Event create — spec + done-when at PRD.md:1006
-- [ ] **F5** Event read, update, delete — spec + done-when at PRD.md:1008
+- [x] **F5** Event read, update, delete — spec + done-when at PRD.md:1008
 - [ ] **F6** Event actions — spec + done-when at PRD.md:1009
 - [ ] **F7** Event reads for panels — spec + done-when at PRD.md:1011
 
@@ -408,3 +408,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Digest docs are keyed by digest, and the digest depends only on (seed, seed_version, workout, flag id). So a workout's second event overwrites the first event's digest docs. **F5 delete must only delete digest docs whose `ctf_id` matches.** The Conflict check is not transactional, so two concurrent creates on the same unit could both pass. The PRD asks for no transaction here, so I left it as it is. Gates now: api 474, cloud_functions 417, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** F5 Event read, update, delete (PRD.md:1008). Add `get`/`list`/`update`/`delete` to `CtfEvent`, and reuse the instructor-or-admin check from `create`.
+
+### Iteration 32 — 2026-10-16
+- **Completed:** F5 — `CtfEvent.get(ctf_id, user)` → `CtfEventModel` (`NotFound`; `Unauthorized` unless admin or in `instructor_id`). `list(user)` → `List[CtfEventSummary]`, newest first: admins get every event, others an `ARRAY_CONTAINS` query on `instructor_id`, and invalid docs are skipped. `update(ctf_id, CtfUpdateRequest, user)` runs in one transaction through the raw client (reads, then authorizes; ARCHIVED → `Conflict`; an empty body writes nothing). It revalidates the merged event and writes only the `model_fields_set` keys. `delete(ctf_id, user)` is admin-only, DRAFT/ARCHIVED only (otherwise `Conflict` naming the state). It deletes rate-limit docs (doc-id range `[ctf_id-, ctf_id.)`), the digests whose `ctf_id` still matches, and the boards from `board_ids`, with the event last, in commits of ≤ 500. Submissions and the log are kept. The instructor-or-admin check is now `_authorize`, shared with `create`. `api/unit_tests/test_ctf_event_crud.py` has 31 tests.
+- **Learned:** `CtfRateLimitModel` has no `ctf_id` and its bucket is any parsed submission id, so finding the docs needs a raw `FieldPath.document_id()` range with `DocumentReference` values (the `db.query` wrapper can't do this). `def list` on the class shadows the builtin for later annotations in the class body, so `_commit`/`_rollback` now annotate with `List[tuple]`. Gates now: api 505, cloud_functions 417, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** F6 Event actions (`process_action` per the action map, PRD.md:1009 and :710-720). Use `CtfStateManager`; arm publishes one `CTF_ARM_BOARD` per board (SC-13).
