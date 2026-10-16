@@ -385,3 +385,20 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** R1 should wrap only the core call in `audit.action(...)`, inside the `try` that does `raise to_http_exception(e) from e`, and should pass the event's `flag_prefix` when it already has one. The guard only catches flag-shaped strings, so callers must never put the seed into `detail`. Gates now: api 442, cloud_functions 417, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** F4 Event create (`CtfEvent.create(unit_id, user)`, PRD.md:1006).
+
+### Verification — 2026-10-16 — PASS
+- **Checked:** E5, BUG2, F1, F2 and F3, the `[x]` tasks added since the last verification. I read commits `788ec89`, `a1e38f9`, `ba22b45`, `2fcc51c` and `c1a5de0` against PRD.md:996-1005, SC-18, SC-20 and the Error Handling table (PRD.md:1216-1238).
+  - E5: `_stop_all` builds the exempt set from events with `state IN` ARMING/ARMED/RUNNING/PAUSED (`DbOperators.IN`, which Firestore supports), then each event's `active == True` boards, and skips those workouts on both the publish path and the debug path. `stop_everything(exempt_prefixes=...)` skips `f"{workout_id}-"` instances, so the project-wide sweep cannot undo the exemption. Tests cover all four live states, the other states, inactive boards, mixed events, and non-CTF workouts still being stopped.
+  - BUG2: `batch_write` now runs once, after the image loop, guarded by `if operations:`.
+  - F1: `is_ctf_enabled()` reads `admin-info/project` through `DbCollections.ADMIN_INFO`/`DATABASE_NAME` with a lock-guarded 60 s `time.monotonic` cache. Only `True` enables it, and a failed read fails closed without being cached. `ctf_enabled_required` is in `api/dependencies.py` (no FastAPI in core) and returns 404. `test_changed_flag_is_seen_after_cache_expires` and `test_ctf_enabled_required_sees_toggle_after_cache_expires` satisfy the done-when.
+  - F2: `_MAPPING` matches the table row by row (400/403/403/404/409/429/503). The Unauthorized, Forbidden and 503 bodies are the table's exact text. Anything unhandled becomes a 500 "Something went wrong" and the cause is logged.
+  - F3: `CtfAudit.action` writes one `CtfLogModel` in a `finally`: `OK` on return, `DENIED` for exactly SC-18's four exceptions, `ERROR` otherwise, and the exception is re-raised. `detail` rejects `agoge{` (and the event prefix) anywhere in a key or value, case-insensitively. Tests cover all three results and the flag rejection.
+  - No TODO, stub, `NotImplemented` or hardcoded test-only value in the new code.
+- **Gate results:**
+  - api/unit_tests: 442 passed.
+  - cloud_functions/tests: 417 passed.
+  - build_files/cloud_deployment/tests: 304 passed.
+  - frontend `npm test`: exit 0, 4 files, 28 tests passed.
+  - ESLint gate: "No files matching the pattern" for the CTF paths. This is expected because no Group I/J task is done.
+  - tsc gate: 0 errors name a CTF file.
+- **Reopened:** none.
