@@ -1,6 +1,6 @@
 import math
 import time
-from typing import AbstractSet, Optional, Tuple
+from typing import AbstractSet, List, Optional, Tuple
 
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections, DbOperators
 from common.constants.states import CtfStates
@@ -15,10 +15,19 @@ from common.models.agoge import (
     Verdict,
 )
 from common.models.model_validators.model_validator import ModelValidator
-from common.models.response import CtfChallenge, CtfHintResponse, CtfStudentBoardResponse, CtfSubmitResponse
+from common.models.response import (
+    CtfChallenge,
+    CtfHintResponse,
+    CtfPublicScoreboardRow,
+    CtfScoreboardRow,
+    CtfStudentBoardResponse,
+    CtfSubmitResponse,
+)
+from common.models.users import AgogeUser
 from common.utilities.ctf_flags import flag_digest, parse_flag_id
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.id_generator import IdGenerator
+from core.ctf.event import CtfEvent
 
 SUBMISSIONS_CLOSED_MESSAGE = "Submissions are closed."
 HINTS_CLOSED_MESSAGE = "Hints can only be taken while the event is running."
@@ -28,7 +37,8 @@ UNPARSED_BUCKET = "unparsed"
 
 
 class CtfScoring:
-    """Student-facing scoring for a CTF board: the board read, flag submission (PRD Submission Algorithm) and hints."""
+    """Scoring for a CTF event: the student board read, flag submission (PRD Submission Algorithm),
+    hints, and the instructor and public scoreboards."""
     MESSAGES = {
         'correct': "Correct! Flag accepted.",
         'incorrect': "Incorrect flag.",
@@ -51,6 +61,8 @@ class CtfScoring:
                 log_name=self.log_name,
             )
         self.db = db
+        # CtfEvent owns event authorization and the board query in board_ids order; reuse them.
+        self.events = CtfEvent(env_dict=env_dict, db=db)
 
     def board(self, workout_id: str) -> CtfStudentBoardResponse:
         """The team's view of its board. It never carries a flag's server, path, location type,
@@ -110,6 +122,78 @@ class CtfScoring:
         # While paused the clock is held; resume moves ends_at forward by the paused duration.
         now = event.paused_at if event.state == CtfStates.PAUSED.value and event.paused_at else time.time()
         return max(0, math.ceil(event.ends_at - now))
+
+    def scoreboard(self, ctf_id: str, user: AgogeUser) -> List[CtfScoreboardRow]:
+        """Instructor ranking of every board, archived ones included. It ignores the freeze."""
+        event = self.events.get(ctf_id, user)
+        boards = self.events._boards(event)
+        ranked = self._rank([(board.score, board.last_solve_at) for board in boards])
+        return [
+            CtfScoreboardRow(
+                rank=rank,
+                workout_id=boards[index].workout_id,
+                team_name=boards[index].team_name,
+                score=boards[index].score,
+                solve_count=boards[index].solve_count,
+                decoy_count=boards[index].decoy_count,
+                last_solve_at=boards[index].last_solve_at,
+            )
+            for rank, index in ranked
+        ]
+
+    def public_scoreboard(self, workout_id: str) -> List[CtfPublicScoreboardRow]:
+        """Anonymized ranking for a team on the event. While `scoreboard_frozen_at` is set, only solves
+        with `solved_at <= scoreboard_frozen_at` count (SC-16). Team names and workout ids are never
+        returned; "Team <n>" numbers boards by board_ids order, so a label is stable across reads."""
+        board = self._active_board(workout_id)
+        event = self._load_event(board.ctf_id)
+        if not event.public_scoreboard_enabled:
+            # Answered as missing, as the endpoint table specifies, rather than as forbidden.
+            raise NotFound(message="Scoreboard not found")
+        boards = self.events._boards(event)
+        points = {flag.id: flag.points for flag in event.spec.flags}
+        standings = [self._frozen_standing(b, points, event.scoreboard_frozen_at) for b in boards]
+        ranked = self._rank([(score, last_solve_at) for score, _, last_solve_at in standings])
+        # Numbered by board_ids index, not list position, so a skipped invalid board can't shift other labels.
+        numbers = {wid: n for n, wid in enumerate(event.board_ids, start=1)}
+        return [
+            CtfPublicScoreboardRow(
+                rank=rank,
+                team_label=f"Team {numbers.get(boards[index].workout_id, len(numbers) + index + 1)}",
+                score=standings[index][0],
+                solve_count=standings[index][1],
+                is_you=boards[index].workout_id == workout_id,
+            )
+            for rank, index in ranked
+        ]
+
+    @staticmethod
+    def _frozen_standing(
+        board: CtfBoardModel, points: dict, frozen_at: Optional[float]
+    ) -> Tuple[int, int, Optional[float]]:
+        """(score, solve_count, last_solve_at) with every solve after `frozen_at` taken back out.
+
+        Only solves are frozen, as SC-16 states: decoy points, hint costs and manual adjustments
+        stay in the score. A solve with no `solved_at` cannot be placed after the freeze, so it counts.
+        """
+        if frozen_at is None:
+            return board.score, board.solve_count, board.last_solve_at
+        solves = [flag for flag in board.flags if flag.solved]
+        late = [flag for flag in solves if flag.solved_at is not None and flag.solved_at > frozen_at]
+        kept_times = [flag.solved_at for flag in solves if flag.solved_at is not None and flag.solved_at <= frozen_at]
+        score = board.score - sum(points.get(flag.flag_id, 0) for flag in late)
+        return score, max(0, board.solve_count - len(late)), max(kept_times, default=None)
+
+    @staticmethod
+    def _rank(standings: List[Tuple[int, Optional[float]]]) -> List[Tuple[int, int]]:
+        """(rank, index) pairs: score descending, then the earliest last solve; a team with no solve
+        ranks after any team on the same score that has one. Remaining ties keep board order
+        (`sorted` is stable), and ranks are positions 1..n."""
+        order = sorted(
+            range(len(standings)),
+            key=lambda i: (-standings[i][0], standings[i][1] is None, standings[i][1] or 0.0),
+        )
+        return [(position + 1, index) for position, index in enumerate(order)]
 
     def submit(self, workout_id: str, flag: str, origin_ip: Optional[str] = None) -> CtfSubmitResponse:
         """Resolve one submitted flag against the workout's active board and record it.
