@@ -7,9 +7,11 @@ from google.cloud.firestore_v1.field_path import FieldPath
 from pydantic import ValidationError
 
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections, DbOperationTypes, DbOperators
+from common.constants.pub_sub import PubSub
 from common.constants.states import CtfStates, WorkoutStates
 from common.exceptions.agoge import BadRequest, Conflict, NotFound, ServiceUnavailable, Unauthorized
 from common.models.agoge import (
+    CtfActionRequest,
     CtfBoardModel,
     CtfDigestModel,
     CtfEventModel,
@@ -21,6 +23,7 @@ from common.models.model_validators.model_validator import ModelValidator
 from common.models.response import CtfEventSummary
 from common.models.users import AgogeUser
 from common.utilities.ctf_flags import derive_flag_value, flag_digest
+from common.utilities.ctf_state_manager import CtfStateManager
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.id_generator import IdGenerator
 
@@ -45,7 +48,19 @@ class CtfEvent:
         WorkoutStates.DELETED.value,
     }
 
-    def __init__(self, env_dict: dict = None, db=None, env=None) -> None:
+    S = CtfStates
+    # action -> (states it may start from, target state). The From sets are narrower than the
+    # state manager's allow-list: (PAUSED, RUNNING) is legal there but only `resume` may use it.
+    ACTIONS = {
+        'arm': ({S.DRAFT, S.ARMED, S.BROKEN}, S.ARMING),
+        'start': ({S.ARMED}, S.RUNNING),
+        'pause': ({S.RUNNING}, S.PAUSED),
+        'resume': ({S.PAUSED}, S.RUNNING),
+        'end': ({S.RUNNING, S.PAUSED}, S.ENDED),
+        'archive': ({S.DRAFT, S.ARMED, S.ENDED, S.BROKEN}, S.ARCHIVED),
+    }
+
+    def __init__(self, env_dict: dict = None, db=None, env=None, pubsub=None) -> None:
         self.class_name = self.__class__.__name__
         self.log_name = LoggerNames.API
         self.logger = Logger(self.log_name, class_name=self.class_name)
@@ -61,6 +76,17 @@ class CtfEvent:
                 log_name=self.log_name,
             )
         self.db = db
+        self.state_manager = CtfStateManager(db=self.db, log_name=self.log_name)
+        self._pubsub = pubsub
+
+    @property
+    def pubsub(self):
+        """PubSubManager, built on first use: only `arm` publishes."""
+        if self._pubsub is None:
+            from common.utilities.gcp.pubsub_manager import PubSubManager
+
+            self._pubsub = PubSubManager(topic=PubSub.Topics.AGOGE, log_name=self.log_name, env_dict=self.env_dict)
+        return self._pubsub
 
     @property
     def env(self):
@@ -173,6 +199,93 @@ class CtfEvent:
         transaction.update(doc_ref, {name: dumped[name] for name in fields})
         self.logger.info(f"{self.class_name}:{ctf_id} - Updated CTF event", fields=",".join(sorted(fields)))
         return updated
+
+    def process_action(self, ctf_id: str, request: CtfActionRequest, user: AgogeUser) -> CtfEventModel:
+        """Apply one lifecycle action (the PRD's action map) and return the transitioned event.
+
+        The event's state, its side-effect fields, and the board updates (`arm` resets every board's
+        arm_status; `archive` deactivates every board) commit in one transaction, so a failed commit
+        leaves nothing half-applied. Only `arm` publishes: one CTF_ARM_BOARD per board, after the
+        commit, so a worker never sees the event before it is ARMING.
+        """
+        action = request.action
+        event = self.db.transaction(lambda transaction: self._action_in_transaction(transaction, ctf_id, action, user))
+        if action == 'arm':
+            self._publish_arm(event)
+        return event
+
+    def _action_in_transaction(self, transaction, ctf_id: str, action: str, user: AgogeUser) -> CtfEventModel:
+        doc_ref = self.db.db.collection(DbCollections.CTF.value).document(ctf_id)
+        snapshot = doc_ref.get(transaction=transaction)
+        if not snapshot.exists:
+            raise NotFound(message="CTF event not found")
+        stored = snapshot.to_dict()
+        event = ModelValidator(CtfEventModel, log_location=self.log_name).load(stored)
+        self._authorize(event.instructor_id, user)
+        from_states, new_state = self.ACTIONS[action]
+        if event.state not in {state.value for state in from_states}:
+            raise Conflict(message=f"Cannot {action} a CTF event that is {self._state_name(event.state)}")
+
+        now = time.time()
+        fields, board_update = {}, None
+        if action == 'arm':
+            if not event.board_ids:
+                # Nothing would ever decrement boards_pending, leaving the event in ARMING for good.
+                raise BadRequest(message="CTF event has no boards to arm")
+            fields = {'boards_pending': len(event.board_ids)}
+            board_update = {'arm_status': 'pending', 'arm_error': None}
+        elif action == 'start':
+            fields = {'starts_at': now}
+        elif action == 'pause':
+            fields = {'paused_at': now}
+        elif action == 'resume':
+            paused_for = max(now - (event.paused_at or now), 0.0)
+            fields = {
+                'accumulated_pause_seconds': event.accumulated_pause_seconds + paused_for,
+                'paused_at': None,
+            }
+            if event.ends_at is not None:
+                fields['ends_at'] = event.ends_at + paused_for
+        elif action == 'end':
+            fields = {'ends_at': now}
+        elif action == 'archive':
+            board_update = {'active': False}
+
+        # Every read is done; Firestore requires that before the first write in a transaction.
+        updated = self.state_manager.transition_in_transaction(
+            transaction, ctf_id, new_state, event=stored, **fields
+        )
+        if board_update:
+            # One write per board in the same transaction; creation caps boards at ctf_max_boards
+            # (default 100), well inside a transaction's write limit.
+            boards = self.db.db.collection(DbCollections.CTF_BOARD.value)
+            for workout_id in event.board_ids:
+                transaction.update(boards.document(f"{ctf_id}-{workout_id}"), dict(board_update))
+        self.logger.info(
+            f"{self.class_name}:{ctf_id} - Applied CTF action",
+            action=action, new_state=new_state.name,
+        )
+        return updated
+
+    def _publish_arm(self, event: CtfEventModel) -> None:
+        attrs = PubSub.EventAttributes
+        published = 0
+        try:
+            for workout_id in event.board_ids:
+                self.pubsub.msg(**{
+                    attrs.HANDLER: PubSub.Handlers.CTF.value,
+                    attrs.ACTION: str(PubSub.Actions.CTF_ARM_BOARD.value),
+                    attrs.CTF_ID: event.id,
+                    attrs.WORKOUT_ID: workout_id,
+                })
+                published += 1
+        except Exception as e:
+            # The event is already ARMING; boards without a message keep boards_pending above 0.
+            self.logger.error(
+                f"{self.class_name}:{event.id} - Arm publish failed",
+                error_type=type(e).__name__, published=published, boards=len(event.board_ids),
+            )
+            raise
 
     def delete(self, ctf_id: str, user: AgogeUser) -> None:
         """Admin only, DRAFT or ARCHIVED only. Deletes the rate-limit, digest and board documents,

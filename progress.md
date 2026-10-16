@@ -61,8 +61,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **F3** Audit helper — spec + done-when at PRD.md:1004
 - [x] **F4** Event create — spec + done-when at PRD.md:1006
 - [x] **F5** Event read, update, delete — spec + done-when at PRD.md:1008
-- [ ] **F6** Event actions — spec + done-when at PRD.md:1009
+- [x] **F6** Event actions — spec + done-when at PRD.md:1009
 - [ ] **F7** Event reads for panels — spec + done-when at PRD.md:1011
+- [ ] **BUG3** An `arm` whose Pub/Sub publish fails partway (`CtfEvent._publish_arm`) leaves the event in ARMING with `boards_pending` above 0 and no way out, because ARMING→ARMING is not an allowed transition and only arm workers leave ARMING. It needs a recovery path, such as a re-publish for boards still `pending`, or a stale-ARMING sweep that moves the event to BROKEN. The PRD does not specify one.
 
 ### Group G — Hosts
 - [ ] **G1** Replant publish — spec + done-when at PRD.md:1015
@@ -414,3 +415,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `CtfRateLimitModel` has no `ctf_id` and its bucket is any parsed submission id, so finding the docs needs a raw `FieldPath.document_id()` range with `DocumentReference` values (the `db.query` wrapper can't do this). `def list` on the class shadows the builtin for later annotations in the class body, so `_commit`/`_rollback` now annotate with `List[tuple]`. Gates now: api 505, cloud_functions 417, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** F6 Event actions (`process_action` per the action map, PRD.md:1009 and :710-720). Use `CtfStateManager`; arm publishes one `CTF_ARM_BOARD` per board (SC-13).
+
+### Iteration 33 — 2026-10-16
+- **Completed:** F6 — `CtfEvent.process_action(ctf_id, CtfActionRequest, user)` returns the transitioned `CtfEventModel`. In one transaction it reads the event, authorizes (an admin, or a user in `instructor_id`), and checks the action's own From set (`CtfEvent.ACTIONS`); otherwise it raises `Conflict("Cannot <action> a CTF event that is <STATE>")`. It then calls `CtfStateManager.transition_in_transaction(..., event=stored, **fields)` and `transaction.update`s every board (`arm`: `arm_status='pending'`, `arm_error=None`; `archive`: `active=False`). The side effects follow the action map: start → `starts_at`, pause → `paused_at`, resume adds the pause to `accumulated_pause_seconds` and to `ends_at` when it is set, end → `ends_at`. `arm` with no boards → `BadRequest`. Only after the commit does `arm` publish one `CTF_ARM_BOARD` per board (handler `CTF`, `ctf_id`, `workout_id`). `PubSubManager` is lazy, and tests inject it with `pubsub=`. `api/unit_tests/test_ctf_event_actions.py` has 43 tests: SC-13, SC-14, 16 illegal (action, state) pairs that write nothing, and auth.
+- **Learned:** The action map's From sets are narrower than the state manager's allow-list: `start` from PAUSED and `resume` from ARMED would both pass `VALID_TRANSITIONS`. So the explicit From check in `process_action` is required; don't drop it. The board updates sit in the event's transaction, which is bounded by `ctf_max_boards`. A publish failure after the commit leaves the event stuck in ARMING; I filed this as BUG3. Gates now: api 548, cloud_functions 417, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** F7 Event reads for panels (`state()`, `boards()`, `flags()`, `log()`, `submissions()`, PRD.md:1011).
