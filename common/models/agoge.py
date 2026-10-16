@@ -530,6 +530,7 @@ class UnitModel(BaseModel):
     firewall_rules: Optional[List[FirewallRuleModel]] = Field(default=None, description="These are ONLY set by the program to allow all internal traffic")
     assessment: Optional[AssessmentModel] = Field(default=None, description="Use Agoge to provide grading support")
     rubric_support: StrictBool = Field(default=False, description="Explicitly enable rubric tools for this lab. AI generation still requires an instructor action.")
+    ctf: Optional[CtfSpecModel] = Field(default=None, description="Capture-the-flag block; its presence makes this unit CTF-capable")
     lms_integration: Optional[LMSIntegrationModel] = Field(default=None, description="Use connected LMS to provide grading support and distribution functionality")
     escape_room: Optional[EscapeRoomModel] = Field(default=None, description="Escape room units include additional specification of the escape room puzzles associated with each workout")
     test: Optional[bool] = Field(default=None, description="Whether the unit is a test. This helps in cleaning the datastore.")
@@ -577,6 +578,7 @@ class CatalogModel(BaseModel):
     id: str = Field(..., description="ID of the unit")
     assessment: Optional[AssessmentModel] = Field(default=None, description="Use Agoge to provide grading support")
     rubric_support: StrictBool = Field(default=False, description="Explicitly enable rubric tools for labs built from this specification.")
+    ctf: Optional[CtfSpecModel] = Field(default=None, description="Capture-the-flag block; its presence makes units built from this specification CTF-capable")
     lms_quiz: Optional[LMSIntegrationModel] = Field(default=None, description="Use connected LMS to provide grading support and distribution functionality")
 
     class Config:
@@ -586,6 +588,7 @@ class CatalogModel(BaseModel):
 class CatalogEditModel(BaseModel):
     assessment: Optional[AssessmentModel] = Field(default=None, description="Use Agoge to provide grading support")
     rubric_support: StrictBool = Field(default=False, description="Explicitly enable rubric tools for labs built from this specification.")
+    ctf: Optional[CtfSpecModel] = Field(default=None, description="Capture-the-flag block; its presence makes units built from this specification CTF-capable")
     build_type: str = Field(..., description="Build type of the unit")
     creation_timestamp: Optional[float] = None
     discriminator: str = Field(..., description="Discriminator field")
