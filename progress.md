@@ -94,7 +94,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 
 ### Group I — Game master UI
 - [x] **I1** CTF TypeScript models — spec + done-when at PRD.md:1049
-- [ ] **I2** CTF transformer and service — spec + done-when at PRD.md:1050
+- [x] **I2** CTF transformer and service — spec + done-when at PRD.md:1050
 - [ ] **I3** Feature flag hook — spec + done-when at PRD.md:1052
 - [ ] **I4** Routes and menu — spec + done-when at PRD.md:1053
 - [ ] **I5** Events list page — spec + done-when at PRD.md:1055
@@ -654,3 +654,14 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** A Python `Optional[X]` with no default is always serialized, so it is typed `X | null`, not `?`. Only `CtfUpdateRequest` and `CtfReplantRequest` use `?`, because there an omitted key means "leave unchanged" or "all". `state_name` stays `string` because `_state_name` falls back to `str(state)`. Gates now: api 1100, cloud_functions 449, build_files 304, frontend 28; eslint on `src/services/Ctf` is clean; tsc has no CTF errors.
 - **Blockers:** none.
 - **Next:** I2 CTF transformer and service (PRD.md:1050), with `ctf.service.test.ts` modelled on `rubric.service.test.ts`.
+
+### Iteration 54 — 2026-10-16
+- **Completed:** I2. `frontend/src/utilities/transformers/ctf.transform.ts` and `frontend/src/services/Ctf/ctf.service.ts`.
+  - `ctfService` has one function per `/ctf` route: `getConfig`, `list`, `create`, `get`, `update`, `remove`, `getState`, `processAction`, `getFlags`, `replant`, `revealFlag`, `getBoards`, `getHosts`, `resetHost`, `adjustScore`, `getScoreboard`, `getSubmissions`, `getLog`.
+  - `ctfBoardService` covers the 4 `/ctf-board` routes (`getBoard`, `submitFlag`, `takeHint`, `getPublicScoreboard`). They send no token because the API routes have no auth.
+  - 19 `URL_CTF_API_*` / `URL_CTF_BOARD_API_*` constants were added to `router/urls.ts`. Path values go through `formatString(..., true)`, so a server name is URL-encoded.
+  - The transformers copy only modelled keys, and they default nullable keys to null and lists to []. `ctf_enabled` and `rebuild_allowed` fail closed unless they are an explicit `true`.
+  - `ctf.service.test.ts` (10 tests) covers: the items-envelope GET, query filters, config fail-closed, a PUT action, an encoded reset path, the host-row default, a 409 error and a 429 error, and board reads/submits without a token.
+- **Learned:** The eslint gate uses `--max-warnings 0` and `no-explicit-any` is a warning, so the transformers type their input as the wire model (`(data: CtfX): CtfX`), not `any`. `apiService` accepts that because its `transformFn` param is `(data: any) => T`. Gates now: frontend 5 files / 38 tests; eslint clean on `src/services/Ctf` and the transformer; tsc has no CTF errors. No Python files changed.
+- **Blockers:** none.
+- **Next:** I3 Feature flag hook (PRD.md:1052). `hooks/useCtfEnabled.tsx` should call `ctfService.getConfig()` once per session for instructors.
