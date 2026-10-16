@@ -41,7 +41,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **BUG** `SpecEditManager.save` writes the spec to Firestore (catalog on publish, edits otherwise) *before* calling `is_valid()`, so an invalid spec is persisted and then the call raises. Callers in `lab_spec_edit.py` check `is_valid()` first, which masks it. Not CTF-specific.
 
 ### Group D — Compute primitives and the loader
-- [ ] **D1** `set_metadata` — spec + done-when at PRD.md:979
+- [x] **D1** `set_metadata` — spec + done-when at PRD.md:979
 - [ ] **D2** `get_guest_attributes` — spec + done-when at PRD.md:981
 - [ ] **D3** Plant contract module — spec + done-when at PRD.md:982
 - [ ] **D4** Loader at build — spec + done-when at PRD.md:983
@@ -264,3 +264,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Validating before `clean()` means validator updates (`self.spec.update(...)`) now land in the persisted spec even when a caller skips `is_valid()`. A `build_type` outside unit/escape-room is a valid spec that needs no validator stubs. Gates now: api 362, cloud_functions 285, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** D1 `set_metadata` (PRD.md:979).
+
+### Iteration 17 — 2026-10-16
+- **Completed:** D1 — `ComputeInstanceAPI.set_metadata(resource_name, items=None, remove=None, wait=True)` re-reads the instance, merges `items` over the existing metadata (order kept), drops `remove` keys, and writes with the read `fingerprint`; on a stale fingerprint it re-reads once and retries, then re-raises. `BaseComputeAPI._make_request` now maps Google `PreconditionFailed` (412) to a new `common.exceptions.PreconditionFailed` (a `BaseAgogeException` subclass, so existing broad handlers still catch it). `cloud_functions/tests/test_compute_set_metadata.py` (7 tests, real protos + real `_make_request`, fake client) covers merge-keeps-unrelated, remove, `wait=False`, 412 → one re-read/retry that keeps a concurrent writer's key, second 412 raises after exactly two writes, and NotFound writes nothing.
+- **Learned:** `items` defaults to `None` because E2's `finally` calls `set_metadata(name, remove=[...])` only. Gates now: api 362, cloud_functions 292, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** D2 `get_guest_attributes` (PRD.md:981).

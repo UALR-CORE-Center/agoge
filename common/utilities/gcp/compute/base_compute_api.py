@@ -7,11 +7,12 @@ from google.api_core.exceptions import ResourceExhausted as GoogleResourceExhaus
 from google.api_core.exceptions import Conflict as GoogleConflict
 from google.api_core.exceptions import NotFound as GoogleNotFound
 from google.api_core.exceptions import BadRequest as GoogleBadRequest
+from google.api_core.exceptions import PreconditionFailed as GooglePreconditionFailed
 from googleapiclient.discovery import Resource
 
 from common.constants.google import ResourceType, OperationType
 from common.constants.build_constants import BuildConstants
-from common.exceptions import Conflict, BaseAgogeException, NotFound, BadRequest, ResourceExhausted
+from common.exceptions import Conflict, BaseAgogeException, NotFound, BadRequest, ResourceExhausted, PreconditionFailed
 from .compute_operations import ComputeOperationsAPI
 from ..cloud_logger import LoggerNames, Logger
 
@@ -221,6 +222,10 @@ class BaseComputeAPI:
         except GoogleResourceExhausted as e:
             self.logger.error(f'QUOTA exceeded for {resource_type}', details=str(e), **log_args)
             raise ResourceExhausted
+        except GooglePreconditionFailed as e:
+            # 412: a fingerprint-guarded write (e.g. setMetadata) lost a race; callers may re-read and retry.
+            self.logger.warning(f'{self.class_name}:{resource} - stale fingerprint on {action}', **log_args)
+            raise PreconditionFailed(str(e))
         except GoogleAPICallError as e:
             if '409' in str(e):
                 self.logger.error(f'Error {action} for {resource_type} {resource}', resource=resource)

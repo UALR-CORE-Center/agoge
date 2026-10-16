@@ -12,12 +12,15 @@ from google.cloud.compute_v1 import (
     ResetInstanceRequest,
     DetachDiskInstanceRequest,
     Disk,
-    AttachDiskInstanceRequest
+    AttachDiskInstanceRequest,
+    Items,
+    Metadata,
+    SetMetadataInstanceRequest
 )
 from googleapiclient.discovery import Resource
 
 from common.constants.google import ResourceType, ClientType
-from common.exceptions import NotFound
+from common.exceptions import NotFound, PreconditionFailed
 from common.utilities.gcp.cloud_logger import LoggerNames
 from .base_compute_api import BaseComputeAPI
 
@@ -333,5 +336,56 @@ class ComputeInstanceAPI(BaseComputeAPI):
             wait=wait,
             request=reset_request
         )
+
+    def set_metadata(
+        self,
+        resource_name: str,
+        items: dict = None,
+        remove: list = None,
+        wait: bool = True,
+        **kwargs
+    ) -> bool:
+        """Merges `items` into the instance metadata and drops the keys in `remove`.
+
+        Every other existing key is preserved. The write is guarded by the
+        instance's current metadata fingerprint; on a 412 (another writer got
+        there first) the instance is re-read once and the merge retried.
+        """
+        client = self.client()
+        project = kwargs.get('project', self.project)
+        zone = kwargs.get('zone', self.zone)
+        items = items or {}
+        remove = set(remove or [])
+
+        for attempt in range(2):
+            instance = self.get(resource_name=resource_name, project=project, zone=zone)
+            merged = {item.key: item.value for item in instance.metadata.items}
+            merged.update(items)
+            for key in remove:
+                merged.pop(key, None)
+
+            metadata_request = SetMetadataInstanceRequest(
+                instance=resource_name,
+                project=project,
+                zone=zone,
+                metadata_resource=Metadata(
+                    fingerprint=instance.metadata.fingerprint,
+                    items=[Items(key=key, value=value) for key, value in merged.items()]
+                )
+            )
+            try:
+                return self._make_request(
+                    client_request=client.set_metadata,
+                    action='set metadata',
+                    resource=resource_name,
+                    wait=wait,
+                    request=metadata_request
+                )
+            except PreconditionFailed:
+                if attempt:
+                    raise
+                self.logger.warning(
+                    f'{self.class_name}:{resource_name} - metadata fingerprint stale; re-reading and retrying once'
+                )
 
 # [ eof ]
