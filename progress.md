@@ -482,3 +482,24 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `LabServerManager` builds its own Firestore and GCP clients in `__init__`, so tests must patch `host_reset_module.ComputeManagerFactory`. A delete failure inside `nuke()` leaves the instance in place but still marks its flags stale; that is conservative, and a replant fixes it. Gates now: api 664, cloud_functions 443, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** G4b — route `CTF_HOST_RESET` in `CtfHandler.action_map` to `HostReset(env_dict, db).run(ctf_id, workout_id, server_name, reset_mode)` (remove the "added when that dispatcher lands" comment), and add a handler test.
+
+### Verification — 2026-10-16 — PASS
+- **Checked:** BUG3 (reopened, then fixed in iteration 36), G1, G2, G3, G4, G5, G6 and G7, the `[x]` tasks changed since the last verification. I read all of `api/core/ctf/hosts.py`, `CtfEvent._publish_arm`/`_fail_unpublished` in `api/core/ctf/event.py`, all of `cloud_functions/cloud_fn_utilities/course_objects/ctf/host_reset.py`, `FlagPlanter.mark_stale`, `LabServerManager.load/start/stop/nuke`, `ComputeManagerFactory.create_manager_object`, `CtfHandler.action_map`, and the SC-9 and mark_stale tests in `cloud_functions/tests/test_ctf_host_reset.py`. I compared them with PRD.md:1013-1022 and SC-9.
+  - BUG3: `_publish_arm` now keeps every future and calls `.result(timeout=…)` on each, against one shared 30 s deadline. A failed future, a timeout, or an in-line raise (which also counts the rest of the boards) goes into `unpublished`, which `_fail_unpublished` handles in one transaction before the first error is re-raised. This fixes the defect the last verification reported.
+  - G1: `replant` publishes one `CTF_PLANT` with `SERVER_NAME` per selected board × flag-bearing server. Selections are validated before any publish (empty or unknown → `BadRequest`), and states outside ARMED/RUNNING/PAUSED/BROKEN → `Conflict`. Futures are resolved through `_publish`.
+  - G2: `hosts` reads server docs with `parent_id in` queries chunked at `MAX_IN_VALUES`, not one read per board. `rebuild_allowed` is False when a server has a WireGuard endpoint or no doc.
+  - G3: `reset` publishes exactly one `CTF_HOST_RESET` carrying `RESET_MODE`, and every check runs before it. `rebuild` with a `wireguard_endpoint_id` → `BadRequest`, as the PRD requires. An unknown mode → `BadRequest` before any read.
+  - G4: `HostReset.mode_map` maps `replant`/`restart`/`rebuild` to real methods. An unknown mode → `ValueError` before any read (tested for each mode). The SC-9 test covers all three modes: no get, write, compute call or plant call names board B. Routing from `CtfHandler` is the separate G4b task, which is correctly still `[ ]`; `action_map` has only `CTF_ARM_BOARD` and `CTF_PLANT`.
+  - G5: calls `FlagPlanter.plant(board, [server])`.
+  - G6: loads `ComputeManagerFactory.create_manager_object` with `{workout_id}-{server}`, then `stop()`, then `start()`.
+  - G7: calls `nuke()`, then `mark_stale`, which sets only `plant_status='stale'`, `planted_at=None` and `plant_error=None` on that server's flags; a test checks that `solved` is kept. A failed nuke still marks the flags stale and re-raises the nuke error.
+  - No TODO, stub, `NotImplemented` or hardcoded test-only value in the new code.
+  - Non-blocking: in the SC-9 test, `FlagPlanter.plant` is mocked for `replant` mode, so the planter's own writes are not part of that assertion. The planter's per-board scoping was verified earlier (E2).
+- **Gate results:**
+  - api/unit_tests: 664 passed.
+  - cloud_functions/tests: 443 passed.
+  - build_files/cloud_deployment/tests: 304 passed.
+  - frontend `npm test`: 4 files, 28 tests passed.
+  - ESLint gate: "No files matching the pattern "src/components/Teacher/Ctf" were found". This is expected because no Group I/J task is done.
+  - tsc gate: 0 errors name a CTF file.
+- **Reopened:** none.
