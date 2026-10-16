@@ -70,11 +70,11 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **G1** Replant publish — spec + done-when at PRD.md:1015
 - [x] **G2** Host rows — spec + done-when at PRD.md:1016
 - [x] **G3** Reset publish — spec + done-when at PRD.md:1017
-- [ ] **G4** Reset dispatcher — spec + done-when at PRD.md:1018
+- [x] **G4** Reset dispatcher — spec + done-when at PRD.md:1018
 - [ ] **G4b** Route `CTF_HOST_RESET` → the `host_reset` dispatcher (with `SERVER_NAME`, `RESET_MODE`) in `CtfHandler.action_map`, with a test showing it reaches it (E3 done-when, PRD.md:992)
-- [ ] **G5** Reset `replant` — spec + done-when at PRD.md:1020
-- [ ] **G6** Reset `restart` — spec + done-when at PRD.md:1021
-- [ ] **G7** Reset `rebuild` — spec + done-when at PRD.md:1022
+- [x] **G5** Reset `replant` — spec + done-when at PRD.md:1020
+- [x] **G6** Reset `restart` — spec + done-when at PRD.md:1021
+- [x] **G7** Reset `rebuild` — spec + done-when at PRD.md:1022
 
 ### Group H — Scoring
 - [ ] **H1** Submission resolve — spec + done-when at PRD.md:1026
@@ -476,3 +476,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** The PRD gives no state rule for resets, so they reuse the replant states: before ARMED nothing is planted (and ARMING would race the arm worker), and after PAUSED the exercise is over. restart and rebuild are allowed on servers with no flags, and restart is allowed on WireGuard servers. The core takes `mode` as a str and checks it against `get_args(ResetMode)`, so a caller other than the router can't bypass it. Gates now: api 664, cloud_functions 417, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** G4 Reset dispatcher (`cloud_functions/.../ctf/host_reset.py` mode → method map; SC-9; an unknown mode → `ValueError`), PRD.md:1018.
+
+### Iteration 40 — 2026-10-16
+- **Completed:** G4, plus G5–G7, because a dispatcher whose methods were stubs would not meet "no stubs" and SC-9 can't be tested without them. `cloud_functions/cloud_fn_utilities/course_objects/ctf/host_reset.py`: `HostReset(env_dict, db).run(ctf_id, workout_id, server, mode)` dispatches through `mode_map` (`replant`/`restart`/`rebuild`). An unknown mode or a missing server raises `ValueError` before any read. A missing event, board or server doc raises `NotFound`. An inactive board is skipped and returns None. replant → `FlagPlanter.plant(board, [server])`. restart → `ComputeManagerFactory` `load(server_name=f"{workout_id}-{server}", server_spec=doc)`, then `stop()`, then `start()`. rebuild → it refuses a server with a `wireguard_endpoint_id` (`ValueError`, defense in depth behind the API's 400), calls `nuke()`, then `FlagPlanter.mark_stale(board, server)`, the new method that sets `plant_status='stale'`, `planted_at=None`, `plant_error=None` through the transactional `_record`. If `nuke()` raises, the flags are still marked stale, because the instance may already be deleted, and the nuke error is re-raised. `cloud_functions/tests/test_ctf_host_reset.py` has 26 tests, including SC-9 for every mode (no get, write, compute or plant call names board B).
+- **Learned:** `LabServerManager` builds its own Firestore and GCP clients in `__init__`, so tests must patch `host_reset_module.ComputeManagerFactory`. A delete failure inside `nuke()` leaves the instance in place but still marks its flags stale; that is conservative, and a replant fixes it. Gates now: api 664, cloud_functions 443, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** G4b — route `CTF_HOST_RESET` in `CtfHandler.action_map` to `HostReset(env_dict, db).run(ctf_id, workout_id, server_name, reset_mode)` (remove the "added when that dispatcher lands" comment), and add a handler test.
