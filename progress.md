@@ -907,3 +907,21 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `import/order` sorts sibling imports alphabetically by path. Gates: frontend 19 files / 163 tests; ESLint is clean on the CTF paths; tsc reports no CTF errors. No Python changed, so the Python suites were not re-run.
 - **Blockers:** none. I4b is still open for a human to do the browser checks.
 - **Next:** J1 Student CTF polling (PRD.md:1075).
+
+### Verification — 2026-10-16 — PASS
+- **Checked:** I14, I15, I16, I17 and LINT1, the `[x]` tasks changed since the last verification (diff `38ad084..7848f43`). I read all of `CtfHostsPanel.tsx`, `CtfScoreboardPanel.tsx`, `CtfEventLogPanel.tsx` and `CtfSubmissionLogPanel.tsx`, plus the changes to `CtfDashboard.tsx`, `ctf.model.ts` and `unit.transform.test.ts`, and compared them with PRD.md:1068-1071. A subagent checked each panel's endpoint, query parameters, response fields and enum arrays against `api/routers/ctf.py`, `api/core/ctf/{hosts,event,scoring}.py`, `common/models/response.py` and `common/models/agoge.py`. It found no mismatches.
+  - I14: one row per board per server (`getRowId` = `workout_id-server`) with the server state. The Reset `Menu` offers Replant, Restart and Rebuild with no mode pre-selected. Rebuild is disabled with a `Tooltip` when `!rebuild_allowed`, and it confirms through the type-to-confirm `ConfirmationDialog`. The `{mode}` body and `RESET_STATES` match `CtfHostResetRequest` and `hosts.py:18,73-74`.
+  - I15: rows are in the API's rank order (`scoring.py:133-145`), polled every 30 s, with an info `Alert` while `scoreboard_frozen_at` is set.
+  - I16: the filter is sent server-side as `?action=`. `LOG_ACTIONS` equals the `LogAction` Literal (`agoge.py:38-40`), and rows are sorted newest first by `created_at`.
+  - I17: the filter is sent as `?verdict=`. `VERDICTS` equals the `Verdict` Literal (`agoge.py:34-35`), rows are newest first by `submitted_at`, and `matched_workout_id` appears as a team name only on `cross_submission` rows, which is the only verdict where the backend sets it (`scoring.py:279-296`).
+  - LINT1: the import order is fixed, and eslint on the file exits 0.
+  - No TODO, FIXME, skip/only, `@ts-ignore`, `eslint-disable`, `as any` or Pro/Premium DataGrid usage in `components/Teacher/Ctf`.
+  - Minor, not a reopen: the Hosts panel is a little stricter than the API in two cases. It blocks every mode when `server_state` is null, which also happens for a server document with no `state` field (`hosts.py:127`). It blocks Replant when `flag_count` is 0, but that count comes from the board's flag states, not the spec (`hosts.py:119-123`). Both cases are unlikely in practice.
+- **Gate results:**
+  - api/unit_tests: 1100 passed.
+  - cloud_functions/tests: 449 passed.
+  - build_files/cloud_deployment/tests: 304 passed.
+  - frontend `npm test`: 19 files, 163 tests passed.
+  - ESLint gate, as written: exit 2, "No files matching the pattern "src/components/Student/Ctf" were found". This is expected because J1 is not done. On the paths that exist, plus `unit.transform.test.ts`, it exits 0 with 0 warnings.
+  - tsc gate: no tsc error names a CTF file (gate exit 0).
+- **Reopened:** none. I4b and J1 onward stay open.
