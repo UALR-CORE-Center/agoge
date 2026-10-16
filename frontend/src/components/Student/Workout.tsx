@@ -11,6 +11,7 @@ import HttpError from "../Common/Errors/HttpError";
 import {InfoCard} from "../Common/InfoCard/InfoCard";
 import TimerBox from "../Common/Timer";
 import {ConfigureAccess} from "./ConfigureAccess";
+import {useCtfBoard} from "./Ctf/useCtfBoard";
 import WorkoutAssessment from "./WorkoutAssessment";
 import WorkoutTable from "./WorkoutTable";
 
@@ -24,6 +25,8 @@ const StudentWorkout: React.FC = () => {
     const [showAssessment, setShowAssessment] = useState(false);
     const [error, setError] = useState<HttpError | null>(null);
     const userIp = useUserIp();
+    // Its own 15 s poll, independent of the workout poll below; one request only when the workout is not in a CTF.
+    useCtfBoard(String(build_id));
     const navigate = useNavigate();
 
     const workoutRef = useRef<HTMLDivElement>(null);
