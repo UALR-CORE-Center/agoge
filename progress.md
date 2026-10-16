@@ -108,7 +108,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I12** Flags panel — spec + done-when at PRD.md:1066
 - [x] **I13** Flags bulk replant — spec + done-when at PRD.md:1067
 - [x] **I14** Hosts panel — spec + done-when at PRD.md:1068
-- [ ] **I15** Scoreboard panel — spec + done-when at PRD.md:1069
+- [x] **I15** Scoreboard panel — spec + done-when at PRD.md:1069
 - [ ] **I16** Event log panel — spec + done-when at PRD.md:1070
 - [ ] **I17** Submission log panel — spec + done-when at PRD.md:1071
 
@@ -865,3 +865,13 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - Gates: frontend 16 files / 136 tests; api 1100, cloud_functions 449, build_files 304. ESLint is clean on the CTF paths, and tsc reports no CTF errors.
 - **Blockers:** none. I4b is still open for a human to do the browser checks.
 - **Next:** I15 Scoreboard panel (PRD.md:1069). Use `ctfService` scoreboard getter, poll every 30 s, show a banner while `scoreboard_frozen_at` is set; add the getter to the dashboard test's service mock.
+
+### Iteration 67 — 2026-10-16
+- **Completed:** I15.
+  - New `frontend/src/components/Teacher/Ctf/CtfScoreboardPanel.tsx` is mounted in the dashboard's Scoreboard `tabpanel`. It is a Community `StyledDataGrid` (`getRowId` = `workout_id`) with Rank, Team, Score, Solves, Decoys and Last solve ("No solves" when null). Rows keep the API's rank order; the grid applies no default sort.
+  - Polling: `ctfService.getScoreboard` every `SCOREBOARD_POLL_INTERVAL_MS = 30000`, only while the tab is active. An ARCHIVED event gets one read.
+  - Frozen banner: an info `Alert` shows while `scoreboardFrozenAt` is set. That value comes from the dashboard's 10 s state poll, so the banner follows a freeze toggle without waiting for the 30 s scoreboard poll. The banner says students see the frozen standings and that this view still counts every solve, because `CtfScoring.scoreboard` ignores the freeze.
+  - Tests: `CtfScoreboardPanel.test.tsx` (6): rank order and columns, the 30 s poll, no reads while hidden, an archived event read once, the banner appearing and clearing, and a load error clearing on the next poll. One added `CtfDashboard` test checks mounting, the 30 s cadence, and the banner following the state poll. `getScoreboard` was added to the dashboard's service mock.
+- **Learned:** Existing panels use the `Ctf*Panel.tsx` naming, not the PRD layout's `ScoreboardPanel.tsx`; I followed the code. Gates: frontend 17 files / 143 tests; api 1100, cloud_functions 449, build_files 304. ESLint is clean on the CTF paths, and tsc reports no CTF errors. `agoge-reviewer` found no defects.
+- **Blockers:** none. I4b is still open for a human to do the browser checks.
+- **Next:** I16 Event log panel (PRD.md:1070). Use `ctfService.getLog(ctfId, action?)`, show newest first, and add an action filter. Add `getLog` to the dashboard test's service mock.

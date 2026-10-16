@@ -12,10 +12,11 @@ import {darkTheme} from "../../../styles/theme";
 import HttpError from "../../Common/Errors/HttpError";
 import CtfDashboard, {DASHBOARD_TABS, STATE_POLL_INTERVAL_MS} from "./CtfDashboard";
 import {FLAGS_POLL_INTERVAL_MS} from "./CtfFlagsPanel";
+import {SCOREBOARD_POLL_INTERVAL_MS} from "./CtfScoreboardPanel";
 import {formatDuration, remainingSeconds} from "./ctfTime";
 
 vi.mock("../../../services/Ctf/ctf.service", () => ({
-    ctfService: {getFlags: vi.fn(), getHosts: vi.fn(), getState: vi.fn(), processAction: vi.fn()},
+    ctfService: {getFlags: vi.fn(), getHosts: vi.fn(), getScoreboard: vi.fn(), getState: vi.fn(), processAction: vi.fn()},
 }));
 
 const NOW = 1_800_000_000;
@@ -130,6 +131,36 @@ describe("CtfDashboard", () => {
         await flush();
         expect(ctfService.getHosts).toHaveBeenCalledWith("eventevent");
         expect(within(screen.getByRole("tabpanel")).getByText("No hosts in this event")).toBeInTheDocument();
+    });
+
+    it("mounts the Scoreboard panel, polls it every 30 s and shows the freeze from the state poll", async () => {
+        vi.mocked(ctfService.getState).mockResolvedValue(stateResponse());
+        vi.mocked(ctfService.getFlags).mockResolvedValue([]);
+        vi.mocked(ctfService.getScoreboard).mockResolvedValue([]);
+        renderDashboard();
+        await flush();
+        expect(ctfService.getScoreboard).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole("tab", {name: "Scoreboard"}));
+        await flush();
+        expect(ctfService.getScoreboard).toHaveBeenCalledTimes(1);
+        expect(within(screen.getByRole("tabpanel")).getByText("No teams in this event")).toBeInTheDocument();
+        expect(within(screen.getByRole("tabpanel")).queryByText(/has been frozen/)).not.toBeInTheDocument();
+
+        // The next 10 s state poll reports a freeze; the banner follows it before the scoreboard re-reads.
+        vi.mocked(ctfService.getState).mockResolvedValue(stateResponse({scoreboard_frozen_at: NOW - 60}));
+        await act(async () => {
+            vi.advanceTimersByTime(STATE_POLL_INTERVAL_MS);
+        });
+        await flush();
+        expect(ctfService.getScoreboard).toHaveBeenCalledTimes(1);
+        expect(within(screen.getByRole("tabpanel")).getByText(/has been frozen/)).toBeInTheDocument();
+
+        await act(async () => {
+            vi.advanceTimersByTime(SCOREBOARD_POLL_INTERVAL_MS - STATE_POLL_INTERVAL_MS);
+        });
+        await flush();
+        expect(ctfService.getScoreboard).toHaveBeenCalledTimes(2);
     });
 
     it("counts down between polls and re-reads state every 10 s", async () => {

@@ -9,6 +9,7 @@ import HttpError from "../../Common/Errors/HttpError";
 import CtfEventControl from "./CtfEventControl";
 import CtfFlagsPanel from "./CtfFlagsPanel";
 import CtfHostsPanel from "./CtfHostsPanel";
+import CtfScoreboardPanel from "./CtfScoreboardPanel";
 import CtfStateChip from "./CtfStateChip";
 import ScoreboardSettings from "./ScoreboardSettings";
 import {formatDuration, remainingSeconds} from "./ctfTime";
@@ -146,6 +147,14 @@ const CtfDashboard: React.FC = () => {
                             )}
                             {label === 'Hosts' && event !== null && (
                                 <CtfHostsPanel ctfId={event.id} state={event.state} active={selectedTab === index} />
+                            )}
+                            {label === 'Scoreboard' && event !== null && (
+                                <CtfScoreboardPanel
+                                    ctfId={event.id}
+                                    state={event.state}
+                                    scoreboardFrozenAt={event.scoreboard_frozen_at}
+                                    active={selectedTab === index}
+                                />
                             )}
                         </Box>
                     ))}
