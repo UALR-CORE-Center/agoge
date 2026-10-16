@@ -58,7 +58,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 ### Group F — Event core
 - [x] **F1** Config and feature flag — spec + done-when at PRD.md:1001
 - [x] **F2** Error helper — spec + done-when at PRD.md:1003
-- [ ] **F3** Audit helper — spec + done-when at PRD.md:1004
+- [x] **F3** Audit helper — spec + done-when at PRD.md:1004
 - [ ] **F4** Event create — spec + done-when at PRD.md:1006
 - [ ] **F5** Event read, update, delete — spec + done-when at PRD.md:1008
 - [ ] **F6** Event actions — spec + done-when at PRD.md:1009
@@ -379,3 +379,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Custom pydantic `ValueError` validator messages can echo input into the 400 detail (reviewer note). The CTF spec models only use field constraints, so this is low risk. Gates now: api 414, cloud_functions 417, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** F3 Audit helper (`api/core/ctf/audit.py` `CtfAudit.action(...)`, PRD.md:1004).
+
+### Iteration 30 — 2026-10-16
+- **Completed:** F3 — `api/core/ctf/audit.py` `CtfAudit(env_dict=None, db=None).action(ctf_id, action, actor, target=None, detail=None, flag_prefix=None)` context manager. It yields a `CtfAuditEntry` (the block may set `.target` or call `.add_detail(**kv)`). In a `finally` it writes exactly one `CtfLogModel` (uuid id, `time.time()` `created_at`, validated through `ModelValidator`) to `DbCollections.CTF_LOG`. The result is `OK` on return, `DENIED` for `Unauthorized`/`Forbidden`/`Conflict`/`BadRequest` (SC-18's list, so `NotFound` counts as `ERROR`), and `ERROR` otherwise; the exception always propagates. `detail` accepts only str/int/bool, and it rejects any key or value containing `agoge{` (or `<event flag_prefix>{`) anywhere, case-insensitively, with a `ValueError` that names the key but not the value. A rejected initial `detail` raises before the block runs and still writes an `ERROR` row. A failed audit write is logged and swallowed, so it never masks the action's own outcome. `api/unit_tests/test_ctf_audit.py` has 28 tests.
+- **Learned:** R1 should wrap only the core call in `audit.action(...)`, inside the `try` that does `raise to_http_exception(e) from e`, and should pass the event's `flag_prefix` when it already has one. The guard only catches flag-shaped strings, so callers must never put the seed into `detail`. Gates now: api 442, cloud_functions 417, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** F4 Event create (`CtfEvent.create(unit_id, user)`, PRD.md:1006).
