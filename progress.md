@@ -97,12 +97,12 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I2** CTF transformer and service — spec + done-when at PRD.md:1050
 - [x] **I3** Feature flag hook — spec + done-when at PRD.md:1052
 - [x] **I4** Routes and menu — spec + done-when at PRD.md:1053 (split: this slice is `URL_TEACHER_CTF_BASE`, `URL_TEACHER_CTF_EVENT` and the flag-gated **Teachers** menu item; the two routes are I4b)
-- [ ] **I4b** (list route done in iteration 57; only the dashboard route remains) Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route. Also verify in the browser that `Create CTF Event` is absent on a non-CTF unit's `TeacherUnit` page (I6 done-when).
+- [ ] **I4b** (both routes are in as of iteration 61; only the browser checks remain, including I9's dashboard check) Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route. Also verify in the browser that `Create CTF Event` is absent on a non-CTF unit's `TeacherUnit` page (I6 done-when).
 - [x] **I5** Events list page — spec + done-when at PRD.md:1055 (the list route is in; the browser check is carried by I4b)
 - [x] **I6** Create from unit — spec + done-when at PRD.md:1057 (the browser check that the button is absent on a non-CTF unit is carried by I4b)
 - [x] **I7** Action confirm dialog — spec + done-when at PRD.md:1059
 - [x] **I8** CTF state chip — spec + done-when at PRD.md:1060
-- [ ] **I9** Dashboard shell — spec + done-when at PRD.md:1061
+- [x] **I9** Dashboard shell — spec + done-when at PRD.md:1061 (the browser check is carried by I4b)
 - [ ] **I10** Event Control panel — spec + done-when at PRD.md:1063
 - [ ] **I11** Scoreboard settings — spec + done-when at PRD.md:1065
 - [ ] **I12** Flags panel — spec + done-when at PRD.md:1066
@@ -766,3 +766,14 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - Lint problems that were already there before this work: `StateChip.tsx`, `StatusBadge.tsx`, and the `exhaustive-deps` warning at `TeacherUnit.tsx:104` (from 2026-03, `6296b93`). This work did not touch any of them.
   - tsc gate: 0 errors name a CTF file (grep exit 1, gate exit 0).
 - **Reopened:** none.
+
+### Iteration 61 — 2026-10-16
+- **Completed:** I9, plus the dashboard route half of I4b.
+  - New `frontend/src/components/Teacher/Ctf/CtfDashboard.tsx` uses `TeacherUnit`'s 25/75 `Box` split. The left column is a `Paper elevation={2}` section titled "Event Control" with `CtfStateChip` and a remaining-time countdown. The right column has MUI `Tabs` (Flags, Hosts, Scoreboard, Event Log, Submissions) with `tabpanel` wiring through `aria-controls`/`aria-labelledby`. The panels are empty slots for I12-I17, and I10 adds its buttons inside the left `Paper`.
+  - It polls `ctfService.getState` with `usePolling` every `STATE_POLL_INTERVAL_MS = 10000`. The poll stops once the event is ARCHIVED. A 404 sends the user to `URL_ERROR`, as `TeacherUnit` does. Any other error shows an error `Alert` and polling continues; the next successful read clears it. A warning `Alert` shows when `budget_exceeded` is true.
+  - New `ctfTime.ts`: `remainingSeconds` mirrors `CtfScoring._remaining_seconds` (null when open-ended, 0 when ENDED, held at `paused_at` while PAUSED, never negative), and `formatDuration` gives HH:MM:SS. The countdown ticks locally every second between polls.
+  - `AppRouter.tsx` routes `${URL_TEACHER_CTF_EVENT}/:ctf_id` to `CtfDashboard` through `ProtectedRoute level="instructor"`.
+  - `CtfDashboard.test.tsx` has 9 tests: the clock helper cases, chip + time + tabs + tab selection, the countdown and the 10 s re-poll (paused clock held), the budget banner, the error alert and recovery, the 404 redirect, and no polling after ARCHIVED.
+- **Learned:** `usePolling` makes its first call on mount, so the dashboard does not need a separate initial fetch. Under `vi.useFakeTimers()`, `act(async () => vi.advanceTimersByTime(...))` followed by a microtask flush is enough to drive it. Gates: frontend 12 files / 84 tests. ESLint is clean on the CTF paths plus `AppRouter.tsx`, and tsc reports no CTF errors. No Python changed.
+- **Blockers:** I did not do the browser check (it needs a signed-in instructor and a live API). It moves to I4b.
+- **Next:** I10 Event Control panel (PRD.md:1063). Put it inside the dashboard's left `Paper`. It needs `ConfirmationDialog` to take a `confirmLabel` prop.
