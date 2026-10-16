@@ -89,7 +89,8 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **R1** Instructor router — spec + done-when at PRD.md:1041
 - [x] **R2** Student router — spec + done-when at PRD.md:1042
 - [x] **R3** Router registration — spec + done-when at PRD.md:1043
-- [ ] **R4** Router auth tests — spec + done-when at PRD.md:1044
+- [x] **R4** Router auth tests — spec + done-when at PRD.md:1044
+- [ ] **BUG4** `AnonymousAppUser()` (common/models/users.py:124) cannot be constructed: it passes `uid=None`, `email=None`, `settings=None` to `AgogeUser`, whose fields are `str`/`str`/`Dict`, so Pydantic raises `ValidationError`. The `get_current_user` branch that returns it is unreachable today only because `HTTPBearer()` (auto_error) answers a missing token with 403 first. Not CTF-specific.
 
 ### Group I — Game master UI
 - [ ] **I1** CTF TypeScript models — spec + done-when at PRD.md:1049
@@ -633,3 +634,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - ESLint gate: "No files matching the pattern "src/components/Teacher/Ctf" were found". This is expected because no Group I/J task is done.
   - tsc gate: 0 errors name a CTF file (grep exit 1).
 - **Reopened:** none.
+
+### Iteration 51 — 2026-10-16
+- **Completed:** R4 — `api/unit_tests/test_ctf_router_auth.py` (211 tests) mounts both CTF routers with the real `teacher_required`/`admin_required`/`ctf_enabled_required`, substituting only the user. It covers: anonymous/student/pending → 403 on all 18 `/ctf` routes (config included) with no core call and no audit row; a missing token → 403; instructor, admin and admin-only users pass auth on every teacher route; every non-admin (GM included) → 403 on DELETE and reveal; admin may DELETE and reveal. For SC-19, disabled → 404 on every gated route for every role, admin included (the enabled gate runs before the role check, so a 403 can't reveal a route), config still answers instructors and refuses others, the three gated `/ctf-board` routes → 404, and the board → `enrolled: false`. A table-completeness test fails if `ctf_router` gains a route the table lacks. Mutation check: switching DELETE to `teacher_required`, or dropping the gate on `/log/`, fails the suite.
+- **Learned:** `AnonymousAppUser()` raises `ValidationError`, so tests can't use it; it is filed as BUG4. Gates now: api 1094, cloud_functions 449, build_files 304, frontend 28; tsc has no CTF errors.
+- **Blockers:** none.
+- **Next:** BUG4 (small), or I1 CTF TypeScript models (PRD.md:1049), which starts Group I.
