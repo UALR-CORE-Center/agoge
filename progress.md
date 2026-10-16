@@ -31,7 +31,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 ### Group B — Flag derivation and state
 - [x] **B1** Derivation module — spec + done-when at PRD.md:962
 - [x] **B2** Seed property — spec + done-when at PRD.md:964
-- [ ] **B3** Seed provisioning — spec + done-when at PRD.md:965
+- [x] **B3** Seed provisioning — spec + done-when at PRD.md:965
 - [ ] **B4** CTF state manager — spec + done-when at PRD.md:967
 
 ### Group C — Specification validation
@@ -212,3 +212,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** `shared_api_secret_names` whitelists only sendgrid/openai/shodan, so the seed can never be routed to the parent project — no extra guard needed. Gates now: api 239, cloud_functions 285, build_files 293, frontend 28.
 - **Blockers:** none.
 - **Next:** B3 Seed provisioning (`ctf_enabled` in `environment_variables.py`, PRD.md:965).
+
+### Iteration 12 — 2026-10-16
+- **Completed:** B3 — `set_variable('ctf_enabled')` in `environment_variables.py` routes to `_set_ctf_enabled` (y/n prompt, or a bool / strictly-parsed `'true'`/`'false'` value), which on enable calls `_ensure_ctf_flag_seed()` *before* writing `{'ctf_enabled': bool}` alone to admin-info; the seed is `secrets.token_hex(32)` stored via `store_secret` only when `get_secret('ctf_flag_seed')` is `None` (also covers an empty secret with no version). Disabling never touches Secret Manager. `build_files/cloud_deployment/tests/test_ctf_seed_provisioning.py` (11 tests, in-memory fake Secret Manager) shows create-once/no-overwrite on second enable, seed-before-flag ordering, and the seed never printed.
+- **Learned:** `ctf_enabled` is deliberately not in `VARIABLES`, so the "All" setup path is unchanged; it is reachable from the "specific" path. The ruff hook reports two pre-existing F541s in `environment_variables.py` (lines ~57 and ~360). Gates now: api 239, cloud_functions 285, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** B4 CTF state manager (`common/utilities/ctf_state_manager.py`, PRD.md:967).
