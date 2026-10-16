@@ -11,6 +11,7 @@ import CtfEventLogPanel from "./CtfEventLogPanel";
 import CtfFlagsPanel from "./CtfFlagsPanel";
 import CtfHostsPanel from "./CtfHostsPanel";
 import CtfScoreboardPanel from "./CtfScoreboardPanel";
+import CtfSetupPanel from "./CtfSetupPanel";
 import CtfStateChip from "./CtfStateChip";
 import CtfSubmissionLogPanel from "./CtfSubmissionLogPanel";
 import ScoreboardSettings from "./ScoreboardSettings";
@@ -19,7 +20,10 @@ import {formatDuration, remainingSeconds} from "./ctfTime";
 // PRD performance budget: the dashboard polls `state` every 10 s, and no CTF poll is faster.
 export const STATE_POLL_INTERVAL_MS = 10000;
 
-export const DASHBOARD_TABS = ['Flags', 'Hosts', 'Scoreboard', 'Event Log', 'Submissions'] as const;
+export const DASHBOARD_TABS = ['Setup', 'Flags', 'Hosts', 'Scoreboard', 'Event Log', 'Submissions'] as const;
+// Where the dashboard opens: Setup while the event is being prepared, Flags once it is armed.
+export const defaultTabFor = (state: number): number =>
+    DASHBOARD_TABS.indexOf(state === CtfStates.DRAFT ? 'Setup' : 'Flags');
 export type DashboardTab = typeof DASHBOARD_TABS[number];
 
 const tabId = (index: number) => `ctf-dashboard-tab-${index}`;
@@ -53,12 +57,14 @@ const CtfDashboard: React.FC = () => {
     const navigate = useNavigate();
     const [event, setEvent] = useState<CtfStateResponse | null>(null);
     const [pollError, setPollError] = useState<string | null>(null);
-    const [selectedTab, setSelectedTab] = useState<number>(0);
+    // null until the first state read picks the opening tab.
+    const [selectedTab, setSelectedTab] = useState<number | null>(null);
 
     const fetchState = useCallback(async () => {
         try {
             const fetched = await ctfService.getState(String(ctf_id));
             setEvent(fetched);
+            setSelectedTab((current) => current ?? defaultTabFor(fetched.state));
             setPollError(null);
         } catch (err) {
             const {status, message} = (err ?? {}) as Partial<HttpError>;
@@ -106,7 +112,12 @@ const CtfDashboard: React.FC = () => {
                         </Typography>
                         <CtfStateChip state={event.state} />
                         <RemainingTime event={event} />
-                        <CtfEventControl ctfId={event.id} state={event.state} onActionComplete={fetchState} />
+                        <CtfEventControl
+                            ctfId={event.id}
+                            state={event.state}
+                            onActionComplete={fetchState}
+                            armBlockedReason={event.boards.length === 0 ? "Add at least one team on the Setup tab." : null}
+                        />
                         <ScoreboardSettings ctfId={event.id} event={event} onUpdated={fetchState} />
                     </Paper>
                 )}
@@ -126,7 +137,7 @@ const CtfDashboard: React.FC = () => {
                     <Tabs
                         variant="scrollable"
                         allowScrollButtonsMobile
-                        value={selectedTab}
+                        value={selectedTab ?? 0}
                         onChange={(_e, value: number) => setSelectedTab(value)}
                         aria-label="CTF dashboard panels"
                     >
@@ -134,7 +145,7 @@ const CtfDashboard: React.FC = () => {
                             <Tab key={label} label={label} id={tabId(index)} aria-controls={panelId(index)} />
                         ))}
                     </Tabs>
-                    {/* Each panel's content is its own PRD item (I12-I17); the shell owns only the tab wiring and mounting. */}
+                    {/* Each panel owns its content; the shell owns only the tab wiring and mounting. */}
                     {DASHBOARD_TABS.map((label, index) => (
                         <Box
                             key={label}
@@ -144,6 +155,14 @@ const CtfDashboard: React.FC = () => {
                             hidden={selectedTab !== index}
                             sx={{pt: 2}}
                         >
+                            {label === 'Setup' && event !== null && (
+                                <CtfSetupPanel
+                                    ctfId={event.id}
+                                    state={event.state}
+                                    active={selectedTab === index}
+                                    onTeamsChanged={fetchState}
+                                />
+                            )}
                             {label === 'Flags' && event !== null && (
                                 <CtfFlagsPanel ctfId={event.id} state={event.state} active={selectedTab === index} />
                             )}

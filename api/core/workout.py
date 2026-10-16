@@ -18,7 +18,7 @@ from common.constants.database import (
 from common.constants.pub_sub import PubSub
 from common.constants.states import WorkoutStates
 from common.document_database.factory import DocumentDatabaseFactory
-from common.exceptions import BadRequest, NotFound, Forbidden, Unauthorized
+from common.exceptions import BadRequest, NotFound, NotOnRoster, Forbidden, Unauthorized
 from common.models.agoge import WorkoutModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.models.response import ServerResponse
@@ -353,6 +353,32 @@ class Workout:
                          workout_id=build_id, user=requester.uid)
         self.db.update(collection_name=self.collection, doc_id=build_id, data=workout)
 
+    def _claim_workout(self, workout: dict, debug_mode: bool) -> str:
+        """Returns the workout id, first publishing its BUILD if it has not been built yet."""
+        workout_id = workout['id']
+        if workout.get('state', WorkoutStates.NOT_BUILT.value) == WorkoutStates.NOT_BUILT.value:
+            message_attrs = {
+                self.pubsub_keys.HANDLER: str(PubSub.Handlers.BUILD.value),
+                self.pubsub_keys.ACTION: str(PubSub.Actions.BUILD.value),
+                self.pubsub_keys.COURSE_OBJECT: str(PubSub.CourseObjects.WORKOUT.value),
+                self.pubsub_keys.KEY_TYPE: str(DbCollections.WORKOUT.value),
+                self.pubsub_keys.BUILD_ID: str(workout_id)
+            }
+            self._send_or_debug(message_attrs, debug_mode=debug_mode)
+        return workout_id
+
+    def _ctf_team_workout_id(self, ctf_event_id: str, student_email: str) -> str | None:
+        """The workout of the active CTF board whose roster lists the email, else None."""
+        # One array filter only: combining it with an equality filter can need a composite index.
+        boards = self.db.query(
+            collection_name=DbCollections.CTF_BOARD,
+            filters=[('members', DbOperators.ARRAY_CONTAINS, student_email)],
+        ) or []
+        return next((
+            board.get('workout_id') for board in boards
+            if board.get('ctf_id') == ctf_event_id and board.get('active', True)
+        ), None)
+
     def _find_existing_workout(
         self,
         unit: dict,
@@ -373,19 +399,17 @@ class Workout:
         """
         filters = [('parent_id', DbOperators.EQUAL, unit['id'])]
         workout_list = self.db.query(collection_name=self.collection, filters=filters)
+        if ctf_event_id := unit.get('ctf_event_id'):
+            # Roster-only: an email resolves to its team's workout, shared by every teammate.
+            team_workout_id = self._ctf_team_workout_id(ctf_event_id, student_email)
+            for workout in workout_list:
+                if team_workout_id and workout.get('id') == team_workout_id:
+                    return self._claim_workout(workout, debug_mode), True
+            raise NotOnRoster(message=f"{student_email} is not on the roster of CTF event {ctf_event_id}")
+
         for workout in workout_list:
             if workout.get('student_email', '').lower() == student_email:
-                workout_id = workout['id']
-                if workout.get('state', WorkoutStates.NOT_BUILT.value) == WorkoutStates.NOT_BUILT.value:
-                    message_attrs = {
-                        self.pubsub_keys.HANDLER: str(PubSub.Handlers.BUILD.value),
-                        self.pubsub_keys.ACTION: str(PubSub.Actions.BUILD.value),
-                        self.pubsub_keys.COURSE_OBJECT: str(PubSub.CourseObjects.WORKOUT.value),
-                        self.pubsub_keys.KEY_TYPE: str(DbCollections.WORKOUT.value),
-                        self.pubsub_keys.BUILD_ID: str(workout_id)
-                    }
-                    self._send_or_debug(message_attrs, debug_mode=debug_mode)
-                return workout_id, True
+                return self._claim_workout(workout, debug_mode), True
 
         # No workout found. Determine if a new one should be built. If not, return None.
         max_builds = min(int(self.env.max_workspaces), int(unit['workspace_settings'].get('count', 10000)))

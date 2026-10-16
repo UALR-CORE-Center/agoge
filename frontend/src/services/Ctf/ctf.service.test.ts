@@ -96,6 +96,79 @@ describe("ctf service", () => {
         expect(host.server_state).toBeNull();
     });
 
+    it("lists templates from the items envelope", async () => {
+        vi.mocked(axios.get).mockResolvedValue({ data: { data: { items: [{
+            id: "spec1", name: "Lab", ctf_name: "Spring", flag_count: 2, servers: [{ name: "web" }],
+        }] } } });
+
+        expect(await ctfService.getTemplates()).toEqual([{
+            id: "spec1", name: "Lab", description: null, ctf_name: "Spring", flag_count: 2,
+            servers: [{ name: "web", os: null, machine_type: null }],
+        }]);
+        expect(axios.get).toHaveBeenCalledWith("ctf/templates/", { ...authHeaders, params: null });
+    });
+
+    it("posts the create body unchanged", async () => {
+        vi.mocked(axios.post).mockResolvedValue({ data: { data: { build_id: "abcdefghij", exists: null } } });
+
+        const body = { spec_id: "spec1", name: null, expires: 1800000000 };
+        expect(await ctfService.create(body)).toEqual({ build_id: "abcdefghij", exists: null });
+        expect(axios.post).toHaveBeenCalledWith("ctf/", body, authHeaders);
+    });
+
+    it("reads the team list", async () => {
+        vi.mocked(axios.get).mockResolvedValue({ data: { data: { items: [{
+            workout_id: "wwwwwwwwww", team_name: "Red", members: ["a@x.io"], workout_state: -1,
+        }] } } });
+
+        const [team] = await ctfService.getTeams("abcdefghij");
+        expect(axios.get).toHaveBeenCalledWith("ctf/abcdefghij/teams/", { ...authHeaders, params: null });
+        expect(team).toMatchObject({ team_name: "Red", workout_state: -1, workout_state_name: null, arm_status: "pending" });
+    });
+
+    it("adds a team with a post", async () => {
+        vi.mocked(axios.post).mockResolvedValue({ data: { data: {
+            workout_id: "wwwwwwwwww", team_name: "Red", members: ["a@x.io"],
+        } } });
+
+        const body = { team_name: "Red", members: ["a@x.io"] };
+        const team = await ctfService.addTeam("abcdefghij", body);
+        expect(axios.post).toHaveBeenCalledWith("ctf/abcdefghij/teams/", body, authHeaders);
+        expect(team.workout_id).toBe("wwwwwwwwww");
+    });
+
+    it("replaces a team's members with a put wrapped in {members}", async () => {
+        vi.mocked(axios.put).mockResolvedValue({ data: { data: { workout_id: "wwwwwwwwww", team_name: "Red", members: ["b@x.io"] } } });
+
+        await ctfService.setTeamMembers("abcdefghij", "wwwwwwwwww", ["b@x.io"]);
+        expect(axios.put).toHaveBeenCalledWith("ctf/abcdefghij/teams/wwwwwwwwww/", { members: ["b@x.io"] }, authHeaders);
+    });
+
+    it("removes a team with a delete", async () => {
+        vi.mocked(axios.delete).mockResolvedValue({ data: { data: { build_id: "wwwwwwwwww", exists: null } } });
+
+        expect(await ctfService.removeTeam("abcdefghij", "wwwwwwwwww")).toEqual({ build_id: "wwwwwwwwww", exists: null });
+        expect(axios.delete).toHaveBeenCalledWith("ctf/abcdefghij/teams/wwwwwwwwww/", authHeaders);
+    });
+
+    it("wraps the spec as {ctf} when updating it and returns the event", async () => {
+        vi.mocked(axios.put).mockResolvedValue({ data: { data: { ...event, join_code: "JOIN42" } } });
+        const spec = { ...event.spec, description: null, rules_url: null };
+
+        const updated = await ctfService.updateSpec("abcdefghij", spec as never);
+        expect(axios.put).toHaveBeenCalledWith("ctf/abcdefghij/spec/", { ctf: spec }, authHeaders);
+        expect(updated.join_code).toBe("JOIN42");
+    });
+
+    it("sends a server action and defaults a missing message count to 0", async () => {
+        vi.mocked(axios.put).mockResolvedValue({ data: { data: { messages: 3 } } });
+        expect(await ctfService.controlServers("abcdefghij", "build")).toEqual({ messages: 3 });
+        expect(axios.put).toHaveBeenCalledWith("ctf/abcdefghij/servers/", { action: "build" }, authHeaders);
+
+        vi.mocked(axios.put).mockResolvedValue({ data: { data: {} } });
+        expect(await ctfService.controlServers("abcdefghij", "stop")).toEqual({ messages: 0 });
+    });
+
     it("preserves the API's error status and message", async () => {
         vi.mocked(axios.put).mockRejectedValue({
             response: { status: 409, data: { detail: "Cannot start an event in DRAFT." } },

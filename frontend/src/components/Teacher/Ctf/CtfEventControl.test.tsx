@@ -32,10 +32,10 @@ const EXPECTED_ENABLED: Record<keyof typeof CtfStates, CtfAction[]> = {
     BROKEN: ['arm', 'archive'],
 };
 
-const renderControl = (state: number, onActionComplete = vi.fn()) => {
+const renderControl = (state: number, onActionComplete = vi.fn(), armBlockedReason?: string | null) => {
     render(
         <ThemeProvider theme={darkTheme}>
-            <CtfEventControl ctfId={CTF_ID} state={state} onActionComplete={onActionComplete} />
+            <CtfEventControl ctfId={CTF_ID} state={state} onActionComplete={onActionComplete} armBlockedReason={armBlockedReason} />
         </ThemeProvider>
     );
     return onActionComplete;
@@ -64,6 +64,28 @@ describe("CtfEventControl", () => {
                 expect(actionButton(action)).toBeDisabled();
             }
         }
+    });
+
+    it("disables Arm with the reason as its tooltip while arming is blocked", async () => {
+        renderControl(CtfStates.DRAFT, vi.fn(), "Add at least one team on the Setup tab.");
+
+        expect(actionButton("arm")).toBeDisabled();
+        // Other legal actions are unaffected.
+        expect(actionButton("archive")).toBeEnabled();
+        fireEvent.mouseOver(actionButton("arm").parentElement as HTMLElement);
+        expect(await screen.findByRole("tooltip")).toHaveTextContent("Add at least one team on the Setup tab.");
+    });
+
+    it("leaves Arm enabled when no block reason is given", () => {
+        renderControl(CtfStates.DRAFT, vi.fn(), null);
+        expect(actionButton("arm")).toBeEnabled();
+    });
+
+    it("ignores the block reason when Arm is already illegal in that state", () => {
+        renderControl(CtfStates.RUNNING, vi.fn(), "Add at least one team on the Setup tab.");
+        expect(actionButton("arm")).toBeDisabled();
+        expect(actionButton("pause")).toBeEnabled();
+        expect(actionButton("arm").parentElement?.tagName).not.toBe("SPAN");
     });
 
     it("confirms a reversible action with the plain dialog and refreshes state on success", async () => {

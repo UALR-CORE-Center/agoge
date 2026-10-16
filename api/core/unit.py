@@ -234,31 +234,16 @@ class Unit:
             if not build_spec:
                 raise NotFound(f'Specification not found. Invalid build type {build_type}')
 
-            # Clean out any unneeded keys
-            for key in ['discriminator', 'id', 'creation_timestamp']:
-                build_spec.pop(key, None)
-
-            # Generate Unit model from requested Catalog model
-            unit_id = IdGenerator.build_id()
             build_count = min(build_count, 100) if build_count != 0 else 1
-            workspace_settings = WorkspaceSettingsModel(
-                count=build_count,
+            unit = self.new_unit_model(
+                build_spec=build_spec,
+                requester=requester,
                 expires=int(Timestamps.from_utc_str(expire_datetime)),
-                student_emails=[],
-                registration_required=registration_required
-            )
-
-            unit = UnitModel(
-                **build_spec,
-                id=unit_id,
-                workspace_settings=workspace_settings,
-                join_code=IdGenerator.join_code(),
-                state=UnitStates.START.value,
+                build_count=build_count,
+                registration_required=registration_required,
                 test=test_unit,
-                creation_timestamp=int(Timestamps.get_current_timestamp_utc())
             )
-            unit.build_type = build_spec.get('build_type', BuildConstants.BuildType.UNIT.value)
-            unit.instructor_id = [requester.email]
+            unit_id = unit.id
             endpoint_registry = self._allocate_wireguard_endpoint(unit)
 
             lms_integration = data.get('lms_integration', None)
@@ -292,6 +277,52 @@ class Unit:
                 raise
         else:
             raise BadRequest('Missing or invalid data')
+
+    @staticmethod
+    def new_unit_model(
+        build_spec: dict,
+        requester: AgogeUser,
+        expires: int,
+        build_count: int,
+        registration_required: bool,
+        test: bool = False,
+    ) -> UnitModel:
+        """
+        Generates an uncommitted Unit model from a Catalog specification record
+
+        Args:
+            build_spec (dict): Catalog specification record; it is not modified
+            requester (AgogeUser): user requesting the build, made the Unit's instructor
+            expires (int): UTC epoch seconds when the Unit's workouts expire
+            build_count (int): Maximum number of workouts in the Unit
+            registration_required (bool): Whether only rostered students may join
+            test (bool): Marks the Unit as a test record
+
+        Returns: UnitModel with a new id and join code, in the START state
+        """
+        build_spec = dict(build_spec)
+        # Clean out any unneeded keys
+        for key in ['discriminator', 'id', 'creation_timestamp']:
+            build_spec.pop(key, None)
+
+        workspace_settings = WorkspaceSettingsModel(
+            count=build_count,
+            expires=expires,
+            student_emails=[],
+            registration_required=registration_required
+        )
+        unit = UnitModel(
+            **build_spec,
+            id=IdGenerator.build_id(),
+            workspace_settings=workspace_settings,
+            join_code=IdGenerator.join_code(),
+            state=UnitStates.START.value,
+            test=test,
+            creation_timestamp=int(Timestamps.get_current_timestamp_utc())
+        )
+        unit.build_type = build_spec.get('build_type', BuildConstants.BuildType.UNIT.value)
+        unit.instructor_id = [requester.email]
+        return unit
 
     def build_all(
         self,

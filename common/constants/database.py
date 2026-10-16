@@ -34,6 +34,7 @@ class DbOperators(Enum):
     NOT_EQUAL = '!='
     EQUAL = '=='
     ARRAY_CONTAINS = 'array_contains'
+    ARRAY_CONTAINS_ANY = 'array_contains_any'
 
 
 class DbCollections(str, Enum):

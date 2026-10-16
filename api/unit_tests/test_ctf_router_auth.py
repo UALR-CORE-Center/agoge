@@ -49,8 +49,10 @@ class Harness:
         self.event = MagicMock(name="CtfEvent()")
         self.hosts = MagicMock(name="CtfHosts()")
         self.scoring = MagicMock(name="CtfScoring()")
+        self.setup = MagicMock(name="CtfSetup()")
         self.board_scoring = MagicMock(name="board CtfScoring()")
         monkeypatch.setattr(ctf_module, "CtfEvent", MagicMock(return_value=self.event))
+        monkeypatch.setattr(ctf_module, "CtfSetup", MagicMock(return_value=self.setup))
         monkeypatch.setattr(ctf_module, "CtfHosts", MagicMock(return_value=self.hosts))
         monkeypatch.setattr(ctf_module, "CtfScoring", MagicMock(return_value=self.scoring))
         monkeypatch.setattr(ctf_module, "CtfAudit", lambda env_dict=None: CtfAudit(db=self.log_db))
@@ -68,7 +70,7 @@ class Harness:
         self.client = TestClient(app, raise_server_exceptions=False)
 
     def core_calls(self):
-        return self.event.mock_calls + self.hosts.mock_calls + self.scoring.mock_calls + self.board_scoring.mock_calls
+        return self.event.mock_calls + self.hosts.mock_calls + self.setup.mock_calls + self.scoring.mock_calls + self.board_scoring.mock_calls
 
 
 def call(client, method, path, body=None):
@@ -83,7 +85,8 @@ DELETE_ROUTE = ("delete", f"/ctf/{CTF_ID}/", None)
 REVEAL_ROUTE = ("get", f"/ctf/{CTF_ID}/flags/web1/reveal/?workout_id={WORKOUT}", None)
 GATED_ROUTES = [
     ("get", "/ctf/", None),
-    ("post", "/ctf/", {"unit_id": "unitabcdef"}),
+    ("get", "/ctf/templates/", None),
+    ("post", "/ctf/", {"spec_id": "web-lab", "expires": 1893456000}),
     ("get", f"/ctf/{CTF_ID}/", None),
     ("put", f"/ctf/{CTF_ID}/", {"public_scoreboard_enabled": True}),
     DELETE_ROUTE,
@@ -99,6 +102,12 @@ GATED_ROUTES = [
     ("get", f"/ctf/{CTF_ID}/scoreboard/", None),
     ("get", f"/ctf/{CTF_ID}/submissions/", None),
     ("get", f"/ctf/{CTF_ID}/log/", None),
+    ("get", f"/ctf/{CTF_ID}/teams/", None),
+    ("post", f"/ctf/{CTF_ID}/teams/", {"team_name": "Red", "members": ["a@x.edu"]}),
+    ("put", f"/ctf/{CTF_ID}/teams/{WORKOUT}/", {"members": ["a@x.edu"]}),
+    ("delete", f"/ctf/{CTF_ID}/teams/{WORKOUT}/", None),
+    ("put", f"/ctf/{CTF_ID}/spec/", {"ctf": {"name": "N", "flags": []}}),
+    ("put", f"/ctf/{CTF_ID}/servers/", {"action": "build"}),
 ]
 ALL_CTF_ROUTES = [CONFIG_ROUTE] + GATED_ROUTES
 GATED_BOARD_ROUTES = [

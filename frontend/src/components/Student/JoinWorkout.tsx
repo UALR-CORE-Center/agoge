@@ -30,8 +30,9 @@ const JoinWorkout: React.FC = () => {
                 setRedirect(true);
             }
         } catch (error: any) {
-            if (error?.detail) {
-                setError(error.detail);
+            // HttpError carries the API's detail (e.g. the CTF roster refusal) as its message.
+            if (error?.status && error?.message) {
+                setError(error.message);
             } else {
                 setError('An error occurred during submission.');
             }

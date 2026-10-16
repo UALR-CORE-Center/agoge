@@ -37,7 +37,13 @@ CtfAction = Literal['arm', 'start', 'pause', 'resume', 'end', 'archive']
 ResetMode = Literal['replant', 'restart', 'rebuild']
 LogAction = Literal['CTF_CREATE', 'CTF_UPDATE', 'CTF_ARM', 'CTF_START', 'CTF_PAUSE',
                     'CTF_RESUME', 'CTF_END', 'CTF_ARCHIVE', 'CTF_DELETE',
-                    'FLAG_REPLANT', 'FLAG_REVEAL', 'HOST_RESET', 'SCORE_ADJUST']
+                    'FLAG_REPLANT', 'FLAG_REVEAL', 'HOST_RESET', 'SCORE_ADJUST',
+                    'TEAM_ADD', 'TEAM_REMOVE', 'TEAM_UPDATE', 'SPEC_UPDATE',
+                    'SERVERS_BUILD', 'SERVERS_START', 'SERVERS_STOP']
+CtfServersAction = Literal['build', 'start', 'stop']
+# Deliberately loose: the roster only has to match what a participant types on the join page.
+CTF_MEMBER_EMAIL_PATTERN = r'^[^@\s]+@[^@\s]+\.[^@\s]+$'
+MAX_CTF_TEAM_MEMBERS = 50
 LogResult = Literal['OK', 'DENIED', 'ERROR']
 
 
@@ -535,6 +541,7 @@ class UnitModel(BaseModel):
     escape_room: Optional[EscapeRoomModel] = Field(default=None, description="Escape room units include additional specification of the escape room puzzles associated with each workout")
     test: Optional[bool] = Field(default=None, description="Whether the unit is a test. This helps in cleaning the datastore.")
     join_code: Optional[str] = Field(default=None, description='Used to invite students to claim a unit workspace')
+    ctf_event_id: Optional[str] = Field(default=None, description="Set on a unit a CTF event created; its join is roster-only")
     workout_duration_days: Optional[int] = Field(default=None, description='For asynchronous workout builds, specify to add an expiration timestamp for the workout.')
     accessibility_features: Optional[bool] = Field(default=False, description="Whether accessibility features are enabled or not")
     state: Optional[int] = Field(default=None, description="Current build state of unit")
@@ -817,6 +824,7 @@ class CtfEventModel(BaseModel):
     scoreboard_frozen_at: Optional[float] = Field(default=None, description="Public scoreboard ignores solves after this")
     public_scoreboard_enabled: bool = Field(default=False)
     board_ids: List[str] = Field(default_factory=list, description="Workout ids of the team boards")
+    join_code: Optional[str] = Field(default=None, description="The unit's join code, shown on the setup tab")
     boards_pending: int = Field(default=0, description="Arm workers not yet finished; decremented in a transaction")
     state: int = Field(..., description="CtfStates value")
     state_timestamp: str = Field(..., description="ISO 8601 UTC")
@@ -846,6 +854,7 @@ class CtfBoardModel(BaseModel):
     ctf_id: str = Field(...)
     active: bool = Field(default=True, description="False once the event is archived or deleted; a workout has at most one active board")
     team_name: str = Field(..., description="WorkoutModel.team_name, else student_email, else workout_id")
+    members: List[str] = Field(default_factory=list, description="Lowercased roster emails; the join page accepts only these")
     flags: List[CtfFlagStateModel] = Field(default_factory=list)
     score: int = Field(default=0, description="Solved points + decoy points - hint costs + manual adjustments")
     solve_count: int = Field(default=0)
@@ -902,7 +911,48 @@ class CtfLogModel(BaseModel):
 
 
 class CtfCreateRequest(BaseModel):
-    unit_id: str = Field(..., pattern=r'^[a-z]{10}$')
+    spec_id: str = Field(..., min_length=1, max_length=200, description="Catalog id of a template with a ctf block")
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100, description="Overrides the spec's ctf name")
+    expires: float = Field(..., gt=0, description="UTC epoch seconds when the event's lab and workouts expire")
+
+
+def _normalize_members(members: List[str]) -> List[str]:
+    normalized = []
+    for member in members:
+        email = member.strip().lower()
+        if not re.fullmatch(CTF_MEMBER_EMAIL_PATTERN, email):
+            raise ValueError("each member must be an email address")
+        if email not in normalized:
+            normalized.append(email)
+    return normalized
+
+
+class CtfTeamMembersRequest(BaseModel):
+    members: List[str] = Field(..., min_length=1, max_length=MAX_CTF_TEAM_MEMBERS)
+
+    @field_validator('members')
+    @classmethod
+    def normalize_members(cls, members: List[str]) -> List[str]:
+        return _normalize_members(members)
+
+
+class CtfTeamRequest(CtfTeamMembersRequest):
+    team_name: str = Field(..., min_length=1, max_length=64)
+
+    @field_validator('team_name')
+    @classmethod
+    def strip_team_name(cls, team_name: str) -> str:
+        if not (team_name := team_name.strip()):
+            raise ValueError("team_name cannot be blank")
+        return team_name
+
+
+class CtfSpecUpdateRequest(BaseModel):
+    ctf: CtfSpecModel
+
+
+class CtfServersRequest(BaseModel):
+    action: CtfServersAction
 
 
 class CtfUpdateRequest(BaseModel):

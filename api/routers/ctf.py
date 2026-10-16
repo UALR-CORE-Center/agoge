@@ -12,6 +12,10 @@ from common.models.agoge import (
     CtfHostResetRequest,
     CtfReplantRequest,
     CtfScoreAdjustRequest,
+    CtfServersRequest,
+    CtfSpecUpdateRequest,
+    CtfTeamMembersRequest,
+    CtfTeamRequest,
     CtfUpdateRequest,
 )
 from common.models.response import (
@@ -20,6 +24,7 @@ from common.models.response import (
     CtfConfigResponse,
     CtfFlagRevealResponse,
     CtfStateResponse,
+    CtfTeamRow,
 )
 from common.models.users import AgogeUser
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
@@ -30,6 +35,7 @@ from core.ctf.config import is_ctf_enabled
 from core.ctf.event import CtfEvent
 from core.ctf.hosts import CtfHosts
 from core.ctf.scoring import CtfScoring
+from core.ctf.setup import CtfSetup
 from dependencies import admin_required, ctf_enabled_required, get_cloud_env, teacher_required
 from utilities.http_errors import to_http_exception
 
@@ -73,6 +79,18 @@ def get_config(current_user: AgogeUser = Depends(teacher_required)) -> AgogeResp
     return AgogeResponse(data=CtfConfigResponse(ctf_enabled=is_ctf_enabled()))
 
 
+@ctf_router.get("/templates/", dependencies=enabled)
+def list_templates(
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse:
+    # Declared before /{ctf_id}/ so the literal path is matched first.
+    try:
+        return AgogeResponse(data={'items': CtfSetup(env_dict=env_dict).templates()})
+    except Exception as e:
+        raise _fail(e, "list_templates", user=current_user.uid) from e
+
+
 @ctf_router.get("/", dependencies=enabled)
 def list_events(
     env_dict: dict = Depends(get_cloud_env),
@@ -94,8 +112,8 @@ def create_event(
         request = _parse(CtfCreateRequest, payload)
         # Chosen here so the CTF_CREATE row names the event even when creation fails.
         ctf_id = IdGenerator.build_id()
-        with CtfAudit(env_dict=env_dict).action(ctf_id, 'CTF_CREATE', current_user.email, target=request.unit_id):
-            CtfEvent(env_dict=env_dict).create(request.unit_id, current_user, ctf_id=ctf_id)
+        with CtfAudit(env_dict=env_dict).action(ctf_id, 'CTF_CREATE', current_user.email, target=request.spec_id):
+            CtfSetup(env_dict=env_dict).create(request, current_user, ctf_id=ctf_id)
         return AgogeResponse(data=AgogeIDResponse(build_id=ctf_id))
     except Exception as e:
         raise _fail(e, "create_event", user=current_user.uid) from e
@@ -333,3 +351,106 @@ def get_log(
         return AgogeResponse(data={'items': CtfEvent(env_dict=env_dict).log(ctf_id, current_user, action=action)})
     except Exception as e:
         raise _fail(e, "get_log", ctf_id=ctf_id, user=current_user.uid) from e
+
+
+@ctf_router.get("/{ctf_id}/teams/", dependencies=enabled)
+def get_teams(
+    ctf_id: str = Depends(ctf_id_path),
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse:
+    try:
+        return AgogeResponse(data={'items': CtfSetup(env_dict=env_dict).teams(ctf_id, current_user)})
+    except Exception as e:
+        raise _fail(e, "get_teams", ctf_id=ctf_id, user=current_user.uid) from e
+
+
+@ctf_router.post("/{ctf_id}/teams/", dependencies=enabled)
+def add_team(
+    payload: Any = Body(default=None),
+    ctf_id: str = Depends(ctf_id_path),
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[CtfTeamRow]:
+    try:
+        request = _parse(CtfTeamRequest, payload)
+        # Counts only: team names and emails stay out of the log row.
+        with CtfAudit(env_dict=env_dict).action(
+            ctf_id, 'TEAM_ADD', current_user.email, detail={'members': len(request.members)}
+        ) as entry:
+            team = CtfSetup(env_dict=env_dict).add_team(ctf_id, request, current_user)
+            entry.add_detail(workout_id=team.workout_id)
+        return AgogeResponse(data=team)
+    except Exception as e:
+        raise _fail(e, "add_team", ctf_id=ctf_id, user=current_user.uid) from e
+
+
+@ctf_router.put("/{ctf_id}/teams/{workout_id}/", dependencies=enabled)
+def set_team_members(
+    payload: Any = Body(default=None),
+    ctf_id: str = Depends(ctf_id_path),
+    workout_id: str = Depends(workout_id_path),
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[CtfTeamRow]:
+    try:
+        request = _parse(CtfTeamMembersRequest, payload)
+        with CtfAudit(env_dict=env_dict).action(
+            ctf_id, 'TEAM_UPDATE', current_user.email, target=workout_id, detail={'members': len(request.members)}
+        ):
+            team = CtfSetup(env_dict=env_dict).set_members(ctf_id, workout_id, request, current_user)
+        return AgogeResponse(data=team)
+    except Exception as e:
+        raise _fail(e, "set_team_members", ctf_id=ctf_id, user=current_user.uid) from e
+
+
+@ctf_router.delete("/{ctf_id}/teams/{workout_id}/", dependencies=enabled)
+def remove_team(
+    ctf_id: str = Depends(ctf_id_path),
+    workout_id: str = Depends(workout_id_path),
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[AgogeIDResponse]:
+    try:
+        with CtfAudit(env_dict=env_dict).action(ctf_id, 'TEAM_REMOVE', current_user.email, target=workout_id):
+            CtfSetup(env_dict=env_dict).remove_team(ctf_id, workout_id, current_user)
+        return AgogeResponse(data=AgogeIDResponse(build_id=workout_id, exists=False))
+    except Exception as e:
+        raise _fail(e, "remove_team", ctf_id=ctf_id, user=current_user.uid) from e
+
+
+@ctf_router.put("/{ctf_id}/spec/", dependencies=enabled)
+def update_spec(
+    payload: Any = Body(default=None),
+    ctf_id: str = Depends(ctf_id_path),
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[CtfEventModel]:
+    try:
+        request = _parse(CtfSpecUpdateRequest, payload)
+        with CtfAudit(env_dict=env_dict).action(
+            ctf_id, 'SPEC_UPDATE', current_user.email, detail={'flags': len(request.ctf.flags)}
+        ):
+            event = CtfSetup(env_dict=env_dict).update_spec(ctf_id, request.ctf, current_user)
+        return AgogeResponse(data=event)
+    except Exception as e:
+        raise _fail(e, "update_spec", ctf_id=ctf_id, user=current_user.uid) from e
+
+
+@ctf_router.put("/{ctf_id}/servers/", dependencies=enabled)
+def control_servers(
+    payload: Any = Body(default=None),
+    ctf_id: str = Depends(ctf_id_path),
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse:
+    try:
+        request = _parse(CtfServersRequest, payload)
+        with CtfAudit(env_dict=env_dict).action(
+            ctf_id, f"SERVERS_{request.action.upper()}", current_user.email
+        ) as entry:
+            messages = CtfSetup(env_dict=env_dict).servers(ctf_id, request.action, current_user)
+            entry.add_detail(messages=messages)
+        return AgogeResponse(data={'messages': messages})
+    except Exception as e:
+        raise _fail(e, "control_servers", ctf_id=ctf_id, user=current_user.uid) from e

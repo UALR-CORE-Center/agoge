@@ -1,6 +1,6 @@
-import {ArrowOutwardRounded} from "@mui/icons-material";
+import {Add, ArrowOutwardRounded} from "@mui/icons-material";
 import FlagIcon from "@mui/icons-material/Flag";
-import {Alert, Box, Paper, Tab, Tabs, Tooltip} from "@mui/material";
+import {Alert, Box, Button, Paper, Tab, Tabs, Tooltip} from "@mui/material";
 import {GridColDef} from "@mui/x-data-grid";
 import React, {useEffect, useState} from "react";
 import {URL_TEACHER_CTF_EVENT} from "../../../router/urls";
@@ -8,6 +8,7 @@ import {CtfEventSummary, CtfStates} from "../../../services/Ctf/ctf.model";
 import {ctfService} from "../../../services/Ctf/ctf.service";
 import {LinkButton} from "../../Buttons/LinkButton";
 import StyledDataGrid from "../../Common/DataGrid/StyledDataGrid";
+import CreateCtfDialog from "./CreateCtfDialog";
 
 // Same tab styling as ActiveExpiredUnitTable, so the two lists look alike.
 const tabSx = {
@@ -90,6 +91,7 @@ const CtfEventList: React.FC = () => {
     const [loading, setLoading] = useState<boolean>(true);
     const [error, setError] = useState<string | null>(null);
     const [selectedTab, setSelectedTab] = useState<number>(0);
+    const [createOpen, setCreateOpen] = useState<boolean>(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -125,6 +127,9 @@ const CtfEventList: React.FC = () => {
     return (
         <Box sx={{width: '100%', minWidth: 0, p: {xs: 0, sm: 2}, mx: 'auto', overflow: 'hidden'}}>
             <Box sx={{display: 'flex', flexDirection: 'column', alignItems: 'flex-start', width: '100%'}}>
+                <Button variant="contained" startIcon={<Add />} onClick={() => setCreateOpen(true)} sx={{mb: 2}}>
+                    New CTF
+                </Button>
                 <Tabs
                     variant={"scrollable"}
                     allowScrollButtonsMobile
@@ -157,6 +162,7 @@ const CtfEventList: React.FC = () => {
                     />
                 </Paper>
             </Box>
+            <CreateCtfDialog open={createOpen} onClose={() => setCreateOpen(false)} />
         </Box>
     );
 };

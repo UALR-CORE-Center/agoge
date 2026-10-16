@@ -88,7 +88,8 @@ do not add configuration hooks for them.
 - **No attack/defense format.** No SLA checks, no round ticks, no flag rotation
   on a timer, no stealing flags from another team's hosts, no per-round scoring.
 - **No new `BuildConstants.BuildType` member and no new build pipeline.** A CTF
-  rides on an existing `UnitModel`. Do not modify `BuildHandler`, `SoloWorkout`,
+  rides on an existing solo `UnitModel`, which the event creates from a catalog
+  template (Group L). Do not modify `BuildHandler`, `SoloWorkout`,
   `CommunityWorkout`, `UnitStates`, `WorkoutStates`, or `ServerStates`.
 - **No per-challenge containers.** Challenges live on the VMs the unit already
   builds. No Docker, no Kubernetes, no Cloud Run challenge instances.
@@ -97,8 +98,9 @@ do not add configuration hooks for them.
 - **No writeup submission, no report grading, no rubric generation for CTF.**
   `RubricModel` and the LLM rubric generator are untouched.
 - **No team self-registration, no new identity provider, and no change to
-  `verify_token` or `ProtectedRoute`.** Teams are the workouts the unit already
-  created; membership is the existing join code.
+  `verify_token` or `ProtectedRoute`.** The game master defines teams and their
+  member emails before the event (Group L); a participant joins with the existing
+  join code plus a rostered email, and teammates share one workout.
 - **No WebSocket or server-sent-event push in Phase 1.** Every panel polls
   through the existing `usePolling` hook.
 - **No cost or budget UI.** `BudgetManager` and `budget_exceeded` already own
@@ -116,10 +118,10 @@ do not add configuration hooks for them.
 
 | ID | Criterion | Measurement | Target |
 |----|-----------|-------------|--------|
-| SC-1 | Creates a CTF event from a unit id | `POST /ctf/` with a valid `unit_id` returns 200 and an `AgogeResponse[AgogeIDResponse]` whose `build_id` matches `^[a-z]{10}$` | 100% of valid requests |
-| SC-2 | Rejects a CTF event on a unit with no `ctf` spec block | `POST /ctf/` on a unit whose `ctf` is null returns 400 with `{"detail": "..."}` | 100% of such requests |
+| SC-1 | Creates a CTF event from a catalog template | `POST /ctf/` with a valid `spec_id` and future `expires` returns 200 and an `AgogeResponse[AgogeIDResponse]` whose `build_id` matches `^[a-z]{10}$`; the event is DRAFT with no boards and its own solo unit | 100% of valid requests |
+| SC-2 | Rejects a CTF event from a template with no `ctf` spec block | `POST /ctf/` on a template whose `ctf` is null returns 400 with `{"detail": "..."}` | 100% of such requests |
 | SC-3 | Derives a distinct flag value per workout | For two workout ids in one event, `derive_flag_value(seed, wid, fid, 1)` returns different strings for every flag id | 0 collisions across 1000 generated pairs in the unit suite |
-| SC-4 | Never stores a flag value in Firestore | Unit tests capture every document written by `CtfEvent.create`, `FlagPlanter`, and `CtfScoring`; none contains a string matching `^agoge\{` | 0 occurrences |
+| SC-4 | Never stores a flag value in Firestore | Unit tests capture every document written by `CtfSetup` (create, add_team, update_spec), `FlagPlanter`, and `CtfScoring`; none contains a string matching `^agoge\{` | 0 occurrences |
 | SC-5 | Plants every flag on arm | After the arm worker finishes a board whose hosts confirm, every `CtfFlagStateModel` on that board has `plant_status == "planted"` and `planted_at` set (mocked compute API in `test_flag_planter.py`) | 100% of flags on confirming hosts |
 | SC-6 | Clears the plant payload after every attempt | `FlagPlanter` calls `set_metadata` removing `agoge-ctf-plant` after success, after an error result, and after a confirmation timeout (three unit tests) | 3 of 3 paths |
 | SC-7 | Re-plants one server without deleting the instance | `CTF_PLANT` for one server calls `set_metadata` and `reset`, and never calls `delete` or `nuke` (mocked) | 100% of replant calls |
@@ -518,7 +520,9 @@ class CtfLogModel(BaseModel):
 # ---------------------------------------------------------------------------
 
 class CtfCreateRequest(BaseModel):
-    unit_id: str = Field(..., pattern=r'^[a-z]{10}$')
+    spec_id: str = Field(..., min_length=1, max_length=200)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    expires: float = Field(..., gt=0)
 
 class CtfUpdateRequest(BaseModel):
     """Only fields present in the body are applied (model_fields_set);
@@ -1003,7 +1007,7 @@ Ordered by dependency. Each item is one iteration and includes its own tests.
 - [ ] **F2 Error helper** — Write `api/utilities/http_errors.py` `to_http_exception(e)` using the Error Handling table.
 - [ ] **F3 Audit helper** — Write `api/core/ctf/audit.py` `CtfAudit.action(...)` context manager writing one `CtfLogModel` with `OK`, `DENIED`, or `ERROR`.
   - Done when: tests cover all three results and show `detail` rejects a value matching `^agoge\{`.
-- [ ] **F4 Event create** — Write `CtfEvent.create(unit_id, user)`: unit not found → `NotFound`; no `ctf` → `BadRequest`; caller not on the unit → `Unauthorized`; workouts > `ctf_max_boards` → `BadRequest`; any workout already on an active board → `Conflict`; missing seed → `ServiceUnavailable`. Writes the event, one board per workout, and one digest doc per board per flag, in commits of ≤ 500 writes.
+- [ ] **F4 Event create** — *Superseded by L2.* Originally `CtfEvent.create(unit_id, user)` built one board per existing workout; creation now starts from a catalog template with no teams, and boards are added per team in DRAFT.
   - Done when: SC-1, SC-2, and the SC-4 check on created documents pass.
 - [ ] **F5 Event read, update, delete** — Add `get`, `list`, `update` (applies only fields in `model_fields_set`), `delete` (per the endpoint table).
 - [ ] **F6 Event actions** — Add `process_action` per the action map.
@@ -1083,6 +1087,19 @@ Ordered by dependency. Each item is one iteration and includes its own tests.
 **Group K — Documentation**
 
 - [ ] **K1 Game master guide** — Write `docs/guides/game-master-guide.md` covering spec authoring (with a complete `ctf` block example), create-to-archive, the three reset modes, what `stale` and `failed` mean, and the overnight-stop exemption.
+
+**Group L — Setup & rosters**
+
+Replaces create-from-unit. The game master creates an event from **Teachers → CTF Events**, then prepares it in DRAFT before any participant can join.
+
+- [ ] **L1 Shared workout record** — Move `BaseUnit._create_workout_record` into `common/utilities/workout_record.py` `build_workout_record(unit_model, workout_id, …)` so the API can write a NOT_BUILT workout without a Pub/Sub round trip; `BaseUnit` delegates to it.
+- [ ] **L2 Create from template** — `CtfSetup.create`: `POST /ctf/` body `{spec_id, name?, expires}`. Solo templates with a `ctf` block only (community → 400). Writes a solo unit (`Unit.new_unit_model`, `ctf_event_id`, `registration_required`, `count` 0) and a DRAFT event with no boards and the unit's `join_code`; publishes nothing. `GET /ctf/templates/` lists eligible templates.
+- [ ] **L3 Teams** — `GET|POST /ctf/{id}/teams/`, `PUT|DELETE /ctf/{id}/teams/{workout_id}/`. A team is a board with `members` plus a NOT_BUILT workout (`team_name`, `student_email` = first member). Add/remove only in DRAFT (board id list changed in a transaction that re-checks DRAFT); remove only while NOT_BUILT; names unique per event; an email on at most one active board; `ctf_max_boards` caps teams. Members editable until ENDED.
+- [ ] **L4 Per-event flags** — `PUT /ctf/{id}/spec/` in DRAFT only: `CtfSpecModel` + `CtfValidator` against the unit's servers, then every board's flag states and digests are rebuilt and stale digests deleted.
+- [ ] **L5 Servers** — `PUT /ctf/{id}/servers/` `{action: build|start|stop}` publishes the existing workout BUILD/START/STOP messages per team (build only NOT_BUILT; stop never while RUNNING). Arm with no boards → 400 "Add at least one team before arming".
+- [ ] **L6 Roster-only join** — `Workout._find_existing_workout`: on a unit with `ctf_event_id`, the email resolves through the active board whose `members` contains it (single `array_contains` filter; no composite index) to the team's workout; anyone else → `NotOnRoster` → 403 with a roster message. Non-CTF units unchanged.
+- [ ] **L7 Setup UI** — **New CTF** dialog on the events list; a **Setup** tab (default in DRAFT) with Teams (add, CSV import, members, remove, join code), Flags (editor), and Servers (build/start/stop all) sections; Arm disabled until there is a team. The lab-page **Create CTF Event** button is removed.
+  - Done when: verified in browser on the development project.
 
 ### Phase 2 (Post-MVP)
 
