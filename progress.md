@@ -82,7 +82,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **H3** Rate limiting — spec + done-when at PRD.md:1030
 - [x] **H4** Hints — spec + done-when at PRD.md:1032
 - [x] **H5** Student board read — spec + done-when at PRD.md:1033
-- [ ] **H6** Scoreboards — spec + done-when at PRD.md:1035
+- [x] **H6** Scoreboards — spec + done-when at PRD.md:1035
 - [ ] **H7** Score adjustment — spec + done-when at PRD.md:1037
 
 ### Group R — Routers
@@ -558,3 +558,15 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - ESLint gate: "No files matching the pattern "src/components/Teacher/Ctf" were found". This is expected because no Group I/J task is done.
   - tsc gate: 0 errors name a CTF file.
 - **Reopened:** none.
+
+### Iteration 46 — 2026-10-16
+- **Completed:** H6. `api/core/ctf/scoring.py` has two new methods:
+  - `CtfScoring.scoreboard(ctf_id, user) -> List[CtfScoreboardRow]` is the instructor view. It covers every board, archived ones included, and ignores the freeze. It authorizes through `CtfEvent.get`.
+  - `CtfScoring.public_scoreboard(workout_id) -> List[CtfPublicScoreboardRow]` is the student view. It raises `NotFound` with no active board or when `public_scoreboard_enabled` is false. "Team <n>" uses the `board_ids` index. `is_you` marks the caller's row.
+  - While frozen, `_frozen_standing` removes each solve with `solved_at > scoreboard_frozen_at` from the score and solve_count, and recomputes last_solve_at from the solves that remain.
+  - Shared `_rank`: score descending, then the earliest last solve. A team with no solve ranks after a tied team that has one. Full ties keep board order. Ranks are positions 1..n.
+  - `CtfScoring` now holds `self.events = CtfEvent(env_dict, db)` and reuses its `get` and `_boards`.
+  - `api/unit_tests/test_ctf_scoring_scoreboard.py` has 20 tests, including SC-16, a solve exactly at the freeze, and the freeze tiebreak.
+- **Learned:** Only solves are frozen, as SC-16 states. Decoy penalties, hint costs and adjustments made after the freeze still show, because the board stores no timestamps for decoys or adjustments. Gates now: api 767, cloud_functions 449, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** H7 Score adjustment (PRD.md:1037), `CtfScoring.adjust(ctf_id, workout_id, delta, reason, user)` writing `SCORE_ADJUST` through `CtfAudit`.
