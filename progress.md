@@ -23,7 +23,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 ### Group A — Contracts and constants
 - [x] **A1** CTF constants — spec + done-when at PRD.md:950
 - [x] **A2** CTF specification models — spec + done-when at PRD.md:952
-- [ ] **A3** CTF stored models — spec + done-when at PRD.md:954
+- [x] **A3** CTF stored models — spec + done-when at PRD.md:954
 - [ ] **A4** CTF request models — spec + done-when at PRD.md:955
 - [ ] **A5** CTF response models — spec + done-when at PRD.md:956
 - [ ] **A6** Spec block wiring — spec + done-when at PRD.md:957
@@ -166,3 +166,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - No TODO, stub or hardcoded value found.
 - **Gate results:** api/unit_tests 100 passed; cloud_functions/tests 285 passed; build_files/cloud_deployment/tests 293 passed; frontend `npm test` exited 0 with 4 files and 28 tests passed. The PRD's 49/23 counts are out of date because tests were added later; there are 0 failures. ESLint gate: none of the CTF paths exist yet ("No files matching the pattern"), which is expected because no Group I/J task is done. tsc gate: 0 errors name a CTF file.
 - **Reopened:** none.
+
+### Iteration 6 — 2026-10-16
+- **Completed:** A3 — `CtfEventModel`, `CtfFlagStateModel`, `CtfBoardModel`, `CtfDigestModel`, `CtfRateLimitModel`, `CtfSubmissionModel`, `CtfLogModel` in `common/models/agoge.py` (appended just before the trailing `model_rebuild()` calls), field for field from PRD.md:399-509; `api/unit_tests/test_ctf_stored_models.py` (30 tests) covers defaults, required fields, Literal rejection, embedded spec validation, negative scores, and scalar-only log `detail` (bool stays bool).
+- **Learned:** Class-based `Config` (as the PRD specifies and existing models use) emits a Pydantic deprecation warning — harmless, matches house style. Gates now: api 130, cloud_functions 285, build_files 293, frontend 28.
+- **Blockers:** none.
+- **Next:** A4 CTF request models (PRD.md:955; definitions start at PRD.md:513).
