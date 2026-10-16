@@ -63,7 +63,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **F5** Event read, update, delete — spec + done-when at PRD.md:1008
 - [x] **F6** Event actions — spec + done-when at PRD.md:1009
 - [x] **F7** Event reads for panels — spec + done-when at PRD.md:1011
-- [ ] **BUG3** An `arm` whose Pub/Sub publish fails partway (`CtfEvent._publish_arm`) leaves the event in ARMING with `boards_pending` above 0 and no way out, because ARMING→ARMING is not an allowed transition and only arm workers leave ARMING. It needs a recovery path, such as a re-publish for boards still `pending`, or a stale-ARMING sweep that moves the event to BROKEN. The PRD does not specify one.
+- [x] **BUG3** An `arm` whose Pub/Sub publish fails partway (`CtfEvent._publish_arm`) leaves the event in ARMING with `boards_pending` above 0 and no way out, because ARMING→ARMING is not an allowed transition and only arm workers leave ARMING. It needs a recovery path, such as a re-publish for boards still `pending`, or a stale-ARMING sweep that moves the event to BROKEN. The PRD does not specify one.
 
 ### Group G — Hosts
 - [ ] **G1** Replant publish — spec + done-when at PRD.md:1015
@@ -427,3 +427,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** Server-side `order_by` plus `limit` on `created_at`/`submitted_at` with a `ctf_id` filter would need a composite Firestore index, and the repo deploys none. So the log and submissions panels read every matching row on each call and cap in memory. That is fine at classroom scale; if submissions grow large, add the indexes and push the sort and limit into the query. R1 tests must monkeypatch `config.is_budget_exceeded`, because otherwise `state()` builds a real Firestore client. Gates now: api 587, cloud_functions 417, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** BUG3 (stuck-ARMING recovery), then G1 Replant publish (PRD.md:1015).
+
+### Iteration 35 — 2026-10-16
+- **Completed:** BUG3 — when `CtfEvent._publish_arm` raises partway, it now runs one recovery transaction (`_fail_unpublished`) before it re-raises the publish error. That transaction reads the event and every board first. It marks each board that got no message (`board_ids[published:]`) `failed` with `ARM_PUBLISH_FAILED` ("Arm message could not be published"), takes them off `boards_pending`, and at 0 moves the event to ARMED (if any other board is `armed`) or BROKEN, using `CtfStateManager.transition_in_transaction(event=...)`. This is the same aggregation ArmWorker does. A board that is already terminal (`armed`/`failed`) is left alone, because the publish that raised may still have been delivered and that worker may have finished. A worker that finishes after recovery finds its board terminal and skips, so nothing is counted twice. If the event already left ARMING, the boards are marked and nothing is counted. If the recovery itself fails, that is logged and the original publish error is still raised. `api/unit_tests/test_ctf_event_actions.py` has 6 new tests (49 total).
+- **Learned:** I picked recovery at the point of failure, not a stale-ARMING sweep. It needs no new state, transition or scheduler work, and it uses the board statuses that already exist. The remaining gap is a recovery transaction that fails too (Firestore down at the same moment). Only a sweep would cover that, and the PRD asks for none. Gates now: api 593, cloud_functions 417, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** G1 Replant publish (PRD.md:1015).
