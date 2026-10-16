@@ -86,7 +86,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **H7** Score adjustment — spec + done-when at PRD.md:1037
 
 ### Group R — Routers
-- [ ] **R1** Instructor router — spec + done-when at PRD.md:1041
+- [x] **R1** Instructor router — spec + done-when at PRD.md:1041
 - [ ] **R2** Student router — spec + done-when at PRD.md:1042
 - [ ] **R3** Router registration — spec + done-when at PRD.md:1043
 - [ ] **R4** Router auth tests — spec + done-when at PRD.md:1044
@@ -582,3 +582,16 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** **R1 must NOT wrap `adjust` in `CtfAudit`.** It audits itself because the reason lives only in the audit row, and a second wrap would break SC-18's one-row rule. The route should call `adjust` and map errors with `to_http_exception`. Gates now: api 790, cloud_functions 449, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** R1 Instructor router (PRD.md:1041).
+
+### Iteration 48 — 2026-10-16
+- **Completed:** R1. `api/routers/ctf.py` (`ctf_router`, prefix `/ctf`) has every route in the endpoint table.
+  - **Gating:** every route except `GET /config/` carries `dependencies=[Depends(ctf_enabled_required)]`. DELETE and reveal use `admin_required`; the rest use `teacher_required`.
+  - **Errors:** each route maps errors with `to_http_exception`.
+  - **Bodies:** taken as `Any = Body(None)` and validated by `_parse`, so a malformed body, unknown action or unknown mode gives 400 ("Invalid request body: …") rather than 422. Malformed path ids still give FastAPI's 422.
+  - **Audit:** each PUT/POST/DELETE, plus reveal, is wrapped in `CtfAudit` as `CTF_CREATE`, `CTF_UPDATE`, `CTF_<ACTION>`, `CTF_DELETE`, `FLAG_REPLANT`, `FLAG_REVEAL` or `HOST_RESET`. The score route is not wrapped, because `adjust` audits itself.
+  - **New core method:** `CtfEvent.reveal(ctf_id, flag_id, workout_id, user)` is admin-only in core too. An unknown flag or board gives `NotFound`, and a missing seed gives `ServiceUnavailable`.
+  - **`create` change:** it takes an optional `ctf_id`, so the router audits a failed create under the id it would have used.
+  - **Tests:** `test_ctf_router.py` (53) and `test_ctf_event_reveal.py` (6).
+- **Learned:** In HOST_RESET rows, the server name goes in `target`, not `detail`, because `add_detail` rejects flag-shaped text and a strange path segment would otherwise be a 500. Gates now: api 851, cloud_functions 449, build_files 304, frontend 28. The reveal `workout_id` query is checked against the build-id pattern before the audit, for the same reason.
+- **Blockers:** none.
+- **Next:** R2 Student router (PRD.md:1042). It should reuse `_parse` (or the same pattern) for `CtfSubmitRequest`, and pass `request.client.host` as `origin_ip`. R3 must `include_router(ctf_router)`.
