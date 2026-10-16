@@ -8,7 +8,7 @@ import {CtfFlagBoardStatus, CtfFlagRow, CtfStates} from "../../../services/Ctf/c
 import {ctfService} from "../../../services/Ctf/ctf.service";
 import {darkTheme} from "../../../styles/theme";
 import HttpError from "../../Common/Errors/HttpError";
-import CtfFlagsPanel, {flagProblems, REPLANT_STATES} from "./CtfFlagsPanel";
+import CtfFlagsPanel, {flagProblems, REPLANT_STATES, selectedServers} from "./CtfFlagsPanel";
 
 vi.mock("../../../services/Ctf/ctf.service", () => ({
     ctfService: {getFlags: vi.fn(), replant: vi.fn()},
@@ -70,6 +70,19 @@ describe("flagProblems", () => {
             .toBe("1 failed, 2 stale");
     });
 });
+
+describe("selectedServers", () => {
+    it("is the de-duplicated union of the selected rows' servers in row order, ignoring unknown ids", () => {
+        const rows = [flag(), flag({flag_id: "db-1", server: "db"}), flag({flag_id: "web-2", server: "web", slot: 2})];
+        expect(selectedServers(rows, ["web-2", "db-1", "web-1", "gone"])).toEqual(["web", "db"]);
+        expect(selectedServers(rows, [])).toEqual([]);
+    });
+});
+
+const checkRow = async (flagId: string) => {
+    const row = await rowFor(flagId);
+    fireEvent.click(within(row).getByRole("checkbox"));
+};
 
 describe("CtfFlagsPanel", () => {
     beforeEach(() => {
@@ -154,5 +167,44 @@ describe("CtfFlagsPanel", () => {
         vi.mocked(ctfService.getFlags).mockRejectedValue(new HttpError(500, "boom"));
         renderPanel();
         expect(await screen.findByText("500: boom")).toBeInTheDocument();
+    });
+
+    it("replants the union of the selected flags' servers with one scoped PUT, then clears the selection", async () => {
+        vi.mocked(ctfService.replant).mockResolvedValue({messages: 4});
+        renderPanel();
+        const bulk = await screen.findByRole("button", {name: "Replant selected"});
+        expect(bulk).toBeDisabled();
+
+        await checkRow("web-1");
+        await checkRow("db-1");
+        fireEvent.click(screen.getByRole("button", {name: "Replant selected (2)"}));
+
+        const dialog = await screen.findByRole("dialog");
+        expect(dialog).toHaveTextContent("Replant 2 servers");
+        expect(dialog).toHaveTextContent("Plant every flag on web, db again, on every board.");
+        fireEvent.click(within(dialog).getByRole("button", {name: "Replant"}));
+
+        await waitFor(() => expect(ctfService.replant).toHaveBeenCalledTimes(1));
+        expect(ctfService.replant).toHaveBeenCalledWith(CTF_ID, {servers: ["web", "db"]});
+        expect(await screen.findByText("Replant of web, db started (4 plant requests).")).toBeInTheDocument();
+        // findByRole: the closing dialog keeps the grid aria-hidden until its exit transition ends.
+        expect(await screen.findByRole("button", {name: "Replant selected"})).toBeDisabled();
+    });
+
+    it("sends a server once when several selected flags live on it", async () => {
+        vi.mocked(ctfService.getFlags).mockResolvedValue([flag(), flag({flag_id: "web-2", slot: 2})]);
+        vi.mocked(ctfService.replant).mockResolvedValue({messages: 1});
+        renderPanel();
+        await checkRow("web-1");
+        await checkRow("web-2");
+        fireEvent.click(screen.getByRole("button", {name: "Replant selected (1)"}));
+        fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", {name: "Replant"}));
+        await waitFor(() => expect(ctfService.replant).toHaveBeenCalledWith(CTF_ID, {servers: ["web"]}));
+    });
+
+    it("keeps bulk replant disabled with a selection when the event state refuses replants", async () => {
+        renderPanel(CtfStates.ENDED);
+        await checkRow("web-1");
+        expect(screen.getByRole("button", {name: "Replant selected (1)"})).toBeDisabled();
     });
 });
