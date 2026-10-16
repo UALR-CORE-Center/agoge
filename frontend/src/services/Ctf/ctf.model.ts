@@ -9,10 +9,13 @@ export type ArmStatus = 'pending' | 'arming' | 'armed' | 'failed';
 export type Verdict = 'correct' | 'incorrect' | 'duplicate' | 'decoy' | 'cross_submission' | 'rate_limited' | 'closed';
 export type CtfAction = 'arm' | 'start' | 'pause' | 'resume' | 'end' | 'archive';
 export type ResetMode = 'replant' | 'restart' | 'rebuild';
-export type LogAction =
-    | 'CTF_CREATE' | 'CTF_UPDATE' | 'CTF_ARM' | 'CTF_START' | 'CTF_PAUSE'
-    | 'CTF_RESUME' | 'CTF_END' | 'CTF_ARCHIVE' | 'CTF_DELETE'
-    | 'FLAG_REPLANT' | 'FLAG_REVEAL' | 'HOST_RESET' | 'SCORE_ADJUST';
+// A runtime list, not just a type, so the Event Log panel can offer every action as a filter.
+export const LOG_ACTIONS = [
+    'CTF_CREATE', 'CTF_UPDATE', 'CTF_ARM', 'CTF_START', 'CTF_PAUSE',
+    'CTF_RESUME', 'CTF_END', 'CTF_ARCHIVE', 'CTF_DELETE',
+    'FLAG_REPLANT', 'FLAG_REVEAL', 'HOST_RESET', 'SCORE_ADJUST',
+] as const;
+export type LogAction = typeof LOG_ACTIONS[number];
 export type LogResult = 'OK' | 'DENIED' | 'ERROR';
 
 // CtfStates in common/constants/states.py. `state` is the number; `state_name` is the member name.
