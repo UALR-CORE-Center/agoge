@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { transformToFullUnit } from "./unit.transform";
 import { transformToCatalog, transformToSpecification } from "./specification.transform";
 import { transformToSpecificationEdit } from "./specificationEdit.transform";
+import { transformToFullUnit } from "./unit.transform";
 
 describe("lab rubric opt-in", () => {
     it.each([undefined, false, "true", 1])("ignores a global rubric flag when the lab setting is %s", (setting) => {
