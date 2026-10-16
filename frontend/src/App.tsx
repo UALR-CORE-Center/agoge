@@ -1,33 +1,28 @@
 import { CssBaseline, ThemeProvider } from '@mui/material';
 import ModalProvider from "mui-modal-provider";
-import React, {useState, useEffect, ChangeEvent} from 'react';
-import {useLocalStorage} from "./hooks/useLocalStorage";
+import React from 'react';
+import { ThemeModeProvider, useThemeMode } from "./context/ThemeModeContext";
 import AppRouter from "./router/AppRouter";
 import { darkTheme, lightTheme } from './styles/theme';
 
-const App: React.FC = () => {
-    const {setItem, getItem} = useLocalStorage();
-    const [isDarkMode, setIsDarkMode] = useState(() => {
-        const savedTheme = getItem('theme');
-        return savedTheme ? JSON.parse(savedTheme) : true;
-    });
-
-    useEffect(() => {
-        setItem('theme', JSON.stringify(isDarkMode));
-    }, [isDarkMode]);
-
-    const toggleTheme = (event: ChangeEvent<HTMLInputElement>, checked: boolean) => {
-        setIsDarkMode(checked);
-    };
+const ThemedApp: React.FC = () => {
+    const { resolvedMode } = useThemeMode();
 
     return (
-        <ThemeProvider theme={isDarkMode ? darkTheme : lightTheme}>
-            <CssBaseline />
+        <ThemeProvider theme={resolvedMode === 'dark' ? darkTheme : lightTheme}>
+            {/* enableColorScheme sets the CSS color-scheme so native scrollbars/inputs match. */}
+            <CssBaseline enableColorScheme />
                 <ModalProvider>
-                    <AppRouter toggleTheme={toggleTheme} isDarkMode={isDarkMode} />
+                    <AppRouter />
                 </ModalProvider>
         </ThemeProvider>
     );
 };
+
+const App: React.FC = () => (
+    <ThemeModeProvider>
+        <ThemedApp />
+    </ThemeModeProvider>
+);
 
 export default App;

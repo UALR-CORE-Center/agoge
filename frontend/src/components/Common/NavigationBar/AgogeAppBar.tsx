@@ -8,13 +8,14 @@ import {
     School,
     Science,
 } from "@mui/icons-material";
-import Brightness4Icon from '@mui/icons-material/Brightness4';
-import Brightness7Icon from '@mui/icons-material/Brightness7';
 import ComputerIcon from '@mui/icons-material/Computer';
+import DarkModeIcon from '@mui/icons-material/DarkMode';
 import HelpIcon from '@mui/icons-material/Help';
 import HomeIcon from '@mui/icons-material/Home';
+import LightModeIcon from '@mui/icons-material/LightMode';
 import Logout from '@mui/icons-material/Logout';
 import Settings from '@mui/icons-material/Settings';
+import SettingsBrightnessIcon from '@mui/icons-material/SettingsBrightness';
 import {
     AppBar,
     Toolbar,
@@ -23,10 +24,11 @@ import {
     IconButton,
     Box,
 } from '@mui/material';
-import React, { ChangeEvent } from 'react';
+import React from 'react';
 import {useNavigate, useLocation, Link} from 'react-router-dom';
 
 import { useAuthContext } from '../../../context/AuthContext';
+import { THEME_MODE_CYCLE, ThemeMode, useThemeMode } from '../../../context/ThemeModeContext';
 import {useLocalStorage} from "../../../hooks/useLocalStorage";
 import {
     URL_TEACHER_HOME,
@@ -42,17 +44,24 @@ import { AppUiObjectNames, Users } from "../../../types/AppObjectNames";
 import { useDrawer } from "../InfoDrawer/InfoDrawerContext";
 import AppBarMenu from "./AppBarMenu";
 
+const THEME_MODE_DISPLAY: Record<ThemeMode, { label: string; icon: React.ReactElement }> = {
+    system: { label: 'System', icon: <SettingsBrightnessIcon /> },
+    light: { label: 'Light', icon: <LightModeIcon /> },
+    dark: { label: 'Dark', icon: <DarkModeIcon /> },
+};
+
 interface AgogeAppBarProps {
     onSidebarToggle: () => void;
-    toggleTheme: (event: ChangeEvent<HTMLInputElement>, checked: boolean) => void;
-    isDarkMode: boolean;
 }
 
-const AgogeAppBar: React.FC<AgogeAppBarProps> = ({ onSidebarToggle, toggleTheme, isDarkMode }) => {
+const AgogeAppBar: React.FC<AgogeAppBarProps> = ({ onSidebarToggle }) => {
     const { firebaseUser, agogeUser, logout } = useAuthContext();
     const {setItem} = useLocalStorage();
     const navigate = useNavigate();
     const location = useLocation();
+    const { mode: themeMode, cycleMode } = useThemeMode();
+    const nextThemeMode = THEME_MODE_CYCLE[(THEME_MODE_CYCLE.indexOf(themeMode) + 1) % THEME_MODE_CYCLE.length];
+    const themeModeLabel = `Theme: ${THEME_MODE_DISPLAY[themeMode].label} (switch to ${THEME_MODE_DISPLAY[nextThemeMode].label})`;
     const { showDrawerButton, openDrawer, drawerData, closeDrawer, isOpen } = useDrawer();
 
     const handleLogin = () => {
@@ -66,10 +75,6 @@ const AgogeAppBar: React.FC<AgogeAppBarProps> = ({ onSidebarToggle, toggleTheme,
         } catch (error) {
             console.error('Failed to log out:', error);
         }
-    };
-
-    const handleToggleTheme = () => {
-        toggleTheme({} as ChangeEvent<HTMLInputElement>, !isDarkMode);
     };
 
     const renderTeacherMenus = () => {
@@ -235,13 +240,13 @@ const AgogeAppBar: React.FC<AgogeAppBarProps> = ({ onSidebarToggle, toggleTheme,
                         <HelpIcon/>
                     </IconButton>
                 </Tooltip>
-                <Tooltip title={isDarkMode ? "Toggle light mode" : "Toggle dark mode"} leaveDelay={200}>
+                <Tooltip title={themeModeLabel} leaveDelay={200}>
                     <IconButton
-                        onClick={handleToggleTheme}
+                        onClick={cycleMode}
                         color="inherit"
-                        aria-label={isDarkMode ? "Toggle light mode" : "Toggle dark mode"}
+                        aria-label={themeModeLabel}
                     >
-                        {isDarkMode ? <Brightness4Icon /> : <Brightness7Icon />}
+                        {THEME_MODE_DISPLAY[themeMode].icon}
                     </IconButton>
                 </Tooltip>
             </Toolbar>

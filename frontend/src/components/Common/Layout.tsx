@@ -6,8 +6,6 @@ import {useDrawer} from "./InfoDrawer/InfoDrawerContext";
 import AgogeAppBar from './NavigationBar/AgogeAppBar';
 
 interface LayoutProps {
-    toggleTheme: (event: React.ChangeEvent<HTMLInputElement>, checked: boolean) => void;
-    isDarkMode: boolean;
     onSidebarToggle: () => void;
 }
 
@@ -56,7 +54,7 @@ const Offset = styled('div')(({ theme }) => theme.mixins.toolbar);
 // Keep in sync with the paper width in InfoDrawer.
 export const INFO_DRAWER_WIDTH = 'min(25%, 350px)';
 
-const Layout: React.FC<LayoutProps> = ({ toggleTheme, isDarkMode, onSidebarToggle }) => {
+const Layout: React.FC<LayoutProps> = ({ onSidebarToggle }) => {
     const { isOpen } = useDrawer();
     const theme = useTheme();
     // Below md the info drawer overlays the page instead of pushing it aside.
@@ -100,8 +98,6 @@ const Layout: React.FC<LayoutProps> = ({ toggleTheme, isDarkMode, onSidebarToggl
             <Box component="nav" role="navigation">
                 <AgogeAppBar
                     onSidebarToggle={() => {}}
-                    toggleTheme={toggleTheme}
-                    isDarkMode={isDarkMode}
                 />
             </Box>
 

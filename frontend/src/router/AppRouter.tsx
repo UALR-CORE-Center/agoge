@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useCallback, useState} from 'react';
 import {
     createBrowserRouter,
     RouterProvider,
@@ -70,18 +70,16 @@ const DefaultHome: React.FC = () => {
 };
 
 
-interface AppRouterProps {toggleTheme: (event: React.ChangeEvent<HTMLInputElement>, checked: boolean) => void;
-    isDarkMode: boolean;
-}
+const AppRouter: React.FC = () => {
+    const [, setSidebarOpen] = useState(true);
+    const toggleSidebar = useCallback(() => setSidebarOpen(open => !open), []);
 
-const AppRouter: React.FC<AppRouterProps> = ({ toggleTheme, isDarkMode }) => {
-    const [sidebarOpen, setSidebarOpen] = useState(true);
-    const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
-
-    const router = createBrowserRouter([
+    // Build the router once: RouterProvider keeps the first router's state, so a
+    // router recreated on re-render would render route elements with stale props.
+    const [router] = useState(() => createBrowserRouter([
             {
                 path: "/",
-                element: <Layout toggleTheme={toggleTheme} isDarkMode={isDarkMode} onSidebarToggle={toggleSidebar} />,
+                element: <Layout onSidebarToggle={toggleSidebar} />,
                 errorElement: <AppError />,
                 children: [
                     { index: true, element: <DefaultHome /> },
@@ -125,7 +123,7 @@ const AppRouter: React.FC<AppRouterProps> = ({ toggleTheme, isDarkMode }) => {
             },
         ],
         {basename: BASENAME}
-    );
+    ));
 
     return (
         <DrawerProvider>
