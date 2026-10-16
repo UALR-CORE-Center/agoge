@@ -49,8 +49,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 ### Group E — Planting
 - [x] **E1** Payload builder — spec + done-when at PRD.md:988
 - [x] **E2** Plant procedure — spec + done-when at PRD.md:990
-- [ ] **E3** CTF handler — spec + done-when at PRD.md:992
+- [x] **E3** CTF handler — spec + done-when at PRD.md:992 (split: this slice is the handler, the `main.py` branch, `CTF_PLANT` routing and unknown action → `ValueError`; the other two routes are E4b and G4b)
 - [ ] **E4** Arm worker — spec + done-when at PRD.md:994
+- [ ] **E4b** Route `CTF_ARM_BOARD` → `ArmWorker.run(ctf_id, workout_id)` in `CtfHandler.action_map`, with a test showing it reaches ArmWorker (E3 done-when, PRD.md:992)
 - [ ] **E5** Overnight exemption — spec + done-when at PRD.md:996
 
 ### Group F — Event core
@@ -67,6 +68,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [ ] **G2** Host rows — spec + done-when at PRD.md:1016
 - [ ] **G3** Reset publish — spec + done-when at PRD.md:1017
 - [ ] **G4** Reset dispatcher — spec + done-when at PRD.md:1018
+- [ ] **G4b** Route `CTF_HOST_RESET` → the `host_reset` dispatcher (with `SERVER_NAME`, `RESET_MODE`) in `CtfHandler.action_map`, with a test showing it reaches it (E3 done-when, PRD.md:992)
 - [ ] **G5** Reset `replant` — spec + done-when at PRD.md:1020
 - [ ] **G6** Reset `restart` — spec + done-when at PRD.md:1021
 - [ ] **G7** Reset `rebuild` — spec + done-when at PRD.md:1022
@@ -317,3 +319,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** E1 had shipped in `badb1e9` but its checkbox was never ticked. It is ticked now. A missing seed fails the flags rather than raising, so E4 can still aggregate. Gates now: api 383, cloud_functions 360, build_files 304, frontend 28.
 - **Blockers:** none.
 - **Next:** E3 CTF handler (`cloud_functions/handlers/ctf_handler.py` + the `Handlers.CTF` branch in `main.py`, PRD.md:992).
+
+### Iteration 23 — 2026-10-16
+- **Completed:** E3, split. New `cloud_functions/handlers/ctf_handler.py` `CtfHandler(event_attributes, env_dict=None, debug=False, db=None)`. It reads `ACTION`/`CTF_ID`/`WORKOUT_ID`/`SERVER_NAME`/`RESET_MODE` and raises `ValueError` when the action, the ctf id or the workout id is missing, or when the action is unknown. `CTF_PLANT` loads the event (`DbCollections.CTF`) and the board (`{ctf_id}-{workout_id}`), both through `ModelValidator`. A missing document raises `NotFound`, and an inactive board is skipped with a warning. It then calls `FlagPlanter(event, env_dict, db).plant(board, servers)`, where `servers` is `[SERVER_NAME]`, or every spec server that carries one of the board's flags (in spec order) when no server is named. `main.py` has the `Handlers.CTF` branch. `cloud_functions/tests/test_ctf_handler.py` (16 tests) also checks that main routes to `CtfHandler`.
+- **Learned:** ArmWorker and host_reset don't exist yet. Rather than reference modules that are missing, I queued their routes as E4b and G4b. Pub/Sub retry is not configured anywhere in build_files, so raising from the handler does not loop. Gates now: api 383, cloud_functions 376, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** E4 Arm worker (PRD.md:994, aggregation at PRD.md:720). Pass the event read before the board write as `event=` to `transition_in_transaction` (Iteration 13). Then E4b.
