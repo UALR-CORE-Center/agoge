@@ -46,6 +46,10 @@ class Conflict(BaseAgogeException):
     pass
 
 
+class PreconditionFailed(BaseAgogeException):
+    pass
+
+
 class Unauthorized(BaseAgogeException):
     pass
 
