@@ -52,7 +52,8 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **E3** CTF handler — spec + done-when at PRD.md:992 (split: this slice is the handler, the `main.py` branch, `CTF_PLANT` routing and unknown action → `ValueError`; the other two routes are E4b and G4b)
 - [x] **E4** Arm worker — spec + done-when at PRD.md:994
 - [x] **E4b** Route `CTF_ARM_BOARD` → `ArmWorker.run(ctf_id, workout_id)` in `CtfHandler.action_map`, with a test showing it reaches ArmWorker (E3 done-when, PRD.md:992)
-- [ ] **E5** Overnight exemption — spec + done-when at PRD.md:996
+- [x] **E5** Overnight exemption — spec + done-when at PRD.md:996
+- [ ] **BUG2** `ProjectServerManager.stop_everything` calls `self.db.batch_write(operations)` inside the image loop (wrong indentation), so the growing batch is rewritten once per checked-out image. Not CTF-specific.
 
 ### Group F — Event core
 - [ ] **F1** Config and feature flag — spec + done-when at PRD.md:1001
@@ -354,3 +355,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - ESLint gate: "No files matching the pattern" for the CTF paths. This is expected because no Group I/J task is done.
   - tsc gate: 0 errors name a CTF file.
 - **Reopened:** none.
+
+### Iteration 26 — 2026-10-16
+- **Completed:** E5 — `DailyMaintenance._stop_all` first collects `_ctf_workout_ids()` (events with `state IN` ARMING/ARMED/RUNNING/PAUSED, then each one's `active == True` boards) and skips those workouts on both the publish and the debug path. The trailing `stop_everything()` would still have stopped their VMs, so it now takes `exempt_prefixes` (`f"{workout_id}-"`; every workout instance is named that way) and skips matching instances. `cloud_functions/tests/test_ctf_overnight_exemption.py` (15 tests) covers SC-20 for all four states, non-CTF workouts still stopped, DRAFT/ENDED/ARCHIVED/BROKEN and inactive boards stopped, mixed events, the debug path, and prefix skipping (the trailing dash keeps a longer id from matching).
+- **Learned:** The PRD's SC-20 only names the STOP publish, but `stop_everything` is the step that actually stops VMs project-wide; any future "keep running" feature has to exempt both. Queued BUG2 (batch_write inside the loop in `stop_everything`). Gates now: api 383, cloud_functions 415, build_files 304, frontend 28.
+- **Blockers:** none.
+- **Next:** F1 Config and feature flag (PRD.md:1001).

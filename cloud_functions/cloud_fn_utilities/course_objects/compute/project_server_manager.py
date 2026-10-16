@@ -1,3 +1,5 @@
+from typing import Iterable
+
 from common.constants.database import DbCollections, DbOperators, DbOperationTypes
 from common.constants.states import ServerStates, ImageStatus
 from common.document_database import DatabaseQueries
@@ -19,10 +21,14 @@ class ProjectServerManager(BaseComputeManager):
     def load(self, server_name: str, **kwargs) -> None:
         pass
 
-    def stop_everything(self) -> None:
+    def stop_everything(self, exempt_prefixes: Iterable[str] = ()) -> None:
+        """Stops every instance in the project except those whose name starts with one of exempt_prefixes"""
+        exempt_prefixes = tuple(exempt_prefixes)
         instances = self.compute_instance.list(project=self.env.project, zone=self.env.zone, wait=False)
         if instances:
             for instance in instances:
+                if exempt_prefixes and instance.name.startswith(exempt_prefixes):
+                    continue
                 try:
                     self.compute_instance.stop(resource_name=instance.name, wait=False)
                 except (BadRequest, BaseAgogeException, NotFound) as e:
