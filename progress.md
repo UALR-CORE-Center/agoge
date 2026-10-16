@@ -101,7 +101,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I5** Events list page — spec + done-when at PRD.md:1055 (the list route is in; the browser check is carried by I4b)
 - [x] **I6** Create from unit — spec + done-when at PRD.md:1057 (the browser check that the button is absent on a non-CTF unit is carried by I4b)
 - [x] **I7** Action confirm dialog — spec + done-when at PRD.md:1059
-- [ ] **I8** CTF state chip — spec + done-when at PRD.md:1060
+- [x] **I8** CTF state chip — spec + done-when at PRD.md:1060
 - [ ] **I9** Dashboard shell — spec + done-when at PRD.md:1061
 - [ ] **I10** Event Control panel — spec + done-when at PRD.md:1063
 - [ ] **I11** Scoreboard settings — spec + done-when at PRD.md:1065
@@ -735,3 +735,15 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - **Learned:** The callers own the request state: I10 and J4 should set `loading` while their call runs and close the dialog themselves on success. Gates: frontend 10 files / 70 tests. ESLint is clean (exit 0) on the gate paths that exist (`src/components/Student/Ctf` does not exist yet), and tsc reports no CTF errors. No Python changed.
 - **Blockers:** none.
 - **Next:** I8 CTF state chip (PRD.md:1060).
+
+### Iteration 60 — 2026-10-16
+- **Completed:** I8.
+  - `StateMapping.tsx` gains `CtfStateMapping` (a `Record` over every `CtfStates` value giving `{text, color, icon}`, with colours from theme palette keys such as `neutral`, `ready`, `warning` and `error`) and `resolveCtfStatus(state)`, which returns "Unknown" for a state it does not know.
+  - The live region in `StateInfo` was moved into an exported `StateAnnouncement` (`{label, context}`). `StateInfo` uses it, and its behaviour is unchanged.
+  - New `Teacher/Ctf/CtfStateChip.tsx` (`{state, sx?}`) renders `StateAnnouncement` (context "CTF event") plus `StatusBadge` with the icon.
+  - `CtfStateChip.test.tsx` (5 tests): every state maps to a real palette key and an icon; the unknown fallback; label and icon render; the first render is not announced; a change is announced and then cleared after 800 ms.
+- **Learned:** Render MUI components that use the custom `ready`/`neutral` colours inside `ThemeProvider theme={darkTheme}` in tests. `StateInfo.tsx` had an existing `import/order` error, which `eslint --fix` fixed. Gates: api 1100, cloud_functions 449, build_files 304 passed; frontend 11 files / 75 tests. ESLint is clean on the CTF paths plus the Status files, and tsc reports no CTF/Status errors.
+- **Blockers:** none.
+- **Next:** I9 Dashboard shell (PRD.md:1061). Put `CtfStateChip` in its left column, then add the dashboard route to finish I4b. `CtfEventList` still shows `state_name` as plain text; it could switch to `CtfStateChip` later.
+
+- **Addendum (iteration 60):** Adding `CtfStateMapping` changed the wording of an existing tsc error in `UnitTable.tsx` (TS2305 became TS2724 "Did you mean 'CtfStateMapping'?"), so it no longer matched the check baseline. `UnitTable.tsx` imported a `StateMapping` export that never existed and was never used, so I removed that name from the import and refreshed the baseline.

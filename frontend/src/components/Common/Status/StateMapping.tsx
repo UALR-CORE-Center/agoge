@@ -1,5 +1,16 @@
-import {WorkoutStates, ServerStates, ImageStates} from '../../../types/AgogeStates';
+import EditNoteIcon from '@mui/icons-material/EditNote';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import FlagIcon from '@mui/icons-material/Flag';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import HourglassTopIcon from '@mui/icons-material/HourglassTop';
+import Inventory2Icon from '@mui/icons-material/Inventory2';
+import PauseIcon from '@mui/icons-material/Pause';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import SportsScoreIcon from '@mui/icons-material/SportsScore';
 import { ChipProps } from '@mui/material/Chip';
+import React from 'react';
+import {CtfStates} from '../../../services/Ctf/ctf.model';
+import {WorkoutStates, ServerStates, ImageStates} from '../../../types/AgogeStates';
 
 type ChipColor = ChipProps['color'];
 
@@ -42,4 +53,30 @@ export function resolveStatus(
         return ImageStateMapping[state as ImageStates] ?? { text: 'Working', color: 'neutral' };
     }
     return WorkoutStateMapping[state as WorkoutStates] ?? { text: 'Working', color: 'neutral' };
+}
+
+export interface CtfStatusInfo extends StatusInfo {
+    icon: React.ReactElement;
+}
+
+type CtfStateValue = typeof CtfStates[keyof typeof CtfStates];
+
+// Every CtfStates value is mapped (the Record type enforces it). The icon carries the meaning
+// alongside the colour, so the chip still reads correctly without colour vision.
+export const CtfStateMapping: Record<CtfStateValue, CtfStatusInfo> = {
+    [CtfStates.DRAFT]:    { text: 'Draft',    color: 'neutral', icon: <EditNoteIcon /> },
+    [CtfStates.ARMING]:   { text: 'Arming',   color: 'warning', icon: <HourglassTopIcon /> },
+    [CtfStates.ARMED]:    { text: 'Armed',    color: 'ready',   icon: <FlagIcon /> },
+    [CtfStates.RUNNING]:  { text: 'Running',  color: 'success', icon: <PlayArrowIcon /> },
+    [CtfStates.PAUSED]:   { text: 'Paused',   color: 'warning', icon: <PauseIcon /> },
+    [CtfStates.ENDED]:    { text: 'Ended',    color: 'info',    icon: <SportsScoreIcon /> },
+    [CtfStates.ARCHIVED]: { text: 'Archived', color: 'neutral', icon: <Inventory2Icon /> },
+    [CtfStates.BROKEN]:   { text: 'Broken',   color: 'error',   icon: <ErrorOutlineIcon /> },
+};
+
+// A state this build does not know (e.g. the API added one) reads "Unknown" rather than
+// being mislabelled as a known state.
+export function resolveCtfStatus(state: number): CtfStatusInfo {
+    return CtfStateMapping[state as CtfStateValue]
+        ?? { text: 'Unknown', color: 'neutral', icon: <HelpOutlineIcon /> };
 }
