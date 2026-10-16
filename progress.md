@@ -115,7 +115,7 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **LINT1** `frontend/src/utilities/transformers/unit.transform.test.ts:2` fails eslint `import/order` (`./unit.transform` should come after `./specificationEdit.transform`). This was already the case before I6. Not CTF-specific, and it is outside the CTF lint gate.
 
 ### Group J — Student UI
-- [ ] **J1** Student CTF polling — spec + done-when at PRD.md:1075
+- [x] **J1** Student CTF polling — spec + done-when at PRD.md:1075
 - [ ] **J2** CTF banner — spec + done-when at PRD.md:1076
 - [ ] **J3** Flag submission card — spec + done-when at PRD.md:1078
 - [ ] **J4** Challenge list — spec + done-when at PRD.md:1080
@@ -925,3 +925,13 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - ESLint gate, as written: exit 2, "No files matching the pattern "src/components/Student/Ctf" were found". This is expected because J1 is not done. On the paths that exist, plus `unit.transform.test.ts`, it exits 0 with 0 warnings.
   - tsc gate: no tsc error names a CTF file (gate exit 0).
 - **Reopened:** none. I4b and J1 onward stay open.
+
+### Iteration 71 — 2026-10-16
+- **Completed:** J1.
+  - New hook `frontend/src/components/Student/Ctf/useCtfBoard.ts` is called from `Workout.tsx` and returns `{board, refresh}`. `board` is null unless enrolled. J2-J4 will consume it; it is unused today.
+  - Polling: `usePolling(fetchBoard, {enabled: enrolled !== false, interval: BOARD_POLL_INTERVAL_MS = 15000})`. The first poll is the mount read, and a not-enrolled answer disables polling. This poll is separate from the page's 3.5 s `setInterval` workout poll.
+  - Failed reads: the last good board is kept and polling continues, including after a failed first read, because an error does not mean "not enrolled".
+  - Tests: `useCtfBoard.test.tsx` (7) and `WorkoutCtfPolling.test.tsx` (2). The page test renders `Workout.tsx` with its children mocked and checks the 15 s board cadence alongside the 3.5 s workout poll, and that an unenrolled workout gets exactly one CTF request.
+- **Learned:** `usePolling` schedules its next tick in `finally`, before React commits a state change that sets `enabled: false`. So a state-only "stop" can still fire extra requests. A ref guard (`notEnrolledRef`) is what enforces "no further request", and a single-`act` test fails without it. Also, `advanceTimersByTimeAsync` inside one `act` never lets React commit, so the page's interval never changes. Advance time in separate acts when a test depends on re-renders. Gates: frontend 21 files / 172 tests. ESLint is clean on the CTF gate paths. `Workout.tsx` still has its 3 pre-existing lint problems and none new. tsc reports no CTF errors. No Python changed, so the Python suites were not re-run. `agoge-reviewer` found no defects. Its non-blocking note: a `build_id` change without a remount waits up to 15 s for the new board.
+- **Blockers:** none. I4b is still open for a human to do the browser checks.
+- **Next:** J2 CTF banner (PRD.md:1076). Destructure `board` from `useCtfBoard` in `Workout.tsx` and render `CtfBanner` above `TimerBox`.
