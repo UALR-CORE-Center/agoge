@@ -96,7 +96,8 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
 - [x] **I1** CTF TypeScript models — spec + done-when at PRD.md:1049
 - [x] **I2** CTF transformer and service — spec + done-when at PRD.md:1050
 - [x] **I3** Feature flag hook — spec + done-when at PRD.md:1052
-- [ ] **I4** Routes and menu — spec + done-when at PRD.md:1053
+- [x] **I4** Routes and menu — spec + done-when at PRD.md:1053 (split: this slice is `URL_TEACHER_CTF_BASE`, `URL_TEACHER_CTF_EVENT` and the flag-gated **Teachers** menu item; the two routes are I4b)
+- [ ] **I4b** Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route.
 - [ ] **I5** Events list page — spec + done-when at PRD.md:1055
 - [ ] **I6** Create from unit — spec + done-when at PRD.md:1057
 - [ ] **I7** Action confirm dialog — spec + done-when at PRD.md:1059
@@ -696,3 +697,9 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - ESLint gate: exit 2, "No files matching the pattern "src/components/Teacher/Ctf" were found". This is expected because I4+ are not done. Run on the existing CTF paths (`src/services/Ctf`, the hook and its test, `ctf.transform.ts`), it exits 0 with 0 warnings.
   - tsc gate: 0 errors name a CTF file (grep exit 1).
 - **Reopened:** none.
+
+### Iteration 56 — 2026-10-16
+- **Completed:** I4, first slice. `router/urls.ts` gains `URL_TEACHER_CTF_BASE` (`/teacher/ctf`) and `URL_TEACHER_CTF_EVENT` (`/teacher/ctf/event`). The dashboard route will be `${URL_TEACHER_CTF_EVENT}/:ctf_id`, which mirrors `${URL_TEACHER_UNIT}/:build_id` and keeps clear of the list path. `AgogeAppBar` calls `useCtfEnabled()` and adds a "CTF Events" item (`Flag` icon, linking to `URL_TEACHER_CTF_BASE`) to the **Teachers** menu only when `ctfEnabled` is true. That value is false while loading, so the item fails closed. New `AgogeAppBar.test.tsx` (3 tests): the item is present with the right href when enabled, absent when disabled, and never shown to a non-instructor.
+- **Learned:** The routes need `CtfEventList`/`CtfDashboard`, which are I5 and I9. Adding them now would mean placeholder pages, so they were split out as I4b. `AgogeAppBar.tsx` already had an ESLint error before this change (`onSidebarToggle` is defined but never used); it is outside the CTF lint gate, so it was left alone. Gates now: frontend 7 files / 51 tests; eslint is clean on the CTF paths and the new test; tsc has no CTF/nav/urls errors; no Python changed.
+- **Blockers:** none. The browser check is moved to I4b.
+- **Next:** I5 Events list page (PRD.md:1055), then add its route (part of I4b).
