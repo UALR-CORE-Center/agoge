@@ -323,6 +323,8 @@ A lab server can be a hypervisor: a Linux **parent** that runs its own VMs (**gu
 
 ### Prepare the images
 
+The [Nested Lab Host Guide](nested-lab-hosts.md) builds such an image from the Create Image page and does everything below for you. Follow this section for a parent you build by hand.
+
 On the **parent** image:
 
 - The parent must be a Linux server with at least one NIC that has `ip_aliases`. That is what turns on nested virtualization when Agoge builds the server, and it also installs the **plant watcher** (`agoge-ctf-watcher.service`). The watcher picks up a plant without restarting the parent, so the guests keep running while their flags are planted.
