@@ -29,7 +29,7 @@ class NestedServersValidator:
         for server in self.config.get('servers') or []:
             name = server.get('name')
             aliases = self._nic0_aliases(server)
-            image_id = self._image_doc_id(server.get('image'))
+            image_id = self.image_doc_id(server.get('image'))
             if image_id and image_id not in images:
                 images[image_id] = self.image_loader(image_id)
             image = images.get(image_id) if image_id else None
@@ -76,7 +76,7 @@ class NestedServersValidator:
         return aliases if isinstance(aliases, list) else []
 
     @staticmethod
-    def _image_doc_id(image) -> Optional[str]:
+    def image_doc_id(image) -> Optional[str]:
         """Image doc ids drop the `image-` prefix; anything with a path (a public image) is not an Agoge image."""
         if isinstance(image, dict):
             image = image.get('value')

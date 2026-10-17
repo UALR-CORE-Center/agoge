@@ -176,7 +176,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V20** Access and Review steps — spec + done-when at PRD.md:1699 (code and vitest here; the browser check is carried by HUMAN)
 - [x] **V21** Image list and details for nested images — spec + done-when at PRD.md:1701 (code and vitest here; the browser check is carried by HUMAN)
 - [x] **V22** Guacamole targets for guests — spec + done-when at PRD.md:1703
-- [ ] **V23** Spec editor and CTF integration — spec + done-when at PRD.md:1705 (needs N3, N5, N13; the browser check is carried by HUMAN)
+- [x] **V23** Spec editor and CTF integration — spec + done-when at PRD.md:1705 (needs N3, N5, N13; the browser check is carried by HUMAN)
 - [ ] **V24** Nested image guide — spec + done-when at PRD.md:1707
 - [ ] **V25** Live acceptance — spec + done-when at PRD.md:1708 — **HUMAN ONLY.** Builds real VMs on the development project; the loop must not attempt it. Carried by HUMAN.
 
@@ -2034,3 +2034,32 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V23 (the spec editor's Nested guests panel, alias filling, connection generation, and N5 accepting a nested-image parent). Its connection generator should emit `alias_index`/`port`/`nested_guest` in the shape this validator accepts.
+
+### Iteration 113 — 2026-10-17
+- **Completed:** V23 (code and vitest; the "verified in browser" check is carried by HUMAN).
+  - N5: `CtfValidator(config, image_loader=None)`. A nested-guest parent with no `ip_aliases` passes when its image doc has `nested`. All four call sites pass a loader: `SpecEditManager`, `SpecFileManager` (`_get_image_record`), and both `CtfSetup` calls (new `CtfSetup._get_image_record`). `NestedServersValidator._image_doc_id` is now the public `image_doc_id`. `ctf.py` imports it relatively (`from .nested_servers`). An absolute `utilities.…` import broke collection in cloud_functions/tests and build_files tests, which load the validator without `api/` on the path.
+  - The server form has a new `ServerFormKeys.serverHumanInteraction` (null means "use the image's connections", as before). It initializes from the saved list only when that list has nested fields, and it resets to null when the base image changes to a different value. `render()` prefers it.
+  - The `HumanInteraction` type gains `nested_guest`/`alias_index`/`port` in both `specification.model.ts` and `specificationEdit.model.ts`.
+  - `ServerForm/nestedServer.ts`:
+    - `fillAliasIps`: one alias per exposure slot. It keeps a valid existing alias in its slot and takes the lowest free addresses for the rest, skipping the GCP-reserved network, .1, second-to-last and broadcast. Taken addresses are every IP and alias on the network, plus its reservations.
+    - `nestedConnections`: RDP for an exposed Windows guest, SSH for an exposed Linux guest (alias_index = first slot, the guest's admin credentials), VNC console (port + vnc password) otherwise. It never guesses for a guest the catalog doesn't know.
+    - `mergeNestedConnections` keeps the parent's own entries.
+    - `nestedCtfGuests`: `domain` = guest name (builder.sh `virt-install --name "$guest"`), driver from the catalog `agent`. Appliances and unknown guests are skipped.
+    - `nestedMachineTypes` keeps only N1/N2.
+  - `NestedGuestsPanel` renders under the image/machine-type group when the selected image has `nested`. It has the guest table, **Fill alias IPs** (writes NIC 0's comma-joined alias field), and **Add connections**.
+  - The CTF step: `CtfSpecFields.imageGuests` plus `missingImageGuests` (dedupes by (server, name), caps at 8 per server) adds an **Add guests from images (n)** button. `Editor.tsx` loads the catalog only when the unit is CTF.
+- **Learned:** importing `CtfSpecEditor` in a node-env test pulls the CTF service, which initializes Firebase, so mock `services/Ctf/ctf.service`.
+- **Tests:**
+  - `api/unit_tests/test_ctf_nested_guest_validation.py` (+7): a nested-image parent with no aliases passes (3 image-ref forms); non-nested/None images are rejected; a public image is never looked up.
+  - `nestedServer.test.ts` (12): alias filling, connection generation, CTF pre-fill, missingImageGuests, and the helpers.
+  - `NestedGuestsPanel.test.tsx` (2): the buttons write the expected aliases and connections; an unknown subnet errors.
+- **Gate results:**
+  - api/unit_tests: 1654 passed, coverage 97.67%.
+  - cloud_functions/tests: 827 passed, coverage 94.28%.
+  - build_files: 327 passed.
+  - frontend `npm test`: 47 files and 572 tests passed.
+  - CTF and Group V ESLint/tsc gates pass.
+  - Touched files outside the gates add no new lint or tsc errors. The pre-existing errors are the `Layers`/`Memory` unused imports in `ServerForm.tsx`, 11 in `Editor.tsx`, and TS2769 in `SelectImageTable.tsx`.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V24, the nested image guide `docs/guides/nested-lab-hosts.md`.
+

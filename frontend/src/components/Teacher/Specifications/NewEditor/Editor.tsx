@@ -27,6 +27,8 @@ import {DocSummary} from "../../../../services/Documents/docs.model";
 import {docsService} from "../../../../services/Documents/docs.service";
 import {AgogeImage} from "../../../../services/Server/image.model";
 import {imageService} from "../../../../services/Server/image.service";
+import {NestedOsCatalogEntry} from "../../../../services/Server/nested.model";
+import {nestedService} from "../../../../services/Server/nested.service";
 import {serverService} from "../../../../services/Server/server.service";
 import {WebApplication} from "../../../../services/Specification/specification.model";
 import {
@@ -52,6 +54,7 @@ import NetworkForm from "./NetworkForm";
 import Review from "./Review/Review";
 import ServerForm from "./ServerForm/ServerForm";
 import {ServerFormKeys} from "./ServerForm/ServerFormTypes";
+import {isNestedImage, nestedCtfGuests} from "./ServerForm/nestedServer";
 import {useServerForm} from "./ServerForm/useServerForm";
 import SummaryForm from "./SummaryForm";
 import WebApplicationForm from "./WebApplicationForm";
@@ -111,6 +114,18 @@ const Editor: React.FC = () => {
     const ctfServerNames: string[] = serverForm.forms
         .map((f) => f[ServerFormKeys.serverName].value)
         .filter((name: string) => !!name);
+    const [nestedCatalog, setNestedCatalog] = useState<NestedOsCatalogEntry[]>([]);
+    useEffect(() => {
+        // Only the CTF step's "Add guests from images" needs the catalog (for each guest's OS and driver)
+        if (isCtf) {
+            nestedService.list_catalog().then(setNestedCatalog).catch(() => setNestedCatalog([]));
+        }
+    }, [isCtf]);
+    const ctfImageGuests = serverForm.forms.flatMap((f) => {
+        const name = f[ServerFormKeys.serverName].value;
+        const image = images.data.find((img) => img.image == f[ServerFormKeys.serverBaseImage].value);
+        return name && isNestedImage(image) ? nestedCtfGuests(name, image.nested, nestedCatalog) : [];
+    });
 
     const onUploadStartScript = () => {
         showModal(StartupScriptDialog, {
@@ -773,6 +788,7 @@ const Editor: React.FC = () => {
                                             value={ctfDraft}
                                             onChange={setCtfDraft}
                                             serverNames={ctfServerNames}
+                                            imageGuests={ctfImageGuests}
                                         />
                                     );
                                 else if (form === EditorForms.WebApplications && index === activeStep)

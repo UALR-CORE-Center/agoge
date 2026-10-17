@@ -485,10 +485,33 @@ interface CtfSpecFieldsProps {
     onChange: (spec: CtfSpec) => void;
     serverNames: string[];
     editable?: boolean;
+    // Guests read from the servers' nested lab host images (template editor only); offered by "Add guests from images"
+    imageGuests?: CtfNestedGuestSpec[];
 }
 
+/** Image guests not yet declared on their server, capped so no server goes past MAX_GUESTS_PER_SERVER. */
+export const missingImageGuests = (
+    guests: CtfNestedGuestSpec[],
+    imageGuests: CtfNestedGuestSpec[],
+): CtfNestedGuestSpec[] => {
+    const counts: Record<string, number> = {};
+    guests.forEach((guest) => { counts[guest.server] = (counts[guest.server] ?? 0) + 1; });
+    return imageGuests.filter((candidate) => {
+        if (guests.some((guest) => guest.server === candidate.server && guest.name === candidate.name)) {
+            return false;
+        }
+        if ((counts[candidate.server] ?? 0) >= MAX_GUESTS_PER_SERVER) {
+            return false;
+        }
+        counts[candidate.server] = (counts[candidate.server] ?? 0) + 1;
+        return true;
+    });
+};
+
 /** The ctf block's settings and flag table, shared by the event Setup tab and the lab template editor. */
-export const CtfSpecFields: React.FC<CtfSpecFieldsProps> = ({value, onChange, serverNames, editable = true}) => {
+export const CtfSpecFields: React.FC<CtfSpecFieldsProps> = ({
+    value, onChange, serverNames, editable = true, imageGuests = [],
+}) => {
     const [editingIndex, setEditingIndex] = useState<number | null>(null);
     const [editingGuestIndex, setEditingGuestIndex] = useState<number | null>(null);
     const guests = value.nested_guests ?? [];
@@ -548,6 +571,8 @@ export const CtfSpecFields: React.FC<CtfSpecFieldsProps> = ({value, onChange, se
         onChange({...value, nested_guests: nextGuests, flags});
         setEditingGuestIndex(null);
     };
+
+    const toAdd = missingImageGuests(guests, imageGuests);
 
     const deleteGuest = (index: number) =>
         setField('nested_guests', guests.filter((_guest, i) => i !== index));
@@ -657,12 +682,18 @@ export const CtfSpecFields: React.FC<CtfSpecFieldsProps> = ({value, onChange, se
                 density={"comfortable"}
             />
             <Typography variant="body2" color="text.secondary" sx={{mt: 1}}>
-                Only for VMs running inside a Linux lab server with nested virtualization (a NIC with IP aliases).
+                Only for VMs running inside a Linux lab server with nested virtualization (a NIC with IP aliases, or a nested lab host image).
             </Typography>
             <Button variant="outlined" sx={{mt: 1, mb: 3}} disabled={!editable || serverNames.length === 0}
                     onClick={() => setEditingGuestIndex(guests.length)}>
                 Add nested guest
             </Button>
+            {imageGuests.length > 0 && (
+                <Button variant="outlined" sx={{mt: 1, mb: 3, ml: 1}} disabled={!editable || toAdd.length === 0}
+                        onClick={() => setField('nested_guests', [...guests, ...toAdd])}>
+                    Add guests from images ({toAdd.length})
+                </Button>
+            )}
             <StyledDataGrid
                 data={value.flags.map((flag, index) => ({...flag, index}))}
                 columns={columns}

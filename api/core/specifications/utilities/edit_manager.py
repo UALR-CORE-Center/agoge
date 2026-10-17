@@ -306,7 +306,7 @@ class SpecEditManager(LabSpecBase):
             # name; the CTF step is where that is fixed, so only its own save and publish enforce
             # the cross-references. Uploads and direct validation (no form) always do.
             if self.form_type in (None, FormTypes.CTF.value, FormTypes.REVIEW.value):
-                CtfValidator(self.spec).load()
+                CtfValidator(self.spec, image_loader=self._get_image_record).load()
 
     def _form_to_dict(
         self,

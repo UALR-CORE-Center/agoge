@@ -1,6 +1,6 @@
 import {Alert, Stack} from "@mui/material";
 import React from "react";
-import {CtfSpec} from "../../../../services/Ctf/ctf.model";
+import {CtfNestedGuestSpec, CtfSpec} from "../../../../services/Ctf/ctf.model";
 import {CtfSpecFields, ctfSpecProblems} from "../../Ctf/CtfSpecEditor";
 
 interface Props {
@@ -8,9 +8,10 @@ interface Props {
     onChange: (spec: CtfSpec) => void;
     serverNames: string[];
     disableForm: boolean;
+    imageGuests?: CtfNestedGuestSpec[];
 }
 
-const CtfForm: React.FC<Props> = ({value, onChange, serverNames, disableForm}) => {
+const CtfForm: React.FC<Props> = ({value, onChange, serverNames, disableForm, imageGuests}) => {
     const problems = ctfSpecProblems(value, serverNames);
 
     return (
@@ -22,7 +23,8 @@ const CtfForm: React.FC<Props> = ({value, onChange, serverNames, disableForm}) =
             {serverNames.length === 0 && (
                 <Alert severity="warning">Add a server in the Servers step before adding flags.</Alert>
             )}
-            <CtfSpecFields value={value} onChange={onChange} serverNames={serverNames} editable={!disableForm} />
+            <CtfSpecFields value={value} onChange={onChange} serverNames={serverNames} editable={!disableForm}
+                           imageGuests={imageGuests} />
             {problems.length > 0 && (
                 <Alert severity="warning">{problems.map((problem) => <div key={problem}>{problem}</div>)}</Alert>
             )}

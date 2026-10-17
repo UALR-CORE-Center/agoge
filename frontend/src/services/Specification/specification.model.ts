@@ -49,6 +49,10 @@ export interface HumanInteraction {
     password?: string;
     domain?: string;
     security_mode?: string;
+    // Nested lab host connections (HumanInteractionModel): a label, an alias slot on NIC 0, a port override
+    nested_guest?: string | null;
+    alias_index?: number | null;
+    port?: number | null;
 }
 
 export interface ServerDetails {
