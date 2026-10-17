@@ -1400,3 +1400,43 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Reviewer:** no findings.
 - **Blockers:** none.
 - **Next:** N15 (nested host guide).
+
+### Verification — 2026-10-17 — PASS
+- **Checked:** N10, N11, N12, N13 and N14, the only tasks ticked since the last verification (`d13e997`). HEAD is `5934b9b`. Three read-only agents checked them against PRD.md:1642-1651 and the Nested Guest Contract (PRD.md:1042). I read `host_reset.py` and `ctf_handler.py` myself and searched the diff `d13e997..HEAD` for TODO, FIXME, NotImplemented and stubs. The only hit was a `mktemp` `XXXXXX` template.
+  - N10: `CtfHosts.reset(..., guest=)` raises `NotFound` unless the `(server, guest)` pair is declared. It sets `GUEST` on the message only when a guest is given. `hosts()` emits one row per declared guest, with `rebuild_allowed=True`.
+    - Router tests:
+      - `test_guest_host_reset_passes_the_guest_and_names_it_in_the_audit_detail`
+      - `test_unknown_guest_is_404_and_audited_as_a_failure`
+    - Core tests:
+      - `test_guest_reset_publishes_the_guest_attribute`
+      - `test_undeclared_guest_is_not_found_and_publishes_nothing`
+    - The router tests mock core, so "the guest reaches the message" is proven in two halves, router→core and core→message. Together the halves cover the done-when.
+  - N11: `ctf_handler.py:45` reads `GUEST`, and line 104 passes it to `HostReset.run`. `guest_mode_map` dispatches the three contract modes:
+    - replant: `plant(guest=)`.
+    - restart: `virsh reboot`.
+    - rebuild: snapshot-revert, then plant (`revert=True`).
+    - `ComputeManagerFactory` is used only at `host_reset.py:138`, on the parent path. `test_guest_reset_of_any_mode_touches_no_instance_and_no_other_board` fails the test on any compute reset, stop or start, or any manager creation. It also asserts board isolation (SC-9).
+  - N12: the `( … ) &` sections run `trap agoge_ctf_offline_end EXIT`, and `virsh start` is only inside that trap. `destroy` appears only in a comment. Values are written with the `printf` builtin into a 0700 `mktemp -d` under `OFFLINE_TEMP_DIR` (`/run/agoge-ctf`). Every done-when item has a test: `test_values_reach_libguestfs_only_through_temp_files_that_are_removed`, `test_virsh_start_appears_only_in_the_exit_trap`, `test_virsh_destroy_never_appears`, and `test_offline_payload_passes_bash_n`.
+  - N13:
+    - `transformToCtfSpec` keeps `nested_guests`, defaulting the driver to qemu-agent, and `flag.guest`. The round-trip test is at `ctf.transform.test.ts:94`.
+    - The guest select is filtered by `guest.server === flag.server` (`CtfSpecEditor.tsx:190`).
+    - `guestProblems` enforces the cap of 8 guests per server.
+  - N14:
+    - `transformToCtfHostRow` keeps `guest`. Guest rows render indented with a cell icon; there is no `treeData` or other Pro feature.
+    - A guest reset sends `{mode, guest}`, a parent reset sends `{mode}`, and tests assert both bodies.
+  - N13 and N14's "verified in browser" done-whens are carried by the open HUMAN task, as with the I-series.
+  - Notes, not reopened:
+    - If a libguestfs tool is missing, the offline section returns before it arms the restart, so `virsh start` is skipped. The guest was never shut down in that case, so this is harmless.
+    - No test asserts the literal default `/run/agoge-ctf`. The tests monkeypatch it; the code value is correct (`ctf_plant_contract.py:40`).
+    - Guest restart is only tested on one guest.
+    - PRD.md still shows N1–N14 as `[ ]`. This file, not PRD.md, is the task queue.
+- **Gate results:**
+  - api/unit_tests: 1461 passed.
+  - cloud_functions/tests: 635 passed.
+  - build_files/cloud_deployment/tests: 319 passed.
+  - frontend `npm test`: 34 files, 452 tests passed, exit 0.
+  - CTF ESLint gate: exit 0.
+  - CTF tsc gate: 0 CTF matches (passes; repo-wide tsc exits 2 on pre-existing errors).
+  - Group V tsc gate: 0 matches (passes).
+  - Group V ESLint gate: fails with "No files matching the pattern src/components/Teacher/ServerManagement/Forms/NestedImage". Those files belong to V16–V21, which are all `[ ]`, so no completed task is responsible.
+- **Reopened:** none.
