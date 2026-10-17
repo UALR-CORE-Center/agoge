@@ -1,11 +1,10 @@
 # Step 1: Build React App
-FROM node:23.11-slim as builder
+FROM node:23.11-slim AS builder
 
-COPY package.json ./
-RUN npm install
-RUN mkdir /frontend
-RUN mv ./node_modules ./frontend
 WORKDIR /frontend
+# Dependencies first, so Cloud Build reuses this layer until the lockfile changes.
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
 COPY . ./
 # Require setup's generated configuration even when upload ignore rules change.
 COPY .env.production ./.env.production

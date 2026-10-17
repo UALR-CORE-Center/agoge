@@ -68,7 +68,7 @@ def test_generated_tenant_settings_reach_build_and_original_files_are_restored(
     app.react_vite_env_file.write_text(old_contents)
     replies(monkeypatch, selection + ([''] if existing else []))
 
-    def build(command):
+    def build(command, **_):
         # Run through the real _deploy_react/_deploy_cloud_run path and
         # inspect the file at the exact point it is submitted to Cloud Build.
         assert '--project=tenant-project' in command

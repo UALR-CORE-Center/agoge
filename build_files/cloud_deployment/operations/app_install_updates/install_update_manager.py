@@ -13,6 +13,7 @@ from cloud_deployment.operations.app_install_updates.shared_load_balancer import
 from cloud_deployment.operations.guacamole_image_management.guacamole_image_manager import GuacamoleImageManager
 from cloud_deployment.operations.lab_management.shared_lab_manager import SharedLabManager
 from cloud_deployment.operations.images_and_specs.public_image_catalog import PublicImageCatalog
+from cloud_deployment.utilities import console as ui
 
 class InstallUpdateManager:
     def __init__(self, project_id: str):
@@ -23,23 +24,30 @@ class InstallUpdateManager:
         Executes a full Cyber Arena installation, including building the base environment,
         deploying the main app, and deploying cloud functions.
         """
+        started = time.monotonic()
+        ui.section("1/5  Project bootstrap")
         BaseBuild(project=self.project_id).run()
+        ui.section("2/5  Applications")
         agoge_app = AgogeApp(project=self.project_id)
-        if not agoge_app.deploy_main_app():
-            return
-        if not agoge_app.deploy_cloud_functions():
-            return
+        if not agoge_app.deploy_main_app(with_cloud_function=True):
+            return self._stopped("Application deployment")
+        ui.section("3/5  Shared routing")
         if not SharedLoadBalancer(project=self.project_id).run():
-            return
+            return self._stopped("Shared routing")
+        ui.section("4/5  Images")
         if not PublicImageCatalog(project=self.project_id).run():
-            return
+            return self._stopped("Public image catalog")
         GuacamoleImageManager(
             project=self.project_id
         ).create_guac_project_image()
+        ui.section("5/5  Shared labs")
         SharedLabManager().run()
 
         self._create_update_record(action="initial install")
-        print("🎉 Setup complete! Your new Agoge project is ready with shared app/API routing.")
+        ui.banner("Setup complete", "Your new Agoge project is ready with shared app/API routing.", {
+            "Project": self.project_id, "Version": CURRENT_VERSION,
+            "Elapsed": ui.duration(time.monotonic() - started),
+        })
 
     def run_update(self) -> None:
         """
@@ -48,15 +56,27 @@ class InstallUpdateManager:
         # Existing projects did not run the WireGuard DNS bootstrap that was
         # added to full installs. Perform the same idempotent migration before
         # deploying code that depends on it.
-        BaseBuild(project=self.project_id, suppress=True).ensure_wireguard_prerequisites()
+        started = time.monotonic()
+        ui.section("1/3  Preflight")
+        with ui.status("Checking WireGuard DNS prerequisites"):
+            BaseBuild(project=self.project_id, suppress=True).ensure_wireguard_prerequisites()
+        ui.success("WireGuard DNS prerequisites are in place")
+        ui.section("2/3  Applications")
         agoge_app = AgogeApp(project=self.project_id)
-        if not agoge_app.deploy_main_app():
-            return
-        if not agoge_app.deploy_cloud_functions():
-            return
+        if not agoge_app.deploy_main_app(with_cloud_function=True):
+            return self._stopped("Application deployment")
+        ui.section("3/3  Shared routing")
         if not SharedLoadBalancer(project=self.project_id).run():
-            return
+            return self._stopped("Shared routing")
         self._create_update_record(action="update")
+        ui.banner("Update complete", None, {
+            "Project": self.project_id, "Version": CURRENT_VERSION,
+            "Elapsed": ui.duration(time.monotonic() - started),
+        })
+
+    @staticmethod
+    def _stopped(step: str) -> None:
+        ui.error(f"{step} did not finish; later steps were skipped and no update was recorded.")
 
     def _create_update_record(self, action: str) -> None:
         """

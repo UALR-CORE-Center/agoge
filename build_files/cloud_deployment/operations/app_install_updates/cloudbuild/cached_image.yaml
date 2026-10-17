@@ -1,0 +1,20 @@
+# Docker build that reuses the layers of the image it replaces.
+# The first build after this change is cold; later builds skip every layer
+# whose inputs are unchanged (e.g. the pip install when requirements.txt is).
+steps:
+  - id: pull-cache
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args: ['-c', 'docker pull ${_IMAGE}:latest || true']
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    env: ['DOCKER_BUILDKIT=1']
+    args:
+      - build
+      - --cache-from=${_IMAGE}:latest
+      - --build-arg=BUILDKIT_INLINE_CACHE=1
+      - --tag=${_IMAGE}:latest
+      - .
+images: ['${_IMAGE}:latest']
+options:
+  machineType: E2_HIGHCPU_8

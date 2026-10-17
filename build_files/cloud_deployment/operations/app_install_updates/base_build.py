@@ -7,6 +7,7 @@ from common.utilities.gcp.cloud_env import CloudEnv
 from common.constants.build_constants import BuildConstants
 from cloud_deployment.utilities.globals import ShellCommands
 from cloud_deployment.operations.env_and_quotas.environment_variables import EnvironmentVariables
+from cloud_deployment.utilities import console as ui
 
 
 class BaseBuild:
@@ -31,13 +32,20 @@ class BaseBuild:
         )
 
     def _enable_apis(self, api_commands=None) -> None:
-        """Enable APIs in the requested tenant project and fail closed."""
-        for item in api_commands or ShellCommands.EnableAPIs:
-            command = f"{item.value} --project={self.project}"
-            print(f"Running: {command}")
+        """Enable APIs in the requested tenant project and fail closed.
+
+        One `gcloud services enable` call takes every service at once, which
+        is far faster than one call (and one long-running operation) per API.
+        """
+        services = list(dict.fromkeys(
+            item.value.split()[-1] for item in api_commands or ShellCommands.EnableAPIs
+        ))
+        command = f"gcloud services enable {' '.join(services)} --project={self.project}"
+        with ui.status(f"Enabling {len(services)} Google Cloud API(s)"):
             result = subprocess.run(command, capture_output=True, shell=True, text=True)
-            if result.returncode != 0:
-                raise self._command_error(command, result)
+        if result.returncode != 0:
+            raise self._command_error(command, result)
+        ui.success(f"Enabled {len(services)} Google Cloud API(s)")
 
     def ensure_wireguard_prerequisites(self) -> None:
         """Idempotently migrate and validate prerequisites used by gateways."""
@@ -112,6 +120,11 @@ class BaseBuild:
     # ---------------------------------------------------------------------
     # Helpers
     # ---------------------------------------------------------------------
+    @staticmethod
+    def _describe(item) -> str:
+        """CREATE_AGOGE_ACCOUNT -> 'Create agoge account'."""
+        return item.name.replace('_', ' ').capitalize()
+
     def _get_project_number(self) -> str:
         """Return the numeric project ID so we can construct IAM principals."""
         # An argv list, not shell=True: /bin/sh rejects the unquoted parentheses in value(...).
@@ -127,7 +140,7 @@ class BaseBuild:
     def run(self) -> None:
         # 1. Enable required Google APIs ---------------------------------------------------
         confirmation = (
-            str(input("Do you want to enable the necessary APIs at this time? (Y/n): ")).upper()
+            str(ui.prompt("Do you want to enable the necessary APIs at this time? (Y/n):")).upper()
             if not self.suppress
             else "Y"
         )
@@ -137,9 +150,9 @@ class BaseBuild:
         # 2. Create the default VPC & firewall rules --------------------------------------
         confirmation = (
             str(
-                input(
+                ui.prompt(
                     "Do you want to create the default VPC (and default firewall rules) "
-                    "for this project? (Y/n): "
+                    "for this project? (Y/n):"
                 )
             ).upper()
             if not self.suppress
@@ -147,14 +160,13 @@ class BaseBuild:
         )
         if confirmation != "N":
             for item in ShellCommands.CreateDefaultVPC:
-                print(f"Running: {item.value}")
-                subprocess.run(item.value, capture_output=True, shell=True, text=True)
+                ui.run_step(f"{item.value} --project={self.project}", self._describe(item))
 
         # 3. Service‑account impersonation setup -------------------------------------------
         confirmation = (
             str(
-                input(
-                    "Do you want to enable service account impersonation at this time? (Y/n): "
+                ui.prompt(
+                    "Do you want to enable service account impersonation at this time? (Y/n):"
                 )
             ).upper()
             if not self.suppress
@@ -163,20 +175,18 @@ class BaseBuild:
         if confirmation != "N":
             for item in ShellCommands.Impersonation:
                 cmd = item.value.format(project=self.project)
-                print(f"Running: {cmd}")
-                subprocess.run(cmd, capture_output=True, shell=True, text=True)
+                ui.run_step(f"{cmd} --project={self.project}", self._describe(item))
 
         # 4. Create service accounts -------------------------------------------------------
         confirmation = (
-            str(input("Do you want to create the service accounts at this time? (Y/n): ")).upper()
+            str(ui.prompt("Do you want to create the service accounts at this time? (Y/n):")).upper()
             if not self.suppress
             else "Y"
         )
         if confirmation != "N":
             for item in ShellCommands.ServiceAccount:
                 cmd = item.value.format(project=self.project, project_number=self.project_number)
-                print(f"Running: {cmd}")
-                subprocess.run(cmd, capture_output=True, shell=True, text=True)
+                ui.run_step(f"{cmd} --project={self.project}", self._describe(item))
 
         # 5. Firebase Authentication manual step ------------------------------------------
         firebase_prompt = f"""
@@ -221,27 +231,26 @@ class BaseBuild:
 
         confirmation = input(firebase_prompt).strip().upper() if not self.suppress else "Y"
         if confirmation != "N":
-            print("Continuing setup. This prompt does not verify Firebase provider, domain, or OAuth settings. "
-                  "Checklist: docs/operations/firebase-authentication.md")
+            ui.info("Continuing setup. This prompt does not verify Firebase provider, domain, or OAuth settings. "
+                    "Checklist: docs/operations/firebase-authentication.md")
         else:
-            print("Firebase console setup deferred. Complete docs/operations/firebase-authentication.md "
-                  "before testing sign-in.")
+            ui.warning("Firebase console setup deferred. Complete docs/operations/firebase-authentication.md "
+                       "before testing sign-in.")
 
         # 6. Pub/Sub topics ---------------------------------------------------------------
         confirmation = (
-            str(input("Do you want to create Pub/Sub topics at this time? (Y/n): ")).upper()
+            str(ui.prompt("Do you want to create Pub/Sub topics at this time? (Y/n):")).upper()
             if not self.suppress
             else "Y"
         )
         if confirmation != "N":
             for item in ShellCommands.PubSubTopics:
-                print(f"Running: {item.value}")
-                subprocess.run(item.value, capture_output=True, shell=True, text=True)
+                ui.run_step(f"{item.value} --project={self.project}", self._describe(item))
 
         # 7. Cloud Run / Functions env‑vars ----------------------------------------------
         confirmation = (
             str(
-                input("Do you want to create the environmental variables at this time? (Y/n): ")
+                ui.prompt("Do you want to create the environmental variables at this time? (Y/n):")
             ).upper()
             if not self.suppress
             else "Y"
@@ -252,8 +261,8 @@ class BaseBuild:
         # 8. Shared-resource and parent-DNS IAM permissions -------------------------------
         confirmation = (
             str(
-                input(
-                    "Do you want to update shared-resource and parent-DNS permissions at this time? (Y/n): "
+                ui.prompt(
+                    "Do you want to update shared-resource and parent-DNS permissions at this time? (Y/n):"
                 )
             ).upper()
             if not self.suppress
@@ -266,10 +275,8 @@ class BaseBuild:
                     shared_resource_project=BuildConstants.SharedResourceProjects.MAIN_SHARED_RESOURCE_PROJECT,
                     dest_sa=f"agoge-service@{env.project}.iam.gserviceaccount.com",
                 )
-                print(f"Running: {cmd}")
-                ret = subprocess.run(cmd, capture_output=True, shell=True)
-                print(ret.stderr.decode())
-                if ret.returncode != 0:
-                    print(f"Error adding project permission to shared resources!")
+                ui.run_step(cmd, self._describe(item))
 
-            self.ensure_wireguard_prerequisites()
+            with ui.status("Checking WireGuard DNS prerequisites"):
+                self.ensure_wireguard_prerequisites()
+            ui.success("WireGuard DNS prerequisites are in place")

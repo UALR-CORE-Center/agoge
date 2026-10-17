@@ -1,3 +1,5 @@
+from typing import Optional
+
 from google.api_core.exceptions import NotFound as GoogleNotFound
 
 from cloud_fn_utilities.course_objects.compute.base_compute_manager import BaseComputeManager
@@ -83,6 +85,7 @@ class LabServerManager(BaseComputeManager):
             raise LookupError
 
         self._load_lab_server(server_name, server_spec=server_spec, network_prefix=network_prefix)
+        self.nested_host = self._image_is_nested(self.server_spec.image)
 
         self.state_manager.set_build_record(server_name)
         self.assessment = AssessmentManager(
@@ -90,6 +93,14 @@ class LabServerManager(BaseComputeManager):
             build_type=self.parent_build_type,
             env_dict=self.env_dict
         )
+
+    def _image_is_nested(self, image: Optional[str]) -> bool:
+        """Returns True when the server's image record is a nested lab host."""
+        if not image:
+            return False
+        _, image_doc_id = self._extract_image_and_server_names(image)
+        image_record = self.db.get(collection_name=DbCollections.IMAGE, doc_id=image_doc_id)
+        return bool(image_record and image_record.get('nested'))
 
     def build(self) -> None:
         """Builds an individual server based on the server specifications."""
