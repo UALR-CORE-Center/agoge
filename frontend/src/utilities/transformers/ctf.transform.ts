@@ -161,6 +161,7 @@ export const transformToCtfHostRow = (data: CtfHostRow): CtfHostRow => ({
     flag_count: data.flag_count ?? 0,
     // Fail closed: a missing value must not offer a rebuild that would drop a wireguard endpoint.
     rebuild_allowed: data.rebuild_allowed === true,
+    guest: orNull(data.guest),
 });
 
 export const transformToCtfHostRowList = (data: CtfHostRow[]): CtfHostRow[] =>

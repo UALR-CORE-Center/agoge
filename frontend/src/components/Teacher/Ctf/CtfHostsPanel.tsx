@@ -1,5 +1,6 @@
 import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
 import DnsIcon from "@mui/icons-material/Dns";
+import SubdirectoryArrowRightIcon from "@mui/icons-material/SubdirectoryArrowRight";
 import {Alert, Box, Button, ListItemText, Menu, MenuItem, Tooltip, Typography} from "@mui/material";
 import {GridColDef} from "@mui/x-data-grid";
 import React, {useCallback, useEffect, useState} from "react";
@@ -18,22 +19,47 @@ export const HOSTS_POLL_INTERVAL_MS = 15000;
 // Resets share the replant states in CtfHosts.reset (api/core/ctf/hosts.py); the API answers anything else with 409.
 export const RESET_STATES = REPLANT_STATES;
 
-export const hostRowId = (row: CtfHostRow) => `${row.workout_id}-${row.server}`;
+// A guest row shares its parent's workout and server, so the guest joins the id; "/" fits neither name.
+export const hostRowId = (row: CtfHostRow) =>
+    `${row.workout_id}-${row.server}${row.guest ? `/${row.guest}` : ''}`;
 
-const RESET_MODES: {mode: ResetMode; label: string; description: string}[] = [
-    {mode: 'replant', label: 'Replant', description: 'Plant this host\'s flags again; the VM restarts.'},
-    {mode: 'restart', label: 'Restart', description: 'Stop and start the VM; flags stay on disk.'},
-    {mode: 'rebuild', label: 'Rebuild', description: 'Delete and recreate the VM; its flags go stale until a replant.'},
+// How a host is named in buttons, dialogs and notices.
+export const hostLabel = (row: CtfHostRow) => row.guest ? `${row.guest} on ${row.server}` : row.server;
+
+// A guest reset runs inside the parent through the plant watcher and touches no instance (Nested Guest Contract).
+const RESET_MODES: {mode: ResetMode; label: string; description: string; guestDescription: string}[] = [
+    {
+        mode: 'replant',
+        label: 'Replant',
+        description: 'Plant this host\'s flags again; the VM restarts.',
+        guestDescription: 'Plant this guest\'s flags again; the parent VM keeps running.',
+    },
+    {
+        mode: 'restart',
+        label: 'Restart',
+        description: 'Stop and start the VM; flags stay on disk.',
+        guestDescription: 'Reboot the guest inside its parent; flags stay on disk.',
+    },
+    {
+        mode: 'rebuild',
+        label: 'Rebuild',
+        description: 'Delete and recreate the VM; its flags go stale until a replant.',
+        guestDescription: 'Revert the guest to its agoge-pristine snapshot, then plant its flags again.',
+    },
 ];
 
 // Why a mode cannot run on this host, or null when it can. The API refuses the same cases with 400.
 export const resetBlocker = (row: CtfHostRow, mode: ResetMode): string | null => {
-    // No server document: CtfHosts.reset answers every mode with 404.
+    // No server document: CtfHosts.reset answers every mode with 404, guest or not.
     if (row.server_state === null) {
-        return 'This server has not been built, so it cannot be reset.';
+        return row.guest
+            ? 'The parent server has not been built, so this guest cannot be reset.'
+            : 'This server has not been built, so it cannot be reset.';
     }
     if (mode === 'replant' && row.flag_count === 0) {
-        return 'This server carries no flags, so there is nothing to replant.';
+        return row.guest
+            ? 'This guest carries no flags, so there is nothing to replant.'
+            : 'This server carries no flags, so there is nothing to replant.';
     }
     if (mode === 'rebuild' && !row.rebuild_allowed) {
         // LabServerManager.nuke() deletes WireGuard servers without recreating them.
@@ -117,8 +143,9 @@ const CtfHostsPanel: React.FC<CtfHostsPanelProps> = ({ctfId, state, active}) => 
         setResetError(null);
         setNotice(null);
         try {
-            await ctfService.resetHost(ctfId, row.workout_id, row.server, {mode});
-            setNotice(`${mode[0].toUpperCase()}${mode.slice(1)} of ${row.server} for ${row.team_name} started.`);
+            // Omitted for the server itself, so a parent reset sends the same body as before guests existed.
+            await ctfService.resetHost(ctfId, row.workout_id, row.server, row.guest ? {mode, guest: row.guest} : {mode});
+            setNotice(`${mode[0].toUpperCase()}${mode.slice(1)} of ${hostLabel(row)} for ${row.team_name} started.`);
             setOpen(false);
             await fetchHosts();
         } catch (err) {
@@ -133,7 +160,22 @@ const CtfHostsPanel: React.FC<CtfHostsPanelProps> = ({ctfId, state, active}) => 
 
     const columns: GridColDef<CtfHostRow>[] = [
         {field: 'team_name', headerName: 'Team', flex: 1, minWidth: 140},
-        {field: 'server', headerName: 'Server', flex: 1, minWidth: 140},
+        {
+            field: 'server',
+            headerName: 'Server',
+            flex: 1,
+            minWidth: 140,
+            // Sorting and the quick filter see "guest on server", so a guest row stays identifiable out of order.
+            valueGetter: (_value: string, row: CtfHostRow) => hostLabel(row),
+            // The API lists each guest right after its parent, so the indent reads as nesting.
+            renderCell: (params) => params.row.guest ? (
+                <Box sx={{display: 'flex', alignItems: 'center', height: '100%', pl: 2, gap: 0.5}}>
+                    <SubdirectoryArrowRightIcon fontSize="small" color="action" />
+                    <span>{params.row.guest}</span>
+                    <Typography variant="caption" color="text.secondary">guest</Typography>
+                </Box>
+            ) : params.row.server,
+        },
         {
             field: 'server_state_name',
             headerName: 'Server state',
@@ -157,7 +199,7 @@ const CtfHostsPanel: React.FC<CtfHostsPanelProps> = ({ctfId, state, active}) => 
                         endIcon={<ArrowDropDownIcon />}
                         disabled={!canReset || resetting}
                         aria-haspopup="menu"
-                        aria-label={`Reset ${params.row.server} for ${params.row.team_name}`}
+                        aria-label={`Reset ${hostLabel(params.row)} for ${params.row.team_name}`}
                         onClick={(e) => {
                             setMenuRow(params.row);
                             setMenuAnchor(e.currentTarget);
@@ -171,7 +213,8 @@ const CtfHostsPanel: React.FC<CtfHostsPanelProps> = ({ctfId, state, active}) => 
     ];
 
     const pendingLabel = pending ? RESET_MODES.find(m => m.mode === pending.mode)?.label ?? pending.mode : '';
-    const pendingTarget = pending ? `${pending.row.server} for ${pending.row.team_name}` : '';
+    const pendingTarget = pending ? `${hostLabel(pending.row)} for ${pending.row.team_name}` : '';
+    const pendingGuest = pending?.row.guest ?? null;
 
     return (
         <Box sx={{width: '100%', minWidth: 0}}>
@@ -193,11 +236,11 @@ const CtfHostsPanel: React.FC<CtfHostsPanelProps> = ({ctfId, state, active}) => 
             />
             {/* No mode is pre-selected: every reset is an explicit choice (PRD I14). */}
             <Menu anchorEl={menuAnchor} open={menuAnchor !== null} onClose={closeMenu}>
-                {RESET_MODES.map(({mode, label, description}) => {
+                {RESET_MODES.map(({mode, label, description, guestDescription}) => {
                     const blocker = menuRow ? resetBlocker(menuRow, mode) : null;
                     const item = (
                         <MenuItem key={mode} disabled={blocker !== null} onClick={() => handleChoose(mode)}>
-                            <ListItemText primary={label} secondary={description} />
+                            <ListItemText primary={label} secondary={menuRow?.guest ? guestDescription : description} />
                         </MenuItem>
                     );
                     // A disabled item has no pointer events, so the tooltip hangs off a wrapper that does.
@@ -211,9 +254,13 @@ const CtfHostsPanel: React.FC<CtfHostsPanelProps> = ({ctfId, state, active}) => 
             <ActionConfirmDialog
                 open={open && pending?.mode !== 'rebuild'}
                 title={`${pendingLabel} ${pendingTarget}`}
-                message={pending?.mode === 'restart'
-                    ? `Stop and start ${pendingTarget}. The flags stay on disk, and the team loses access until it is back.`
-                    : `Plant every flag on ${pendingTarget} again. The VM restarts; the flag values stay the same.`}
+                message={pendingGuest
+                    ? (pending?.mode === 'restart'
+                        ? `Reboot ${pendingTarget}. The flags stay on disk, and the team loses access to the guest until it is back.`
+                        : `Plant every flag on ${pendingTarget} again. The parent VM keeps running; the flag values stay the same.`)
+                    : (pending?.mode === 'restart'
+                        ? `Stop and start ${pendingTarget}. The flags stay on disk, and the team loses access until it is back.`
+                        : `Plant every flag on ${pendingTarget} again. The VM restarts; the flag values stay the same.`)}
                 confirmLabel={pendingLabel}
                 onConfirm={handleConfirm}
                 onClose={handleClose}
@@ -224,15 +271,20 @@ const CtfHostsPanel: React.FC<CtfHostsPanelProps> = ({ctfId, state, active}) => 
                 open={open && pending?.mode === 'rebuild'}
                 onClose={handleClose}
                 handleConfirm={handleConfirm}
-                expectedText={pending?.row.server ?? ''}
+                expectedText={pendingGuest ?? pending?.row.server ?? ''}
                 action="rebuild"
                 confirmLabel="Rebuild"
-                message={
+                message={pendingGuest ? (
+                    <>
+                        Revert {pendingTarget} to its agoge-pristine snapshot, then plant its flags again. The parent
+                        VM is not touched. Without the snapshot the guest&apos;s flags fail.
+                    </>
+                ) : (
                     <>
                         Delete and recreate {pendingTarget}. Its flags are gone until you replant them from the
                         Flags panel. This can take up to 15 minutes.
                     </>
-                }
+                )}
                 loading={resetting}
             />
             {!canReset && !loading && hosts.length > 0 && (

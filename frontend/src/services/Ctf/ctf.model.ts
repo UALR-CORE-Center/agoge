@@ -218,6 +218,8 @@ export interface CtfHostRow {
     flag_count: number;
     // False when the server has a wireguard_endpoint_id.
     rebuild_allowed: boolean;
+    // Set on a nested guest's row, which follows its parent's row; null for the server itself.
+    guest?: string | null;
 }
 
 export interface CtfScoreboardRow {
@@ -368,6 +370,8 @@ export interface CtfReplantRequest {
 
 export interface CtfHostResetRequest {
     mode: ResetMode;
+    // Reset this nested guest of the server instead of the server itself.
+    guest?: string | null;
 }
 
 export interface CtfScoreAdjustRequest {
