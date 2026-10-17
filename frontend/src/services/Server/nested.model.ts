@@ -4,7 +4,7 @@ export type NestedOsFamily = 'linux' | 'windows' | 'appliance';
 export type NestedOsGroup = 'kali' | 'linux' | 'windows_client' | 'windows_server' | 'appliance';
 export type NestedInstallMethod = 'cloud_image' | 'unattended_iso' | 'disk_image' | 'manual_iso';
 export type NestedMediaFormat =
-    'qcow2' | 'raw' | 'img.xz' | 'tar.xz' | 'iso' | 'vmdk' | 'vhd' | 'vhdx' | 'ova' | 'zip' | '7z';
+    'qcow2' | 'raw' | 'img.xz' | 'img.bz2' | 'tar.xz' | 'iso' | 'vmdk' | 'vhd' | 'vhdx' | 'ova' | 'zip' | '7z';
 export type NestedNetConfig = 'networkd' | 'netplan' | 'nm-keyfile' | 'ifupdown' | 'windows' | 'none';
 export type NestedGuestStatus =
     'pending' | 'downloading' | 'installing' | 'post_install' | 'manual' | 'ready' | 'failed';

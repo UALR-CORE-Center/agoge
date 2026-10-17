@@ -3,6 +3,7 @@
 Every fake (and a jq wrapper) logs its full argv, so a secret on any command line shows up in the log.
 """
 import base64
+import bz2
 import hashlib
 import json
 import os
@@ -28,6 +29,7 @@ ADMIN_PASSWORD = 'Adm1n-S3cret!x'
 DEB_IMAGE = b'debian cloud image bytes'
 WIN_ISO = b'windows server iso bytes'
 FW_ISO = b'firewall appliance iso bytes'
+FW_NANO = bz2.compress(b'preinstalled firewall disk bytes')
 POST_INSTALL = 'apt-get install -y nginx\necho done\n'
 
 FAKE_CURL = textwrap.dedent("""\
@@ -167,6 +169,9 @@ CATALOG = {entry.id: entry for entry in (
            windows_image_index=2, virtio_win_version='0.1.262-2'),
     _entry('pfsense', family='appliance', group='appliance', install_method='manual_iso', requires_upload=True,
            media_formats=['iso'], osinfo='freebsd14.0', agent=False, net_config='none'),
+    _entry('opnsense', family='appliance', group='appliance', install_method='disk_image',
+           media_url='https://pkg.opnsense.example/nano.img.bz2', media_sha256=_sha(FW_NANO), media_formats=['img.bz2'],
+           osinfo='freebsd14.0', agent=False, net_config='none'),
 )}
 UPLOAD = NestedMediaModel(id='med-1', filename='fw.iso', format='iso', size_bytes=len(FW_ISO),
                           gcs_path='gs://test-project_nested-media/media/med-1/fw.iso', uploaded_by='t@example.com',
@@ -766,3 +771,37 @@ def test_debian_13_parent_uses_libvirts_iptables_backend(builder):
     assert result.returncode == 0, result.stderr
     assert 'firewall_backend = "iptables"' in conf
     assert log.index('systemctl try-restart virtnetworkd.service libvirtd.service') < log.index('virsh net-define')
+
+
+@needs_tools
+def test_a_bz2_disk_image_is_expanded_to_raw_before_conversion(builder):
+    (builder.fake / 'web' / 'nano.img.bz2').write_bytes(FW_NANO)
+
+    result, log = builder(spec=_spec(fw={'os_id': 'opnsense', 'media_id': None}))
+
+    last, _ = _attributes(builder.fake)
+    work = builder.root / MEDIA_DIR.lstrip('/') / 'work-fw'
+    assert result.returncode == 0, result.stderr
+    assert f'qemu-img convert -f raw -O qcow2 {work}/disk.img ' in log
+    # The expanded copy lives only in scratch; the verified download stays cached for other guests.
+    assert not work.exists()
+    assert (builder.root / MEDIA_DIR.lstrip('/') / f'{_sha(FW_NANO)}.img.bz2').read_bytes() == FW_NANO
+    assert last['guest-fw'] == 'ready'
+
+
+@needs_tools
+def test_a_bz2_disk_image_that_will_not_expand_fails_only_that_guest(builder):
+    # The hash matches, so only the expansion can fail (in production: the parent disk filling up).
+    corrupt = b'BZh9 not really bzip2'
+    (builder.fake / 'web' / 'nano.img.bz2').write_bytes(corrupt)
+    catalog = dict(CATALOG, opnsense=CATALOG['opnsense'].model_copy(update={'media_sha256': _sha(corrupt)}))
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(globals(), 'CATALOG', catalog)
+        result, log = builder(spec=_spec(fw={'os_id': 'opnsense', 'media_id': None}))
+
+    last, _ = _attributes(builder.fake)
+    assert result.returncode == 0, result.stderr
+    assert last['guest-fw'] == 'failed:could not expand the img.bz2 media'
+    assert '--name fw' not in log
+    assert last['guest-deb'] == 'ready'
