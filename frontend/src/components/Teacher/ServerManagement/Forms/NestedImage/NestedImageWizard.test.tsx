@@ -85,7 +85,7 @@ describe("NestedImageWizard", () => {
         fillHost();
         fireEvent.click(screen.getByRole("button", {name: "Next"}));
         expect(heading()).toHaveTextContent("Networks");
-        expect(screen.getByText("lab — 192.168.100.0/24")).toBeInTheDocument();
+        expect(screen.getByRole("textbox", {name: /CIDR/})).toHaveValue("192.168.100.0/24");
 
         // No guests yet, so a jump to Review stops on Guests with its error.
         fireEvent.click(screen.getByRole("button", {name: "Review"}));
@@ -128,5 +128,48 @@ describe("NestedImageWizard", () => {
         fireEvent.click(screen.getByRole("button", {name: "Next"}));
         expect(heading()).toHaveTextContent("Host");
         expect(screen.getByText("Choose a lab machine type.")).toBeInTheDocument();
+    });
+
+    it("edits networks, flags an overlap after Next, and draws the topology", async () => {
+        renderWizard();
+        await screen.findByText(/n2-standard-8/);
+        fillHost();
+        fireEvent.click(screen.getByRole("button", {name: "Next"}));
+        expect(heading()).toHaveTextContent("Networks");
+        // The pre-filled network is the only one, so it cannot be removed.
+        expect(screen.getByRole("button", {name: "Remove network 1"})).toBeDisabled();
+
+        fireEvent.click(screen.getByRole("button", {name: /Add network/}));
+        const second = within(screen.getByRole("region", {name: "Network 2"}));
+        expect(second.getByRole("textbox", {name: /Name/})).toHaveValue("net2");
+        expect(second.getByRole("textbox", {name: /CIDR/})).toHaveValue("192.168.101.0/24");
+        expect(screen.getAllByTestId("topology-rail")).toHaveLength(2);
+        expect(screen.getByRole("img", {name: /2 network\(s\), 0 guest\(s\)/})).toBeInTheDocument();
+
+        fireEvent.change(second.getByRole("textbox", {name: /CIDR/}), {target: {value: "192.168.100.128/25"}});
+        fireEvent.click(screen.getByRole("button", {name: "Next"}));
+        expect(heading()).toHaveTextContent("Networks");
+        expect(screen.getByLabelText("Networks has errors")).toBeInTheDocument();
+        expect(second.getByText("Overlaps network lab (192.168.100.0/24).")).toBeInTheDocument();
+
+        // Turning DHCP off hides the range fields; a range that starts after it ends is then not checked.
+        fireEvent.change(second.getByRole("textbox", {name: /CIDR/}), {target: {value: "10.0.0.0/24"}});
+        expect(second.getByText("Parent address is outside 10.0.0.0/24.")).toBeInTheDocument();
+        fireEvent.change(second.getByRole("textbox", {name: /Parent address/}), {target: {value: ""}});
+        fireEvent.click(second.getByRole("checkbox", {name: "DHCP"}));
+        expect(second.queryByRole("textbox", {name: /DHCP start/})).not.toBeInTheDocument();
+        expect(second.getByText("DHCP start is outside 10.0.0.0/24.")).toBeInTheDocument();
+        fireEvent.click(second.getByRole("checkbox", {name: "DHCP"}));
+        fireEvent.change(second.getByRole("textbox", {name: /DHCP start/}), {target: {value: "10.0.0.100"}});
+        fireEvent.change(second.getByRole("textbox", {name: /DHCP end/}), {target: {value: "10.0.0.199"}});
+        expect(second.getByText(/^DHCP needs a parent address/)).toBeInTheDocument();
+        fireEvent.change(second.getByRole("textbox", {name: /Parent address/}), {target: {value: "10.0.0.1"}});
+
+        fireEvent.click(screen.getByRole("button", {name: "Next"}));
+        expect(heading()).toHaveTextContent("Guests");
+
+        fireEvent.click(screen.getByRole("button", {name: "Back"}));
+        fireEvent.click(screen.getByRole("button", {name: "Remove network 2"}));
+        expect(screen.queryByRole("region", {name: "Network 2"})).not.toBeInTheDocument();
     });
 });

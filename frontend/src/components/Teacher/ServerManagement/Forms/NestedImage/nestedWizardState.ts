@@ -1,5 +1,6 @@
 import {NestedGuest, NestedNetwork, NestedParentOs} from "../../../../../services/Server/nested.model";
 import {ServerMachineTypes} from "../../../../../services/Specification/specificationEdit.model";
+import {validateNetworks} from "./networkRules";
 
 // Mirrors common/constants/nested.py; the API applies the same disk rule (NestedHostValidator.min_disk_size).
 export const NESTED_PARENT_BASE_DISK_GB = 20;
@@ -145,9 +146,9 @@ export const validateHostStep = (state: NestedWizardState, machineTypes: ServerM
     return errors;
 };
 
-// The Networks, Guests and Access rules beyond these minimums arrive with V18–V20.
-export const validateNetworksStep = (state: NestedWizardState): StepErrors =>
-    state.networks.length === 0 ? {networks: "Add at least one network."} : {};
+export const validateNetworksStep = (state: NestedWizardState): StepErrors => validateNetworks(state.networks);
+
+// The Guests and Access rules beyond these minimums arrive with V19–V20.
 
 export const validateGuestsStep = (state: NestedWizardState): StepErrors =>
     state.guests.length === 0 ? {guests: "Add at least one guest."} : {};

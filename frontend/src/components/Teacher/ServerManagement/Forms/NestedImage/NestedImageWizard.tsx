@@ -23,6 +23,7 @@ import {useNavigate} from "react-router-dom";
 import {URL_TEACHER_SERVERS} from "../../../../../router/urls";
 import {nestedService} from "../../../../../services/Server/nested.service";
 import HostStep, {MachineTypeOptions} from "./HostStep";
+import NetworksStep from "./NetworksStep";
 import {
     effectiveDiskSize,
     hasErrors,
@@ -35,7 +36,7 @@ import {
     validateStep,
 } from "./nestedWizardState";
 
-// A read-only view of what a step holds; V18–V20 replace these with the step editors.
+// A read-only view of what a step holds; V19–V20 replace these with the step editors.
 const StepSummary: React.FC<{step: NestedWizardSteps; state: NestedWizardState; errors: StepErrors}> = (
     {step, state, errors}
 ) => {
@@ -43,19 +44,6 @@ const StepSummary: React.FC<{step: NestedWizardSteps; state: NestedWizardState; 
     return (
         <Stack gap={2} mt={2}>
             {messages.map(message => <Alert key={message} severity="error">{message}</Alert>)}
-            {step === NestedWizardSteps.Networks && (
-                <List dense aria-label="Networks">
-                    {state.networks.map(network => (
-                        <ListItem key={network.name}>
-                            <ListItemText
-                                primary={`${network.name} — ${network.cidr}`}
-                                secondary={`${network.mode === "nat" ? "NAT" : "Isolated"}` +
-                                    (network.dhcp ? `, DHCP ${network.dhcp_start}–${network.dhcp_end}` : ", no DHCP")}
-                            />
-                        </ListItem>
-                    ))}
-                </List>
-            )}
             {step === NestedWizardSteps.Guests && (
                 <Typography color="text.secondary">
                     {state.guests.length === 0 ? "No guests yet." : `${state.guests.length} guest(s).`}
@@ -189,16 +177,20 @@ const NestedImageWizard: React.FC = () => {
                     </Stack>
                 </Stack>
                 <Box>
-                    {step === NestedWizardSteps.Host
-                        ? (
-                            <HostStep
-                                state={state}
-                                errors={currentErrors}
-                                machineTypes={machineTypes}
-                                onChange={handleChange}
-                            />
-                        )
-                        : <StepSummary step={step} state={state} errors={currentErrors} />}
+                    {step === NestedWizardSteps.Host && (
+                        <HostStep
+                            state={state}
+                            errors={currentErrors}
+                            machineTypes={machineTypes}
+                            onChange={handleChange}
+                        />
+                    )}
+                    {step === NestedWizardSteps.Networks && (
+                        <NetworksStep state={state} errors={currentErrors} onChange={handleChange} />
+                    )}
+                    {step !== NestedWizardSteps.Host && step !== NestedWizardSteps.Networks && (
+                        <StepSummary step={step} state={state} errors={currentErrors} />
+                    )}
                 </Box>
             </Stack>
         </Paper>
