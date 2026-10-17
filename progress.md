@@ -135,7 +135,7 @@ Implemented outside the loop (commits `dbb2fec`, `83e5abc`); not yet loop-verifi
 
 ### Group N — Nested lab hosts
 See `### Nested Guest Contract` in PRD.md.
-- [ ] **N1** Metadata forward block — spec + done-when at PRD.md:1624 (standalone security fix — ship first)
+- [x] **N1** Metadata forward block — spec + done-when at PRD.md:1624 (standalone security fix — ship first)
 - [ ] **N2** Loader forward block — spec + done-when at PRD.md:1626
 - [ ] **N3** Nested guest models — spec + done-when at PRD.md:1628
 - [ ] **N4** Nested contract constants — spec + done-when at PRD.md:1630
@@ -1151,3 +1151,10 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - Group V tsc gate: exit 0.
   - Group V ESLint gate: **exit 2**, "No files matching the pattern src/components/Teacher/ServerManagement/Forms/NestedImage". The targeted files belong to V16–V21, which are all `[ ]`, so no completed task is responsible.
 - **Reopened:** none.
+
+### Iteration 76 — 2026-10-17
+- **Completed:** N1. The Linux plant prologue in `flag_planter.py` now adds `iptables -C FORWARD -d 169.254.169.254 -j REJECT || iptables -I FORWARD ... || true`, inside the existing `command -v iptables` guard, right after the OUTPUT rule. New tests in `test_flag_planter.py`: the -C/-I FORWARD pair comes before the first `agoge_ctf_plant_*` call for file-only, env-only and mixed payloads; an existing rule (-C succeeds) means no -I; and with a PATH that holds only symlinked coreutils plus fake curl/chown (no iptables), the payload still plants and reports `ok:<nonce>`.
+- **Learned:** if a test needs a tool to be *absent*, build a PATH containing only symlinks to the tools the script needs, and call bash by its absolute path. Otherwise a real `/usr/sbin/iptables` on Linux CI leaks in.
+- **Gate results:** cloud_functions/tests 498 passed; api/unit_tests 1369 passed; build_files/cloud_deployment/tests 319 passed; frontend `npm test` 34 files, 393 tests passed. No frontend files changed.
+- **Blockers:** none.
+- **Next:** N2 (the same FORWARD rule in `LINUX_LOADER`, `ctf_plant_contract.py`, placed before the metadata `curl`).

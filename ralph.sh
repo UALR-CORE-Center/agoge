@@ -389,7 +389,7 @@ has_remaining_tasks() {
 
     if [[ $total -eq 0 ]]; then
         # No structured tasks yet — let Claude derive them from the PRD.
-        if grep -q "ALL TASKS COMPLETE" "${PROJECT_ROOT}/progress.md" 2>/dev/null; then
+        if grep -qx "## ALL TASKS COMPLETE" "${PROJECT_ROOT}/progress.md" 2>/dev/null; then
             return 1
         fi
         return 0
@@ -1443,7 +1443,7 @@ run_loop() {
         divider
         echo ""
 
-        if grep -q "ALL TASKS COMPLETE" "${PROJECT_ROOT}/progress.md" 2>/dev/null; then
+        if grep -qx "## ALL TASKS COMPLETE" "${PROJECT_ROOT}/progress.md" 2>/dev/null; then
             log_ok "All tasks already marked complete."
             if [[ $VERIFY_ENABLED -eq 1 ]] && ! run_verifier "verify-final-${i}-$(date +%H%M%S)"; then
                 log_warn "Verifier reopened work — continuing the loop."
