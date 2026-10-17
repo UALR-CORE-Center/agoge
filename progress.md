@@ -164,7 +164,8 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - [ ] **V6b** Add the downloadable entries to the JSON: the Kali cloud image and the Kali QEMU VM, the Debian, Ubuntu, Fedora, Rocky, Alma, CentOS, openSUSE, Arch and Alpine cloud images, Metasploitable 2, the Server 2016–2025 and Windows 10/11 Enterprise evaluations, and pfSense, OPNsense, VyOS and Security Onion. Each needs a pinned `https` URL and its SHA-256. **BLOCKED on V-5** for the Microsoft and Kali entries: a person must download and hash them. The Linux images and appliances also need pinned, dated releases with published hashes, not `current/` URLs whose hashes rotate. `test_nested_os_catalog_sync.py` already checks the https/SHA-256 and Microsoft-host rules for any entry added.
     - [x] **V6b1** (iteration 116) Ubuntu 20.04, 22.04, 24.04 and 26.04 cloud images, pinned to dated `cloud-images.ubuntu.com/releases/<codename>/release-YYYYMMDD/` files with the SHA-256s from each release's published `SHA256SUMS`.
     - [x] **V6b2a** (iteration 119) Rocky Linux 8.10/9.8/10.2 and AlmaLinux 8.10/9.8/10.2 GenericCloud images (`nm-keyfile`), pinned to dated files under each publisher's versioned (not major-only) directory, with SHA-256s from the published `CHECKSUM` files.
-    - [ ] **V6b2** The rest of V6b (Kali, Debian, Fedora/CentOS, openSUSE/Arch/Alpine, Metasploitable 2, Microsoft evals, appliances). Microsoft and Kali stay BLOCKED on V-5. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file. Debian publishes only SHA512SUMS, so its SHA-256 must come from another source or V-5.
+    - [x] **V6b2b** (iteration 120) Fedora 43 (build 1.6) and Fedora 44 (build 1.7) Cloud Base Generic images (`nm-keyfile`), pinned under `dl.fedoraproject.org/pub/fedora/linux/releases/<n>/Cloud/x86_64/images/` with SHA-256s from each release's signed `CHECKSUM`. Also makes `builder.sh`'s firstboot root grow handle Fedora's btrfs root.
+    - [ ] **V6b2** The rest of V6b (Kali, Debian, CentOS, openSUSE/Arch/Alpine, Metasploitable 2, Microsoft evals, appliances). Microsoft and Kali stay BLOCKED on V-5. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file. Debian publishes only SHA512SUMS, so its SHA-256 must come from another source or V-5.
 - [x] **V6c** (found in iteration 116; done in iteration 118) Ubuntu 16.04's cloud image needs `net_config: ifupdown`. But its `/etc/network/interfaces` sources only `interfaces.d/*.cfg`, so `builder.sh` `write_network_config` must write `interfaces.d/agoge.cfg`, not `interfaces.d/agoge` (Debian sources `*`, so the rename is safe there). Then add `ubuntu-16.04` (`xenial/release-20211001/ubuntu-16.04-server-cloudimg-amd64-disk1.img`, sha256 `fff2494a70bcaffb59f26f71ec49e137dd87d319341c35832dbe0ea65ff15140`).
 - [x] **V6d** (found in iteration 116; done in iteration 117) Ubuntu 18.04 ships netplan.io 0.99 (`bionic/release-20230607` manifest), and `routes: [{to: default}]` needs netplan 0.103+. Make `builder.sh` write `to: 0.0.0.0/0`, which every netplan version accepts. Then add `ubuntu-18.04` (`bionic/release-20230607/ubuntu-18.04-server-cloudimg-amd64.img`, sha256 `8dd2e6b5e5aad20c3f836123b300cba9861249408cbb07c359145a65d6bab6b6`).
 - [x] **V7** Nested host validator — spec + done-when at PRD.md:1673
@@ -2217,3 +2218,17 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - CTF eslint: exit 0. CTF tsc grep: no matches.
   - Group V eslint: exit 0. Group V tsc grep: no matches.
 - **Reopened:** none.
+
+### Iteration 120 — 2026-10-17
+- **Completed:** V6b2b, split out of V6b2. `common/data/nested_os_catalog.json` has 33 entries. The 2 new ones follow `almalinux-10`: `fedora-43` and `fedora-44`. Each is a `cloud_image` (qcow2) with `nm-keyfile`, osinfo `fedora43`/`fedora44` (both match `RHEL_FAMILY`, so they get `--selinux-relabel`), an agent, BIOS, virtio, and 1024 MB minimum memory.
+- **Learned:**
+  - Each SHA-256 comes from the release's PGP-signed `CHECKSUM`, fetched over https on 2026-10-17. Both files start with `QFI\xfb` (qcow2 v3), and both have a 5 GiB virtual size. Fedora 42 has already moved to the archive, so `releases/<n>/` 404s after EOL, just as Rocky and Alma `/pub` URLs do.
+  - The Fedora Cloud root is btrfs, so `findmnt -no SOURCE /` returns `/dev/vda4[/root]`. With that value, the old firstboot grow broke `lsblk` and the partition number, and it had no btrfs resize. It now uses `findmnt -nvo` (`--nofsroot`) and picks the resize tool from `FSTYPE`: `xfs_growfs`, `btrfs filesystem resize max`, or `resize2fs`.
+- **Tests:** `test_nested_builder.py::test_firstboot_grows_the_root_filesystem_for_its_fstype` pulls the grow command out of the rendered builder. It runs the command against stub `findmnt`/`lsblk`/`growpart`/resize tools for btrfs, xfs and ext4 roots.
+- **Gate results:**
+  - api/unit_tests: 1654 passed, 97.67%.
+  - cloud_functions/tests: 898 passed, 94.28%.
+  - build_files: 437 passed.
+  - No frontend files changed.
+- **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. V25 and HUMAN need a person.
+- **Next:** V6b2's openSUSE Leap / Arch / Alpine cloud images (each from a dated or versioned dir with a published SHA-256), or CentOS Stream 9/10 GenericCloud from its dated `cloud.centos.org` files and `CHECKSUM`.

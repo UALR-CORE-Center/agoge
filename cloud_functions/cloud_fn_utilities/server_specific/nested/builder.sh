@@ -475,8 +475,9 @@ customize_linux() {
     args+=(--touch /etc/cloud/cloud-init.disabled
       --run-command 'rm -f /etc/ssh/ssh_host_*'
       --firstboot-command 'ssh-keygen -A && (systemctl restart ssh || systemctl restart sshd)'
-      # cloud-init's growpart no longer runs, so the root filesystem is grown here.
-      --firstboot-command 'command -v growpart >/dev/null || exit 0; root=$(findmnt -no SOURCE /); disk=/dev/$(lsblk -no PKNAME "$root"); growpart "$disk" "${root##*[!0-9]}" && (resize2fs "$root" || xfs_growfs /)')
+      # cloud-init's growpart no longer runs, so the root filesystem is grown here. --nofsroot drops a
+      # btrfs subvolume suffix (Fedora's root is /dev/vda4[/root]), and the resize tool follows the fstype.
+      --firstboot-command 'command -v growpart >/dev/null || exit 0; root=$(findmnt -nvo SOURCE /); disk=/dev/$(lsblk -no PKNAME "$root"); growpart "$disk" "${root##*[!0-9]}" && case $(findmnt -no FSTYPE /) in xfs) xfs_growfs / ;; btrfs) btrfs filesystem resize max / ;; *) resize2fs "$root" ;; esac')
   fi
   while IFS= read -r upload; do
     [ -n "$upload" ] && args+=(--upload "$upload")
