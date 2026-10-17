@@ -1186,3 +1186,26 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** api/unit_tests 1440 passed; cloud_functions/tests 498 passed; build_files/cloud_deployment/tests 319 passed; ruff clean on changed files. No frontend files changed.
 - **Blockers:** none.
 - **Next:** N6 (`FlagPlanter.build_guest_payload`).
+
+### Verification — 2026-10-17 — PASS
+- **Checked:** N1–N5, the only tasks ticked since the last verification (`344ba05`). HEAD is `ffcac2a` and the tree is clean. All earlier `[x]` tasks were verified at `321d8f4`/`344ba05`, and none of their source has changed since then except the N1–N5 diff. Two read-only agents checked the N items against PRD.md:1620-1632, the Nested Guest Contract (PRD.md:1042) and Data Models (PRD.md:469-497). I read the N1 and N2 diffs myself.
+  - N1: in `flag_planter.py:53-55`, the `-C || -I FORWARD ... || true` pair sits inside the `command -v iptables` guard. The prologue has no `set -e`. `_LINUX_PROLOGUE` is the only bash template, so every Linux payload gets the rule. Tests check the order before the first placement for file, env and mixed payloads. With iptables absent (PATH holds only symlinked tools), the payload still plants and reports `ok:<nonce>`.
+  - N2: in `LINUX_LOADER`, the guarded FORWARD rule is the subshell's first statement, before `mktemp` and `curl`. Two tests prove the order: a static check and an execution check with a shared fake-tool log. `test_ctf_loader_stub.py` is unchanged and passes.
+  - N3: `NestedGuestDriver`, `CtfNestedGuestSpecModel`, `CtfFlagSpecModel.guest` and `CtfSpecModel.nested_guests` (max 32) match Data Models. `guest` is on `CtfHostResetRequest` and `CtfHostRow` with the shared slug pattern. Tests reject a bad slug, a bad domain and an unknown driver, and a spec without `nested_guests` loads.
+  - N4: every name and timeout in the contract-names table is present with the PRD values. `EventAttributes.GUEST = 'guest'`. Tests assert 30 + 420 < 540 and that every attribute value is distinct.
+  - N5: all six rows of the validation table are enforced (`ctf.py:52-80, 96-97, 124-175`). Each rejection test asserts that the message names the guest or flag id, plus a fragment specific to the rule. The non-nested spec still validates.
+  - Sweep: the changed source has no TODO, FIXME or NotImplemented. The only hit, `agoge.py:738`, predates this work.
+  - Notes, not reopened:
+    - PRD.md still shows N1–N5 as `[ ]`. This file, not PRD.md, is the task queue.
+    - The loader's `iptables -C` stderr is not silenced inside the subshell.
+    - The registry-prefix check is case-sensitive, as the PRD text is written.
+- **Gate results:**
+  - api/unit_tests: 1440 passed.
+  - cloud_functions/tests: 498 passed.
+  - build_files/cloud_deployment/tests: 319 passed.
+  - frontend `npm test`: 34 files, 393 tests passed.
+  - CTF ESLint gate: exit 0.
+  - CTF tsc gate: 0 CTF matches (passes).
+  - Group V tsc gate: 0 matches (passes).
+  - Group V ESLint gate: **exit 2**, "No files matching the pattern src/components/Teacher/ServerManagement/Forms/NestedImage". Those files belong to V16–V21, which are all `[ ]`, so no completed task is responsible.
+- **Reopened:** none.
