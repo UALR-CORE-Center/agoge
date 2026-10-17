@@ -136,7 +136,7 @@ Implemented outside the loop (commits `dbb2fec`, `83e5abc`); not yet loop-verifi
 ### Group N — Nested lab hosts
 See `### Nested Guest Contract` in PRD.md.
 - [x] **N1** Metadata forward block — spec + done-when at PRD.md:1624 (standalone security fix — ship first)
-- [ ] **N2** Loader forward block — spec + done-when at PRD.md:1626
+- [x] **N2** Loader forward block — spec + done-when at PRD.md:1626
 - [ ] **N3** Nested guest models — spec + done-when at PRD.md:1628
 - [ ] **N4** Nested contract constants — spec + done-when at PRD.md:1630
 - [ ] **N5** Nested guest validator — spec + done-when at PRD.md:1632
@@ -1158,3 +1158,10 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** cloud_functions/tests 498 passed; api/unit_tests 1369 passed; build_files/cloud_deployment/tests 319 passed; frontend `npm test` 34 files, 393 tests passed. No frontend files changed.
 - **Blockers:** none.
 - **Next:** N2 (the same FORWARD rule in `LINUX_LOADER`, `ctf_plant_contract.py`, placed before the metadata `curl`).
+
+### Iteration 77 — 2026-10-17
+- **Completed:** N2. `LINUX_LOADER` (`common/utilities/ctf_plant_contract.py`) now opens its subshell with the `iptables -C FORWARD -d 169.254.169.254 -j REJECT || -I ... || true` pair inside a `command -v iptables` guard, before `mktemp` and the `curl` fetch. New tests in `api/unit_tests/test_ctf_plant_contract.py`: the -C/-I lines precede the `if curl` line in the text; with a fake `iptables` logging to the same file as the fake curl, -C then -I run before curl when the rule is absent, and only -C when it is present. The D4 merge tests (`cloud_functions/tests/test_ctf_loader_stub.py`) pass unchanged.
+- **Learned:** the loader's fake-curl log doubles as an ordering log: any other fake tool that appends to `$FAKE_CURL_ARGS` shows up in call order.
+- **Gate results:** api/unit_tests 1372 passed; cloud_functions/tests 498 passed; build_files/cloud_deployment/tests 319 passed. No frontend files changed.
+- **Blockers:** none.
+- **Next:** N3 (nested guest models).
