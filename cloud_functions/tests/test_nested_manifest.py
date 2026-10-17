@@ -144,6 +144,21 @@ def test_manifest_resolves_catalog_entry_and_media_source():
     assert manifest['networks'][0]['name'] == 'lan'
 
 
+def _json_cloud_image_entries():
+    items = json.loads(CATALOG_JSON.read_text()) if CATALOG_JSON.is_file() else []
+    return [NestedOsCatalogModel(**item) for item in items if item['install_method'] == 'cloud_image']
+
+
+@pytest.mark.parametrize('entry', _json_cloud_image_entries(), ids=lambda entry: entry.id)
+def test_manifest_downloads_each_seeded_cloud_image_by_its_pinned_url(entry):
+    spec = _spec([_guest('web', entry.id, packages=['nginx'])])
+    guest = json.loads(render_manifest(spec, {entry.id: entry}, {}))['guests'][0]
+    assert guest['media'] == {'source': 'url', 'url': entry.media_url, 'sha256': entry.media_sha256,
+                              'format': entry.media_formats[0]}
+    assert guest['catalog']['install_method'] == 'cloud_image'
+    assert guest['catalog']['net_config'] == entry.net_config
+
+
 def test_manifest_rejects_missing_catalog_entry_and_medium():
     spec = _three_guest_spec()
     with pytest.raises(ValueError, match='legacy: no medium med-1'):

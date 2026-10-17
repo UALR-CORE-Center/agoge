@@ -68,6 +68,24 @@ def test_downloaded_entries_have_an_https_url_and_sha256(entry):
         assert entry.media_sha256 and len(entry.media_sha256) == 64
 
 
+@pytest.mark.parametrize('entry', [entry for entry in _entries() if not entry.requires_upload],
+                         ids=lambda entry: entry.id)
+def test_downloaded_entries_pin_a_dated_release(entry):
+    # A rolling path (current/, latest/, daily/) rotates its file, so the pinned SHA-256 would stop matching.
+    segments = urlsplit(entry.media_url).path.split('/')
+    assert not {'current', 'latest', 'daily'} & set(segments)
+
+
+@pytest.mark.parametrize('entry', [entry for entry in _entries() if entry.install_method == 'cloud_image'],
+                         ids=lambda entry: entry.id)
+def test_cloud_image_entries_are_linux_disk_images_with_an_agent(entry):
+    # builder.sh customize_linux installs qemu-guest-agent and writes net_config into every cloud image.
+    assert entry.family == 'linux'
+    assert entry.media_formats[0] in {'qcow2', 'raw', 'img.xz'}
+    assert entry.net_config in {'networkd', 'netplan', 'nm-keyfile', 'ifupdown'}
+    assert entry.agent is True
+
+
 @pytest.mark.parametrize('entry', [entry for entry in _entries() if entry.family == 'windows'],
                          ids=lambda entry: entry.id)
 def test_windows_media_only_ever_comes_from_microsoft(entry):
