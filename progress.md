@@ -162,7 +162,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [ ] **V6** OS catalog and seeding — spec + done-when at PRD.md:1671 — **BLOCKED (iteration 95):** its done-when needs Open Question V-5 answered first, and V-5 is human research. Microsoft Evaluation Center does not publish SHA-256 values, so each eval ISO (Server 2016/2019/2025, Windows 10/11 Enterprise) must be downloaded and hashed by a person. The Kali cloud image URL and format still need to be confirmed. The loop must not invent hashes. Unblock by recording V-5's answers (URL + sha256 per entry) in progress.md.
 - [x] **V7** Nested host validator — spec + done-when at PRD.md:1673
 - [x] **V8** Manifest and unattend rendering — spec + done-when at PRD.md:1675
-- [ ] **V9** Builder script — spec + done-when at PRD.md:1677 (must install the V10 runtime from `nested_scripts.render_runtime()`/`render_runtime_unit()` and write `/etc/agoge-nested/host.json` in the shape `runtime.sh` documents; see iteration 97)
+- [x] **V9** Builder script — spec + done-when at PRD.md:1677 (must install the V10 runtime from `nested_scripts.render_runtime()`/`render_runtime_unit()` and write `/etc/agoge-nested/host.json` in the shape `runtime.sh` documents; see iteration 97)
 - [x] **V10** Runtime service — spec + done-when at PRD.md:1679 (done before V9, which installs it: `render_runtime()`/`render_runtime_unit()` in `cloud_fn_utilities/server_specific/nested_scripts.py`)
 - [ ] **V11** Nested template server provisioning — spec + done-when at PRD.md:1681
 - [ ] **V12** Create route — spec + done-when at PRD.md:1683
@@ -1580,3 +1580,40 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V9 (builder script).
+
+### Iteration 98 — 2026-10-17
+- **Completed:** V9.
+  - `cloud_functions/cloud_fn_utilities/server_specific/nested/builder.sh` is rendered by `nested_scripts.render_builder()`. The render embeds `render_runtime()`/`render_runtime_unit()` as quoted heredocs and refuses a runtime that contains a heredoc delimiter.
+  - New layout constants in `nested_scripts.py`: `BUILDER_PATH`, `MEDIA_DIR`, `STATE_DIR` (`/var/lib/agoge-nested/state`), `WORK_DIR` (`/var/lib/agoge-nested/work`, holds `manifest.json`), `RUN_DIR`, and `SECRETS_PATH` (`/run/agoge-nested/secrets.json`).
+  - Markers: `packages`, `networks`, `runtime`, `installed-<guest>`, `guest-<guest>.done` (final status), and `done` (final phase). A second run after `done` only re-writes `phase`. An install a reboot interrupted is shut down over ACPI (never destroyed), undefined, and redone. A guest interrupted during post-install is only restarted.
+  - `host.json` is written with every `autostart: false` while building, so a reboot's runtime run cannot start a half-installed guest. The real values are written at the end.
+- **Contract for V11 (template provisioning):**
+  - Each Windows `unattended_iso` guest's rendered XML must be in `agoge-nested-secrets` as `{guest: {..., "autounattend": "<xml>"}}`. Without it, that guest fails with "agoge-nested-secrets has no autounattend for this guest".
+  - The startup-script must write `render_builder()` to `BUILDER_PATH` and run it (consider `systemd-run`: the build takes hours).
+  - The builder exits 0 when the manifest is absent, so on a re-check-out it is a no-op.
+- **Choices beyond the contract:**
+  - The unattend ISO (it holds the admin password) is built on tmpfs in `/run/agoge-nested/unattend-<guest>/`, not in `MEDIA_DIR`, and is deleted once Setup powers off. `RUN_DIR` is mode 711 so qemu can open the ISO; `secrets.json` and the password files are 600.
+  - Domains are defined with `virt-install --print-xml --import` plus `virsh define`. The VNC `passwd` is spliced into the XML with bash builtins, so it never reaches an argv. An osinfo the local osinfo-db rejects falls back to `--osinfo generic`.
+  - A URL medium with no `media_sha256` fails its guest (an unverified download). An upload with a null `sha256` is accepted unverified.
+  - Uploads of verified downloads to the `cache/` objects are best-effort.
+  - The virtio-win ISO is fetched from `fedorapeople.org .../archive-virtio/virtio-win-<version>/virtio-win.iso`, so `virtio_win_version` must be the archive directory's suffix (e.g. `0.1.262-2`). It is not hash-checked, because the catalog has no hash field for it. Note this when V6 is unblocked.
+  - Two installs at a time: guests in `start_order` are dealt round-robin to two workers.
+  - libvirt autostart is never set (the runtime orders starts).
+  - `ifupdown` NICs are named `agoge<i>` by a systemd `.link` file matched on MAC.
+  - A grown cloud-image disk gets a best-effort `growpart` firstboot command, because cloud-init is disabled.
+- **Tests:** `cloud_functions/tests/test_nested_builder.py` (26). The rendered script runs under bash against fake curl, virsh, virt-install, virt-customize, qemu-img, genisoimage, apt-get, and systemctl, with jq behind a logging wrapper. The tests:
+  - assert no admin or VNC password appears in any logged argv;
+  - check that media lands under `MEDIA_DIR` and verified downloads are cached;
+  - check that `systemctl restart agoge-nested-runtime.service` precedes the first `virt-install`;
+  - cover the sha mismatch, post-install failure (stderr truncated to 150 chars), phase rules, resume, and interrupted-install paths.
+  - `bash -n` and `shellcheck -S warning` pass.
+- **Learned:**
+  - shellcheck (`/opt/homebrew/bin/shellcheck`) caught a `local a=$1 b="$a"` bug (SC2318). Run it on rendered scripts.
+  - The killed heartbeat subshell's in-flight curl can still land after the builder exits, so tests must ignore late `heartbeat` writes.
+- **Gate results:**
+  - cloud_functions/tests: 741 passed (94.28%).
+  - build_files: 319 passed.
+  - api/unit_tests: not run, since no api or common file changed.
+  - No frontend files changed.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V11 (nested template server provisioning).
