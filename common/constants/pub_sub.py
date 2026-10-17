@@ -76,4 +76,6 @@ class PubSub:
         CTF_ID = 'ctf_id'
         WORKOUT_ID = 'workout_id'
         RESET_MODE = 'reset_mode'
+        # Nested guest slug for a CTF host reset that targets one guest, not the parent server
+        GUEST = 'guest'
         # CTF messages reuse SERVER_NAME for the target server

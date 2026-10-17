@@ -6,7 +6,10 @@ At boot, the loader stub (added to every lab server at build by LabServerManager
 key from the metadata server, runs it, and deletes it. The payload reports back through the
 guest attribute at GUEST_ATTRIBUTE_PATH. Neither side hardcodes these strings elsewhere.
 """
+import re
 from typing import Optional
+
+from common.models.agoge import NESTED_GUEST_NAME_PATTERN
 
 PLANT_METADATA_KEY = "agoge-ctf-plant"
 
@@ -21,6 +24,33 @@ GUEST_ATTRIBUTE_PATH = f"{GUEST_ATTRIBUTE_NAMESPACE}{GUEST_ATTRIBUTE_RESULT_KEY}
 RESULT_OK = "ok"
 RESULT_ERROR = "error"
 MAX_RESULT_MESSAGE_LENGTH = 200
+
+# Nested Guest Contract (PRD). A nested host's payload writes the ack key as its first action,
+# then one result key per relayed guest (same ok/error grammar as plant-result), and plant-result
+# last, so its presence means every guest section has finished.
+GUEST_ATTRIBUTE_ACK_KEY = "plant-ack"
+GUEST_ATTRIBUTE_ACK_PATH = f"{GUEST_ATTRIBUTE_NAMESPACE}{GUEST_ATTRIBUTE_ACK_KEY}"
+GUEST_ATTRIBUTE_GUEST_RESULT_PREFIX = f"{GUEST_ATTRIBUTE_RESULT_KEY}-"
+
+# The watcher long-polls PLANT_METADATA_KEY so a nested host is planted without a reset. It and
+# the loader stub share the lock and the dedupe file, so one payload never runs twice per boot.
+WATCHER_UNIT_NAME = "agoge-ctf-watcher.service"
+WATCHER_SCRIPT_PATH = "/usr/local/sbin/agoge-ctf-watcher"
+RUN_DIR = "/run/agoge-ctf"
+RUN_DIR_MODE = 0o700
+RUN_LOCK_PATH = f"{RUN_DIR}/plant.lock"
+LAST_PAYLOAD_PATH = f"{RUN_DIR}/last"
+
+# Made by the instructor on each guest domain; a guest `rebuild` reverts to it.
+PRISTINE_SNAPSHOT_NAME = "agoge-pristine"
+
+# The Cloud Function times out at 540 s (agoge_app.py), and FlagPlanter waits for the ack and then
+# for confirmation inside one invocation, so WATCHER_ACK_SECONDS + NESTED_CONFIRM_TIMEOUT_SECONDS
+# must stay below it with room for API overhead. Do not raise one of these alone.
+WATCHER_ACK_SECONDS = 30
+NESTED_CONFIRM_TIMEOUT_SECONDS = 420
+# Each guest relay section runs in parallel under this bound, inside the confirmation window.
+RELAY_BUDGET_SECONDS = 360
 
 # (location_type, operating_system) -> path pattern, from the PRD's Flag Location Formats table.
 # The spec validator enforces these at save time and FlagPlanter re-checks them before a path
@@ -90,6 +120,19 @@ WINDOWS_LOADER = f"""# agoge-ctf loader: run a pending flag plant, if any. Never
   }}
 }} *> $null
 """
+
+
+def guest_result_key(guest: str) -> str:
+    """The per-guest result key under GUEST_ATTRIBUTE_NAMESPACE, e.g. plant-result-win-dc."""
+    # The name ends up in shell and in a guest attribute path, so only a valid guest slug passes.
+    if not isinstance(guest, str) or not re.fullmatch(NESTED_GUEST_NAME_PATTERN, guest):
+        raise ValueError(f"Invalid nested guest name: {guest!r}")
+    return f"{GUEST_ATTRIBUTE_GUEST_RESULT_PREFIX}{guest}"
+
+
+def guest_result_path(guest: str) -> str:
+    """The full guest attribute path FlagPlanter reads for one guest's flags."""
+    return f"{GUEST_ATTRIBUTE_NAMESPACE}{guest_result_key(guest)}"
 
 
 def parse_plant_result(value: Optional[str], nonce: str) -> Optional[tuple[str, Optional[str]]]:
