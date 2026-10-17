@@ -15,6 +15,9 @@ NESTED_MAX_EXPOSURES = 8
 NESTED_CONSOLE_BASE_PORT = 5901
 # Must stay below the 540 s Cloud Function timeout, leaving room for the CHECK_IN publish.
 NESTED_FINALIZE_TIMEOUT_SECONDS = 360
+# A `finalizing` phase older than this was abandoned by a dead invocation. The margin covers the rest of the
+# finalize invocation and one whole CHECK_IN invocation (540 s each), so a live check-in is never raced.
+NESTED_FINALIZE_STALE_SECONDS = NESTED_FINALIZE_TIMEOUT_SECONDS + 900
 NESTED_BUILD_STALL_MINUTES = 45
 NESTED_BUILD_MAX_MINUTES = 240
 NESTED_MEDIA_MAX_BYTES = 21474836480  # 20 GiB

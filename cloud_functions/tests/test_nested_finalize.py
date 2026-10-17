@@ -2,6 +2,7 @@
 the finalized check-in, the watcher bootstraps, and agoge-nested-finalize run for real against fake virsh/curl.
 """
 import copy
+from datetime import datetime, timedelta, timezone
 import json
 import shutil
 import subprocess
@@ -23,7 +24,7 @@ from cloud_fn_utilities.server_specific.nested_scripts import (FINALIZE_ANSWERED
 from cloud_functions.handlers import control_handler as control_handler_module
 from cloud_functions.handlers.control_handler import ControlHandler
 from common.constants.database import DbCollections
-from common.constants.nested import NESTED_FINALIZE_TIMEOUT_SECONDS
+from common.constants.nested import NESTED_FINALIZE_STALE_SECONDS, NESTED_FINALIZE_TIMEOUT_SECONDS
 from common.constants.pub_sub import PubSub
 from common.constants.states import ImageStatus
 from common.exceptions import Conflict, OperationTimeout
@@ -61,6 +62,10 @@ class FakeClock:
 
     def sleep(self, seconds):
         self.now += seconds
+
+
+def _ago(seconds):
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
 
 
 def _record(phase='ready', status=ImageStatus.CHECKED_OUT.value, **build):
@@ -192,7 +197,7 @@ def test_a_failed_finalize_can_be_finalized_again(finalize):
 
 @pytest.mark.parametrize('record', [
     _record(phase='building'),
-    _record(phase='finalizing', finalize_nonce='in-flight'),
+    _record(phase='finalizing', finalize_nonce='in-flight', updated_at=_ago(5)),
     _record(phase='failed', message='no guest was built'),
     _record(phase='finalized', status=ImageStatus.CHECKED_IN.value),
 ], ids=['building', 'duplicate-delivery', 'failed-build', 'checked-in'])
@@ -204,6 +209,28 @@ def test_a_record_that_cannot_be_finalized_is_refused_before_any_request(finaliz
 
     manager.compute_instance.set_metadata.assert_not_called()
     assert manager.db.record == record
+
+
+@pytest.mark.parametrize('updated_at', [_ago(NESTED_FINALIZE_STALE_SECONDS + 60), None],
+                         ids=['stale', 'no-timestamp'])
+def test_a_stale_finalizing_phase_is_finalized_again(finalize, updated_at):
+    # A dead invocation left finalizing behind; a redelivery or a new Check In must recover it.
+    manager, nonces = finalize(_record(phase='finalizing', finalize_nonce='dead', updated_at=updated_at),
+                               answers=[lambda n: {'finalize-result': f'ok:{n}'}])
+
+    assert manager.finalize_nested() is True
+    assert nonces[0] != 'dead'
+    assert len(_published(manager)) == 1
+
+
+def test_a_finalizing_phase_inside_the_stale_window_is_refused(finalize):
+    record = _record(phase='finalizing', finalize_nonce='in-flight',
+                     updated_at=_ago(NESTED_FINALIZE_STALE_SECONDS - 60))
+    manager, _ = finalize(record)
+
+    with pytest.raises(Conflict):
+        manager.finalize_nested()
+    manager.compute_instance.set_metadata.assert_not_called()
 
 
 def test_a_failed_check_in_publish_returns_the_phase_to_ready(finalize):
