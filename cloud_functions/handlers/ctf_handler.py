@@ -42,6 +42,7 @@ class CtfHandler:
         self.workout_id = self.event_attributes.get(self.event_attr_keys.WORKOUT_ID, None)
         self.server_name = self.event_attributes.get(self.event_attr_keys.SERVER_NAME, None)
         self.reset_mode = self.event_attributes.get(self.event_attr_keys.RESET_MODE, None)
+        self.guest = self.event_attributes.get(self.event_attr_keys.GUEST, None)
 
         if not self.action:
             self.logger.error(f"{self.class_name} - No action provided in cloud function CTF handler")
@@ -95,11 +96,12 @@ class CtfHandler:
 
     def _host_reset(self) -> None:
         """
-        CTF_HOST_RESET: resets SERVER_NAME on one board in RESET_MODE. HostReset loads the event, board and
-        server itself and raises ValueError for a missing server name or an unknown mode before any read.
+        CTF_HOST_RESET: resets SERVER_NAME (or its nested GUEST, when set) on one board in RESET_MODE. HostReset
+        loads the event, board and server itself and raises ValueError for a missing server name or an unknown
+        mode before any read.
         """
         HostReset(env_dict=self.env_dict, db=self.db).run(self.ctf_id, self.workout_id, self.server_name,
-                                                           self.reset_mode)
+                                                           self.reset_mode, guest=self.guest)
 
     def _load_event(self) -> CtfEventModel:
         data = self.db.get(DbCollections.CTF, self.ctf_id)

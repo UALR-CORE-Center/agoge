@@ -180,7 +180,7 @@ def test_ctf_host_reset_reaches_host_reset_with_server_and_mode(planter, arm_wor
     }), db=db).route()
 
     host_reset.assert_called_once_with(env_dict=ENV, db=db)
-    host_reset.return_value.run.assert_called_once_with(CTF_ID, WORKOUT_ID, 'web', mode)
+    host_reset.return_value.run.assert_called_once_with(CTF_ID, WORKOUT_ID, 'web', mode, guest=None)
     # HostReset does its own loads and its own replant, so the handler neither reads nor plants
     db.get.assert_not_called()
     planter.assert_not_called()
@@ -191,7 +191,20 @@ def test_ctf_host_reset_passes_missing_server_and_mode_through(host_reset):
     # HostReset rejects a missing server or mode with ValueError; the handler must not substitute defaults
     _handler(_attributes(action=PubSub.Actions.CTF_HOST_RESET)).route()
 
-    host_reset.return_value.run.assert_called_once_with(CTF_ID, WORKOUT_ID, None, None)
+    host_reset.return_value.run.assert_called_once_with(CTF_ID, WORKOUT_ID, None, None, guest=None)
+
+
+@pytest.mark.parametrize("mode", ["replant", "restart", "rebuild"])
+def test_ctf_host_reset_passes_guest_to_host_reset(planter, host_reset, mode):
+    # Without GUEST a guest reset would act on the whole parent server (N11)
+    _handler(_attributes(action=PubSub.Actions.CTF_HOST_RESET, **{
+        PubSub.EventAttributes.SERVER_NAME: 'hv-host',
+        PubSub.EventAttributes.RESET_MODE: mode,
+        PubSub.EventAttributes.GUEST: 'win-dc',
+    })).route()
+
+    host_reset.return_value.run.assert_called_once_with(CTF_ID, WORKOUT_ID, 'hv-host', mode, guest='win-dc')
+    planter.assert_not_called()
 
 
 def test_host_reset_errors_propagate(host_reset):

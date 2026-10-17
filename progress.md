@@ -146,8 +146,8 @@ See `### Nested Guest Contract` in PRD.md.
 - [x] **N9** Nested plant procedure — spec + done-when at PRD.md:1640
 - [x] **BUG5** `FlagPlanter.plant`'s `except` calls `_fail_unfinished(board, targets)` with the board as it was before `_await_acks`/`_await_results` were called. Those helpers rebind `board` locally, so if one raises mid-loop (e.g. a Firestore error in `_record`), flags they already recorded `planted`/`failed` still read `planting` on the stale model and get overwritten with `MSG_ABORTED`. This predates N9 for `_await_results`. Fix by re-reading stored flag statuses in `_fail_unfinished` (inside the transaction), with a test that raises on the second `_record`.
 - [x] **N10** Guest host reset publish — spec + done-when at PRD.md:1642
-- [ ] **N11** Guest host reset modes — spec + done-when at PRD.md:1644 (**land before any deploy**: since N10 the API publishes `guest`, but `CtfHandler` ignores it, so a guest reset would act on the whole parent server)
-- [ ] **N12** Offline driver — spec + done-when at PRD.md:1646
+- [x] **N11** Guest host reset modes — spec + done-when at PRD.md:1644 (**land before any deploy**: since N10 the API publishes `guest`, but `CtfHandler` ignores it, so a guest reset would act on the whole parent server)
+- [ ] **N12** Offline driver — spec + done-when at PRD.md:1646 (also: a guest rebuild/replant of an offline guest with board flags currently fails its flags with "Could not build the plant payload" and never reverts, because `_nested_host_payload` relays only qemu-agent guests; N12's offline section must honour `revert` the way `agoge_ctf_rebuild_qemu` does)
 - [ ] **N13** Nested guests in the spec editor — spec + done-when at PRD.md:1648 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **N14** Guest rows on the Hosts panel — spec + done-when at PRD.md:1650 (`transformToCtfHostRow` drops `guest` today, so guest rows render as duplicate parent rows whose menu resets the parent; hide replant on guest rows with `flag_count == 0`, which the API refuses) (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **N15** Nested host guide — spec + done-when at PRD.md:1652
@@ -1325,3 +1325,22 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Blockers:** none.
 - **Reviewer:** no house-rule violations. Its two minor notes are queued on N14 (hide replant on flagless guest rows); the other (a guest reset 404s when the parent document is missing) is intended and tested.
 - **Next:** N11. It is urgent: `CtfHandler`/`HostReset` must read `GUEST`, because a guest reset published now is executed as a whole-server reset.
+
+### Iteration 87 — 2026-10-17
+- **Completed:** N11.
+  - `CtfHandler` reads `GUEST` and calls `HostReset.run(..., guest=)`. With a guest, `HostReset` checks that the guest is declared on the server (otherwise `NotFound`, before any compute call), then dispatches through `guest_mode_map`:
+    - `replant` calls `plant(guest=)`.
+    - `restart` calls `FlagPlanter.run_guest_action('restart')`. That payload runs `virsh reboot` on the parent and reports through `plant-result`; no flag is written.
+    - `rebuild` calls `plant(guest=, revert=True)`. The relay calls `agoge_ctf_rebuild_qemu`, which runs `snapshot-info` and then `snapshot-revert --running` before `agoge_ctf_relay_qemu`, sharing one deadline. A guest with no board flags gets the revert-only action instead.
+  - A failed restart or flagless revert raises `RuntimeError`.
+  - Tests:
+    - `test_ctf_host_reset_guest.py` (28 tests): every mode/guest makes only `get`/`set_metadata`/`get_guest_attributes` calls on the board's own instance and never touches `ComputeManagerFactory` (SC-9). The guest action and rebuild relay payloads run in bash against a fake virsh.
+    - `test_ctf_handler.py`: GUEST passthrough.
+- **Learned:** virsh calls that carry no secret (domain, snapshot name) go in argv, as `domstate` already does. Agent JSON still goes on stdin, and an argv virsh call must never inherit the payload's stdin. In the sandbox the fake virsh exits before reading stdin.
+- **Gate results:** api/unit_tests 1461 passed; cloud_functions/tests 616 passed; build_files/cloud_deployment/tests 319 passed; ruff clean. No frontend files changed.
+- **Blockers:** none.
+- **Reviewer:** no house-rule violations.
+  - Offline-driver guest rebuild is folded into N12.
+  - `snapshot-info` failing for any reason (including a timeout) reads "no agoge-pristine snapshot". This matches the spec string, so it is left as is.
+  - The `RuntimeError` on a failed guest restart could re-run the reboot if Pub/Sub retry is on; same as other handler errors. Not changed.
+- **Next:** N12 (offline driver).

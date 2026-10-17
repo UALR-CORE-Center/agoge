@@ -16,6 +16,11 @@ class HostReset:
     `replant` plants that server's flags again, `restart` stops then starts the instance, and `rebuild`
     nukes it and marks its flags `stale`. Every read, write and compute call names only this board and
     its `{workout_id}-{server}` instance, so other teams are never touched (SC-9).
+
+    With `guest` set (a declared nested guest of `server`) each mode runs as a one-guest payload through the
+    parent's plant watcher and makes no compute reset/stop/start/nuke call (Host reset modes on a guest):
+    `replant` plants that guest's flags, `restart` is `virsh reboot`, and `rebuild` reverts the guest to its
+    agoge-pristine snapshot and plants its flags in the same payload.
     """
     MSG_WIREGUARD_REBUILD = "rebuild is not allowed on a WireGuard server"
 
@@ -38,14 +43,20 @@ class HostReset:
             'restart': self._restart,
             'rebuild': self._rebuild,
         }
+        self.guest_mode_map = {
+            'replant': self._replant_guest,
+            'restart': self._restart_guest,
+            'rebuild': self._rebuild_guest,
+        }
 
-    def run(self, ctf_id: str, workout_id: str, server: str, mode: str) -> Optional[str]:
+    def run(self, ctf_id: str, workout_id: str, server: str, mode: str, guest: Optional[str] = None) -> Optional[str]:
         """
         Returns the mode that ran, or None when the board is inactive (archived or deleted event). Raises
-        ValueError for an unknown mode or a missing server name before any read, and NotFound for a missing
-        event, board or server document.
+        ValueError for an unknown mode or a missing server name before any read, NotFound for a missing
+        event, board or server document or a guest not declared on `server`, and RuntimeError when a guest
+        restart or flagless guest rebuild fails on the host.
         """
-        method = self.mode_map.get(mode)
+        method = (self.guest_mode_map if guest else self.mode_map).get(mode)
         if method is None:
             self.logger.error(f"{self.class_name}:{ctf_id} - unsupported reset mode", mode=mode)
             raise ValueError(f"Unsupported CTF host reset mode: {mode}")
@@ -58,9 +69,41 @@ class HostReset:
             self.logger.warning(f"{self.class_name}:{ctf_id} - board {board.id} is not active; {mode} skipped")
             return None
 
+        if guest:
+            if not any(g.server == server and g.name == guest for g in event.spec.nested_guests):
+                self.logger.error(f"{self.class_name}:{ctf_id} - guest {guest} is not declared on {server}")
+                raise NotFound(f"Guest {guest} of server {server} not found")
+            self.logger.info(f"{self.class_name}:{ctf_id} - {mode} of guest {guest} of {server} on board {board.id}")
+            method(event, board, server, guest)
+            return mode
+
         self.logger.info(f"{self.class_name}:{ctf_id} - {mode} of {server} on board {board.id}")
         method(event, board, server)
         return mode
+
+    def _replant_guest(self, event: CtfEventModel, board: CtfBoardModel, server: str, guest: str) -> None:
+        FlagPlanter(event, env_dict=self.env_dict, db=self.db).plant(board, [server], guest=guest)
+
+    def _restart_guest(self, event: CtfEventModel, board: CtfBoardModel, server: str, guest: str) -> None:
+        # Flags stay on the guest's disk, as with a server restart
+        self._guest_action(FlagPlanter(event, env_dict=self.env_dict, db=self.db), board, server, guest, 'restart')
+
+    def _rebuild_guest(self, event: CtfEventModel, board: CtfBoardModel, server: str, guest: str) -> None:
+        planter = FlagPlanter(event, env_dict=self.env_dict, db=self.db)
+        board_flag_ids = {flag.flag_id for flag in board.flags}
+        if any(f.server == server and f.guest == guest and f.id in board_flag_ids for f in event.spec.flags):
+            # Revert and plant in one payload; a missing snapshot fails the guest's flags with its own message
+            planter.plant(board, [server], guest=guest, revert=True)
+        else:
+            # Nothing to plant, so only the revert runs
+            self._guest_action(planter, board, server, guest, 'revert')
+
+    def _guest_action(self, planter: FlagPlanter, board: CtfBoardModel, server: str, guest: str, action: str) -> None:
+        failure = planter.run_guest_action(board, server, guest, action)
+        if failure:
+            self.logger.error(f"{self.class_name}:{board.id} - {action} of guest {guest} of {server} failed",
+                              error=failure)
+            raise RuntimeError(f"Guest {guest} {action} failed: {failure}")
 
     def _replant(self, event: CtfEventModel, board: CtfBoardModel, server: str) -> None:
         FlagPlanter(event, env_dict=self.env_dict, db=self.db).plant(board, [server])

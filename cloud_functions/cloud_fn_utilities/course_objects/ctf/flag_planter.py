@@ -7,15 +7,15 @@ from typing import Callable, Dict, List, Optional, Union
 
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections
 from common.exceptions import BadRequest, NotFound
-from common.models.agoge import CtfBoardModel, CtfEventModel, CtfFlagSpecModel
+from common.models.agoge import CtfBoardModel, CtfEventModel, CtfFlagSpecModel, CtfNestedGuestSpecModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.ctf_flags import derive_flag_value
 from common.utilities.ctf_plant_contract import (
     GUEST_ATTRIBUTE_ACK_KEY, GUEST_ATTRIBUTE_ACK_PATH, GUEST_ATTRIBUTE_NAMESPACE, GUEST_ATTRIBUTE_PATH,
     GUEST_ATTRIBUTE_RESULT_KEY, GUEST_ATTRIBUTES_ENABLE_KEY, GUEST_ATTRIBUTES_ENABLE_VALUE, LOCATION_PATH_PATTERNS,
     MAX_RESULT_MESSAGE_LENGTH, NESTED_CONFIRM_TIMEOUT_SECONDS, PLANT_METADATA_KEY, PLANT_PAYLOAD_MAX_BYTES,
-    RELAY_BUDGET_SECONDS, RESULT_ERROR, RESULT_OK, WATCHER_ACK_SECONDS, guest_result_key, guest_result_path,
-    parse_plant_result
+    PRISTINE_SNAPSHOT_NAME, RELAY_BUDGET_SECONDS, RESULT_ERROR, RESULT_OK, WATCHER_ACK_SECONDS, guest_result_key,
+    guest_result_path, parse_plant_result
 )
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.id_generator import IdGenerator
@@ -210,10 +210,10 @@ agoge_ctf_virsh() {{
 agoge_ctf_guest_result() {{
   curl -s -X PUT -H "Metadata-Flavor: Google" --data "$3" "$2"
 }}
-# guest domain result_url exec_command
+# guest domain result_url exec_command [deadline]
 agoge_ctf_relay_qemu() {{
   local guest="$1" domain="$2" url="$3" exec_command="$4"
-  local deadline=$((SECONDS + {budget}))
+  local deadline="${{5:-$((SECONDS + {budget}))}}"
   local reply pid out line
   if ! command -v virsh >/dev/null 2>&1; then
     agoge_ctf_guest_result "$guest" "$url" "{error}:$agoge_ctf_nonce:$guest: virsh is not available"
@@ -258,6 +258,33 @@ agoge_ctf_relay_qemu() {{
   esac
   agoge_ctf_guest_result "$guest" "$url" "${{line:0:{max_line}}}"
 }}
+# Guest host rebuild: revert to the pristine snapshot, then relay as above inside the same budget. Domain and
+# snapshot names are the only virsh arguments; neither is secret.
+# guest domain result_url exec_command
+agoge_ctf_rebuild_qemu() {{
+  local guest="$1" domain="$2" url="$3" exec_command="$4"
+  local deadline=$((SECONDS + {budget}))
+  if ! command -v virsh >/dev/null 2>&1; then
+    agoge_ctf_guest_result "$guest" "$url" "{error}:$agoge_ctf_nonce:$guest: virsh is not available"
+    return
+  fi
+  if ! timeout {virsh_timeout} virsh -q snapshot-info "$domain" {snapshot}; then
+    agoge_ctf_guest_result "$guest" "$url" "{error}:$agoge_ctf_nonce:$guest: no {snapshot} snapshot"
+    return
+  fi
+  if ! timeout {revert_timeout} virsh -q snapshot-revert "$domain" {snapshot} --running; then
+    agoge_ctf_guest_result "$guest" "$url" "{error}:$agoge_ctf_nonce:$guest: snapshot revert failed"
+    return
+  fi
+  agoge_ctf_relay_qemu "$guest" "$domain" "$url" "$exec_command" "$deadline"
+}}
+"""
+
+# Guest host restart and flagless rebuild (Host reset modes on a guest): one virsh action on the parent, whose
+# outcome is reported through the parent's own plant-result. {checks} is one `elif ! <virsh call>` per step.
+_LINUX_GUEST_ACTION = """if ! command -v virsh >/dev/null 2>&1; then
+  agoge_ctf_fail {not_available}
+{checks}fi
 """
 
 # Fixed bootstrap the relay starts in a Windows guest with -EncodedCommand: reads the guest payload from
@@ -282,6 +309,9 @@ _RELAY_VIRSH_TIMEOUT_SECONDS = 30
 _RELAY_AGENT_TIMEOUT_SECONDS = 10
 _RELAY_PING_INTERVAL_SECONDS = 5
 _RELAY_STATUS_INTERVAL_SECONDS = 2
+# An internal snapshot revert restores the guest's memory, which can take minutes for a large Windows guest
+_RELAY_REVERT_TIMEOUT_SECONDS = 180
+GUEST_ACTIONS = ('restart', 'revert')
 
 
 def board_servers(event: CtfEventModel, board: CtfBoardModel) -> List[str]:
@@ -309,6 +339,7 @@ class FlagPlanter:
     MSG_BAD_PAYLOAD = "Could not build the plant payload"
     MSG_DELIVERY = "Could not deliver the plant payload"
     MSG_ABORTED = "Plant aborted by an internal error"
+    MSG_ACTION_ERROR = "Guest action reported an error"
 
     def __init__(
         self,
@@ -357,7 +388,8 @@ class FlagPlanter:
         self,
         board: Union[CtfBoardModel, dict],
         servers: List[str],
-        guest: Optional[str] = None
+        guest: Optional[str] = None,
+        revert: bool = False
     ) -> CtfBoardModel:
         """
         Plants the board's flags on each named spec server (Plant procedure, PRD): payload on every server
@@ -371,7 +403,10 @@ class FlagPlanter:
         plant never resets and fails its flags instead. With `guest` set, only that guest's flags are
         targeted, and servers that do not declare it are skipped. Each flag takes its status from its own
         result key: plant-result-<guest> for a guest flag, plant-result for a parent or plain-server flag.
+        `revert` (guest host rebuild) reverts that guest to its pristine snapshot before relaying its flags.
         """
+        if revert and guest is None:
+            raise ValueError("A snapshot revert needs a guest.")
         if not isinstance(board, CtfBoardModel):
             board = ModelValidator(model=CtfBoardModel, log_location=LoggerNames.CLOUD_FN).load(data=board)
         # server -> {result key: board flag ids reported by that key}; servers with none are skipped
@@ -401,7 +436,7 @@ class FlagPlanter:
                 instance_name = self._instance_name(board, server)
                 failure = self._deliver(
                     board, server, instance_name, nonce, seed, written,
-                    guest=guest, reset=not self._is_nested_host(server)
+                    guest=guest, reset=not self._is_nested_host(server), revert=revert
                 )
                 if failure:
                     board = self._record(board, {fid: self._failed(failure) for fid in flag_ids})
@@ -434,6 +469,92 @@ class FlagPlanter:
             return board
         stale = {'plant_status': 'stale', 'planted_at': None, 'plant_error': None}
         return self._record(board, {fid: dict(stale) for fid in flag_ids})
+
+    def run_guest_action(self, board: Union[CtfBoardModel, dict], server: str, guest: str, action: str) -> Optional[str]:
+        """
+        Runs one GUEST_ACTIONS action on a declared guest of a nested host through its plant watcher (Host reset
+        modes on a guest: `restart`, and `revert` for a rebuild of a guest the board has no flags on). The payload
+        holds no flag value and no flag status changes. The instance is never reset, stopped or started, so an
+        un-acked payload fails instead. Returns None once plant-result reports ok, otherwise the failure message.
+        The plant key is removed in a `finally`. Raises BadRequest for an undeclared guest.
+        """
+        if not isinstance(board, CtfBoardModel):
+            board = ModelValidator(model=CtfBoardModel, log_location=LoggerNames.CLOUD_FN).load(data=board)
+        nonce = IdGenerator.uuid()
+        payload = self.build_guest_action_payload(server, guest, action, nonce)
+        instance_name = self._instance_name(board, server)
+        try:
+            instance = self.compute_api.get(instance_name)
+        except NotFound:
+            return self.MSG_NOT_FOUND
+        if str(getattr(instance, 'status', '')).upper() != 'RUNNING':
+            return self.MSG_NOT_RUNNING
+        # The finally covers the write itself: a failed or timed-out write may still have landed
+        try:
+            try:
+                self.compute_api.set_metadata(
+                    instance_name,
+                    items={PLANT_METADATA_KEY: payload, GUEST_ATTRIBUTES_ENABLE_KEY: GUEST_ATTRIBUTES_ENABLE_VALUE}
+                )
+            except Exception as e:
+                self.logger.error(
+                    f"{self.class_name}:{board.id} - {self.MSG_DELIVERY} to {instance_name}", error=type(e).__name__
+                )
+                return self.MSG_DELIVERY
+            return self._await_action(board, instance_name, nonce)
+        finally:
+            try:
+                self.compute_api.set_metadata(instance_name, remove=[PLANT_METADATA_KEY])
+            except Exception as e:
+                self.logger.error(
+                    f"{self.class_name}:{board.id} - could not remove {PLANT_METADATA_KEY} from {instance_name}",
+                    error=type(e).__name__
+                )
+
+    def _await_action(self, board: CtfBoardModel, instance_name: str, nonce: str) -> Optional[str]:
+        """Polls for plant-ack within WATCHER_ACK_SECONDS, then for plant-result within the nested window."""
+        ack_deadline = time.monotonic() + WATCHER_ACK_SECONDS
+        deadline = ack_deadline + NESTED_CONFIRM_TIMEOUT_SECONDS
+        acked = False
+        while True:
+            now = time.monotonic()
+            if not acked and now >= ack_deadline:
+                self.logger.warning(f"{self.class_name}:{board.id} - no plant ack from {instance_name}")
+                return self.MSG_NO_WATCHER
+            if now >= deadline:
+                return self.MSG_NESTED_TIMEOUT
+            time.sleep(self.ACK_POLL_INTERVAL_SECONDS)
+            try:
+                attributes = self.compute_api.get_guest_attributes(instance_name, query_path=GUEST_ATTRIBUTE_NAMESPACE)
+            except NotFound:
+                return self.MSG_NOT_FOUND
+            except Exception as e:
+                # Transient API errors keep polling until the deadline
+                self.logger.warning(f"{self.class_name}:{board.id} - guest attribute poll failed", error=type(e).__name__)
+                continue
+            acked = acked or attributes.get(GUEST_ATTRIBUTE_ACK_KEY) == nonce
+            result = parse_plant_result(attributes.get(GUEST_ATTRIBUTE_RESULT_KEY), nonce)
+            if result is not None:
+                status, message = result
+                return None if status == RESULT_OK else (message or self.MSG_ACTION_ERROR)
+
+    def build_guest_action_payload(self, server: str, guest: str, action: str, nonce: str) -> str:
+        """
+        The nested host payload for one guest action: ack first, the virsh action on the parent, then plant-result
+        reporting its outcome. Raises ValueError for an unknown action and BadRequest for an undeclared guest.
+        """
+        if action not in GUEST_ACTIONS:
+            raise ValueError(f"Unsupported guest action: {action}")
+        if not re.fullmatch(_NONCE_PATTERN, str(nonce)):
+            raise BadRequest(f"{self.class_name}:{self.event.id} - Invalid plant nonce")
+        declared = next((g for g in self.event.spec.nested_guests if g.server == server and g.name == guest), None)
+        if declared is None:
+            raise BadRequest(
+                f"{self.class_name}:{self.event.id} - Guest '{guest}' is not declared on server '{server}'"
+            )
+        payload = self._linux_payload([], nonce, actions=[self._linux_guest_action(declared, action)])
+        self._check_size(payload)
+        return payload
 
     def _board_flags_on(self, board: CtfBoardModel, server: str) -> List[CtfFlagSpecModel]:
         board_flag_ids = {flag.flag_id for flag in board.flags}
@@ -479,7 +600,9 @@ class FlagPlanter:
         except Exception as e:
             self.logger.error(f"{self.class_name}:{board.id} - could not mark aborted flags failed", error=type(e).__name__)
 
-    def _deliver(self, board, server, instance_name, nonce, seed, written, guest=None, reset=True) -> Optional[str]:
+    def _deliver(
+        self, board, server, instance_name, nonce, seed, written, guest=None, reset=True, revert=False
+    ) -> Optional[str]:
         """
         Steps 3-4: payload into metadata, then reset unless `reset` is False (a nested host's watcher runs
         it instead). Returns a failure message, or None on success.
@@ -491,7 +614,7 @@ class FlagPlanter:
         if str(getattr(instance, 'status', '')).upper() != 'RUNNING':
             return self.MSG_NOT_RUNNING
         try:
-            payload = self.build_payload(board, server, nonce, seed, guest=guest)
+            payload = self.build_payload(board, server, nonce, seed, guest=guest, revert=revert)
         except (BadRequest, ValueError) as e:
             # BadRequest messages carry flag ids only, never a value
             self.logger.error(f"{self.class_name}:{board.id} - {self.MSG_BAD_PAYLOAD} for '{server}'", error=str(e))
@@ -670,13 +793,15 @@ class FlagPlanter:
         server: str,
         nonce: str,
         seed: str,
-        guest: Optional[str] = None
+        guest: Optional[str] = None,
+        revert: bool = False
     ) -> str:
         """
         Returns the bash (Linux) or PowerShell (Windows) script that writes this board's flags for one
         server, idempotently, and reports ok:<nonce> or error:<nonce>:<message> to the guest attribute.
         A server with nested_guests gets the nested host payload instead (_nested_host_payload); `guest`
-        limits that payload to one guest's relay section, and is rejected for any other server.
+        limits that payload to one guest's relay section, and is rejected for any other server; `revert`
+        (guest only) reverts that guest to its pristine snapshot first.
         Raises BadRequest if the server has no flags on the board, any interpolated string fails its
         Flag Location Formats pattern, or the payload exceeds the metadata size limit.
         """
@@ -687,15 +812,20 @@ class FlagPlanter:
         if not re.fullmatch(_NONCE_PATTERN, str(nonce)):
             raise BadRequest(f"{self.class_name}:{self.event.id} - Invalid plant nonce")
 
+        if revert and guest is None:
+            raise BadRequest(f"{self.class_name}:{self.event.id} - A snapshot revert needs a guest")
         if self._is_nested_host(server):
-            payload = self._nested_host_payload(board, server, nonce, seed, guest=guest)
+            payload = self._nested_host_payload(board, server, nonce, seed, guest=guest, revert=revert)
         elif guest is not None:
             raise BadRequest(f"{self.class_name}:{self.event.id} - Server '{server}' has no nested guests")
         else:
             payload = self._server_payload(board, server, nonce, seed)
+        self._check_size(payload)
+        return payload
+
+    def _check_size(self, payload: str) -> None:
         if len(payload.encode('utf-8')) > PLANT_PAYLOAD_MAX_BYTES:
             raise BadRequest(f"{self.class_name}:{self.event.id} - Plant payload exceeds the metadata size limit")
-        return payload
 
     def _server_payload(self, board: CtfBoardModel, server: str, nonce: str, seed: str) -> str:
         flags = self._server_flags(board, server)
@@ -755,7 +885,8 @@ class FlagPlanter:
         return self._linux_payload(planted, nonce, guest=True)
 
     def _nested_host_payload(
-        self, board: CtfBoardModel, server: str, nonce: str, seed: str, guest: Optional[str] = None
+        self, board: CtfBoardModel, server: str, nonce: str, seed: str, guest: Optional[str] = None,
+        revert: bool = False
     ) -> str:
         """
         Parent payload for a nested host (Nested Guest Contract): ack first, then the parent's own flags,
@@ -779,7 +910,7 @@ class FlagPlanter:
                 f"{self.class_name}:{self.event.id} - Flags on nested host '{server}' must be linux"
             )
         relays = [(g, self.build_guest_payload(board, server, g.name, nonce, seed)) for g in guests]
-        return self._linux_payload(self._planted(board, parent_flags, seed), nonce, relays=relays)
+        return self._linux_payload(self._planted(board, parent_flags, seed), nonce, relays=relays, revert=revert)
 
     def _planted(self, board: CtfBoardModel, flags: List[CtfFlagSpecModel], seed: str) -> list:
         """(flag, value) pairs, each path and derived value checked against its pattern before interpolation."""
@@ -820,13 +951,21 @@ class FlagPlanter:
                 raise BadRequest(f"{self.class_name}:{self.event.id} - Flag {flag.id} has an invalid windows_user")
 
     @staticmethod
-    def _linux_payload(planted: list, nonce: str, guest: bool = False, relays: Optional[list] = None) -> str:
-        """`relays` (nested host only) is a list of (guest spec, guest payload) to relay after the placements."""
+    def _linux_payload(
+        planted: list, nonce: str, guest: bool = False, relays: Optional[list] = None, revert: bool = False,
+        actions: Optional[List[str]] = None
+    ) -> str:
+        """
+        `relays` (nested host only) is a list of (guest spec, guest payload) to relay after the placements, each
+        reverted to its pristine snapshot first when `revert` is set. `actions` (nested host only) are guest
+        action sections (_linux_guest_action) whose failures are reported through plant-result.
+        """
         q = shlex.quote
         ack = _LINUX_ACK.format(nonce=q(nonce), url=q(_GUEST_ATTRIBUTES_URL + GUEST_ATTRIBUTE_ACK_PATH))
         lines = [_LINUX_PROLOGUE.format(
             nonce=q(nonce), env_file=q(LINUX_ENVIRONMENT_FILE), metadata_ip=_METADATA_SERVER_IP,
-            save_stdout=_LINUX_GUEST_SAVE_STDOUT if guest else '', ack=ack if relays is not None else ''
+            save_stdout=_LINUX_GUEST_SAVE_STDOUT if guest else '',
+            ack=ack if relays is not None or actions is not None else ''
         )]
         for flag, value in planted:
             if flag.location_type == 'file':
@@ -838,7 +977,8 @@ class FlagPlanter:
             else:
                 lines.append(f"agoge_ctf_plant_env {q(flag.path)} {q(value)} {q(flag.id)}")
         if relays:
-            lines.append(FlagPlanter._linux_relays(relays))
+            lines.append(FlagPlanter._linux_relays(relays, revert=revert))
+        lines.extend(actions or [])
         epilogue = _LINUX_GUEST_EPILOGUE if guest else _LINUX_EPILOGUE
         lines.append(epilogue.format(
             ok=RESULT_OK, error=RESULT_ERROR, max_message=MAX_RESULT_MESSAGE_LENGTH, url=q(_GUEST_ATTRIBUTE_URL)
@@ -846,7 +986,7 @@ class FlagPlanter:
         return "\n".join(lines)
 
     @staticmethod
-    def _linux_relays(relays: list) -> str:
+    def _linux_relays(relays: list, revert: bool = False) -> str:
         """The relay functions, one background section per guest, and the wait that precedes plant-result."""
         q = shlex.quote
         compact = {'separators': (',', ':')}
@@ -856,6 +996,7 @@ class FlagPlanter:
             virsh_timeout=_RELAY_VIRSH_TIMEOUT_SECONDS, agent_timeout=_RELAY_AGENT_TIMEOUT_SECONDS,
             budget=RELAY_BUDGET_SECONDS, ping_interval=_RELAY_PING_INTERVAL_SECONDS,
             status_interval=_RELAY_STATUS_INTERVAL_SECONDS, ok=RESULT_OK, error=RESULT_ERROR,
+            revert_timeout=_RELAY_REVERT_TIMEOUT_SECONDS, snapshot=q(PRISTINE_SNAPSHOT_NAME),
             # error:<nonce>:<message>, with the longest nonce _NONCE_PATTERN allows
             max_line=len(RESULT_ERROR) + 64 + MAX_RESULT_MESSAGE_LENGTH + 2
         )]
@@ -874,10 +1015,31 @@ class FlagPlanter:
                 raise BadRequest(f"Relay request for guest '{guest.name}' cannot be quoted")
             exec_command = f"qemu-agent-command {guest.domain} '{request}' --timeout {_RELAY_AGENT_TIMEOUT_SECONDS}"
             url = _GUEST_ATTRIBUTES_URL + guest_result_path(guest.name)
-            lines.append(f"agoge_ctf_relay_qemu {q(guest.name)} {q(guest.domain)} {q(url)} {q(exec_command)} &")
+            relay = 'agoge_ctf_rebuild_qemu' if revert else 'agoge_ctf_relay_qemu'
+            lines.append(f"{relay} {q(guest.name)} {q(guest.domain)} {q(url)} {q(exec_command)} &")
         # plant-result (the epilogue) is written only once every guest section has written its own key
         lines.append("wait\n")
         return "\n".join(lines)
+
+    @staticmethod
+    def _linux_guest_action(guest: CtfNestedGuestSpecModel, action: str) -> str:
+        """One guest action section: `restart` is `virsh reboot`, `revert` a pristine snapshot revert."""
+        q = shlex.quote
+        domain, snapshot = q(guest.domain), q(PRISTINE_SNAPSHOT_NAME)
+        if action == 'restart':
+            steps = [(f"timeout {_RELAY_VIRSH_TIMEOUT_SECONDS} virsh -q reboot {domain}",
+                      f"{guest.name}: guest reboot failed")]
+        elif action == 'revert':
+            steps = [
+                (f"timeout {_RELAY_VIRSH_TIMEOUT_SECONDS} virsh -q snapshot-info {domain} {snapshot}",
+                 f"{guest.name}: no {PRISTINE_SNAPSHOT_NAME} snapshot"),
+                (f"timeout {_RELAY_REVERT_TIMEOUT_SECONDS} virsh -q snapshot-revert {domain} {snapshot} --running",
+                 f"{guest.name}: snapshot revert failed"),
+            ]
+        else:
+            raise ValueError(f"Unsupported guest action: {action}")
+        checks = ''.join(f"elif ! {command}; then\n  agoge_ctf_fail {q(message)}\n" for command, message in steps)
+        return _LINUX_GUEST_ACTION.format(not_available=q(f"{guest.name}: virsh is not available"), checks=checks)
 
     @staticmethod
     def _windows_payload(planted: list, nonce: str, guest: bool = False) -> str:
