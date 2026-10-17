@@ -88,9 +88,22 @@ def build_secrets(spec: NestedHostSpecModel, product_keys: Optional[Dict[str, st
     return secrets
 
 
-def render_secrets(spec: NestedHostSpecModel, product_keys: Optional[Dict[str, str]] = None) -> str:
-    """Return the `agoge-nested-secrets` JSON."""
-    return _bounded_json(build_secrets(spec, product_keys), 'agoge-nested-secrets', "use fewer guests")
+def render_secrets(spec: NestedHostSpecModel, product_keys: Optional[Dict[str, str]] = None,
+                   catalog: Optional[Dict[str, NestedOsCatalogModel]] = None) -> str:
+    """Return the `agoge-nested-secrets` JSON.
+
+    :param catalog: catalog entries by entry id. When given, each unattended Windows guest also gets
+        its rendered `autounattend` XML, which holds its password and so cannot go in the manifest.
+    """
+    secrets = build_secrets(spec, product_keys)
+    if catalog is not None:
+        for guest in spec.guests:
+            entry = catalog.get(guest.os_id)
+            if entry is None:
+                raise ValueError(f"guest {guest.name}: no catalog entry {guest.os_id}")
+            if entry.install_method == 'unattended_iso' and entry.family == 'windows':
+                secrets[guest.name]['autounattend'] = render_autounattend(guest, entry, secrets, spec.networks)
+    return _bounded_json(secrets, 'agoge-nested-secrets', "use fewer guests")
 
 
 def render_autounattend(guest: NestedGuestModel, entry: NestedOsCatalogModel, secrets: Dict[str, Dict[str, str]],

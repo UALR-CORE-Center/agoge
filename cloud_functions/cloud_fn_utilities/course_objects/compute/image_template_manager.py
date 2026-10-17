@@ -1,15 +1,15 @@
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Union, Any
 
-from common.constants.google import ImageSource
+from common.constants.google import ImageProjects, ImageSource
 from common.constants.nested import ENABLE_VMX_LICENSE
 from common.constants.states import ImageStatus, ServerStates
 from common.constants.pub_sub import PubSub
 from common.constants.database import DbCollections, DATABASE_NAME, DatabaseTypes, DbOperators
 from common.document_database import DocumentDatabaseFactory, DatabaseQueries
 from common.exceptions import Conflict, NotFound, BaseAgogeException, BadRequest, OperationTimeout
-from common.models.agoge import AgogeImageModel
+from common.models.agoge import AgogeImageModel, NestedHostSpecModel, NestedMediaModel, NestedOsCatalogModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
@@ -18,9 +18,11 @@ from common.utilities.gcp.compute.image_compatibility import compatible_boot_ima
 from common.utilities.gcp.compute.image_ownership import image_source, image_source_project, is_shared_image
 from common.utilities.gcp.compute.resources.network_interface_resource import NetworkInterfaceResource
 from common.utilities.gcp.compute.resources.image_resource import ImageResource
+from common.utilities.nested_manifest import render_manifest, render_secrets
 
 from cloud_fn_utilities.gcp.dns_manager import DnsManager
 from cloud_fn_utilities.server_specific.agoge_user_startup_script import AgogeUserStartupScript, MetadataKey
+from cloud_fn_utilities.server_specific.nested_scripts import render_builder_bootstrap
 
 from .base_compute_manager import BaseComputeManager
 from .snapshot_manager import SnapshotManager
@@ -89,6 +91,9 @@ class ImageTemplateManager(BaseComputeManager):
         self.db_query = DatabaseQueries(db=self.db)
         self.collection = DbCollections.IMAGE
         self.state_manager = ImageStateManager()
+        # Set by _prepare_nested_check_out for a record with `nested`; merged by _add_metadata.
+        self.nested_metadata = []
+        self.nested_bootstrap = None
 
     @property
     def dns_record(self) -> str:
@@ -165,16 +170,20 @@ class ImageTemplateManager(BaseComputeManager):
         # Publish the new source only after image creation and verification.
         self._update_record_status(ImageStatus.CHECKED_IN, image_created=True)
 
-    def check_out(self) -> None:
+    def check_out(self, product_keys: dict = None) -> None:
         """
         Build a compute instance using the given compute image.
         If successful, image is reserved for changes by the requesting user
         until checked-in (released)
+
+        Args:
+            product_keys: guest -> Windows product key for a nested host's first build. Never persisted.
         """
         self._require_image_management()
+        nested_phase = self._prepare_nested_check_out(product_keys)
         self.build()
 
-        self._update_record_status(ImageStatus.CHECKED_OUT)
+        self._update_record_status(ImageStatus.CHECKED_OUT, nested_phase=nested_phase)
 
     def start_server(self) -> None:
         self._require_image_management()
@@ -456,6 +465,70 @@ class ImageTemplateManager(BaseComputeManager):
             licenses=[ENABLE_VMX_LICENSE] if getattr(self, 'nested_host', False) else None,
         )
 
+    def _prepare_nested_check_out(self, product_keys: dict = None) -> str | None:
+        """Point a nested host's template server at its first build or at its finalized image.
+
+        Returns the `nested_build.phase` to record after the build, or None for a standard image.
+        """
+        record = self.db.get(collection_name=self.collection, doc_id=self.server_name)
+        if not record or not record.get('nested'):
+            return None
+        phase = (record.get('nested_build') or {}).get('phase', 'queued')
+        # The builder and the build monitor report through guest attributes on both paths.
+        self.nested_metadata = [{'key': 'enable-guest-attributes', 'value': 'TRUE'}]
+        if phase == 'finalized':
+            # The image already holds the installed guests, so nothing is rebuilt: the record's
+            # self_link (image-<name> since check-in) and machine_type stand, and no manifest is sent.
+            return phase
+        # provisioning too: a duplicate Pub/Sub delivery of the first check-out must reconcile, not fail.
+        if phase not in ('queued', 'provisioning'):
+            raise Conflict(
+                f'Nested image {self.image_name} is in build phase {phase}. Only a queued build or a '
+                'finalized image can be checked out.'
+            )
+        try:
+            spec = ModelValidator(NestedHostSpecModel, log_location=self.log_name).load(record['nested'])
+            catalog, media = self._nested_sources(spec)
+            manifest = render_manifest(spec, catalog, media)
+            secrets = render_secrets(spec, product_keys, catalog)
+        except (BaseAgogeException, ValueError) as error:
+            self.logger.error(f'{self.class_name}:{self.server_name} - Cannot render the nested build: {error}')
+            self._fail_nested_build(record, str(error))
+            raise
+        self.server_spec.self_link = f'projects/{ImageProjects.DEBIAN}/global/images/family/{spec.parent_os}'
+        self.server_spec.machine_type = spec.build_machine_type
+        self.nested_metadata += [
+            {'key': 'agoge-nested-manifest', 'value': manifest},
+            {'key': 'agoge-nested-secrets', 'value': secrets},
+        ]
+        self.nested_bootstrap = render_builder_bootstrap()
+        return 'provisioning'
+
+    def _nested_sources(
+        self,
+        spec: NestedHostSpecModel,
+    ) -> tuple[dict[str, NestedOsCatalogModel], dict[str, NestedMediaModel]]:
+        """Read the catalog entries and uploaded media the spec's guests name."""
+        catalog, media = {}, {}
+        for guest in spec.guests:
+            if guest.os_id not in catalog:
+                if not (entry := self.db.get(collection_name=DbCollections.NESTED_OS_CATALOG, doc_id=guest.os_id)):
+                    raise NotFound(f'guest {guest.name}: no catalog entry {guest.os_id}')
+                catalog[guest.os_id] = ModelValidator(NestedOsCatalogModel, log_location=self.log_name).load(entry)
+            if guest.media_id and guest.media_id not in media:
+                if not (medium := self.db.get(collection_name=DbCollections.NESTED_MEDIA, doc_id=guest.media_id)):
+                    raise NotFound(f'guest {guest.name}: no uploaded medium {guest.media_id}')
+                media[guest.media_id] = ModelValidator(NestedMediaModel, log_location=self.log_name).load(medium)
+        return catalog, media
+
+    def _fail_nested_build(self, record: dict, message: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        record['nested_build'] = {
+            **(record.get('nested_build') or {}), 'phase': 'failed', 'message': message[:200], 'updated_at': now,
+        }
+        if ModelValidator(AgogeImageModel, log_location=self.log_name).load(record):
+            self.db.update(collection_name=self.collection, doc_id=self.server_name, data=record)
+
     def _add_disks(self):
         try:
             source_image = compatible_boot_image(
@@ -537,6 +610,8 @@ class ImageTemplateManager(BaseComputeManager):
             if startup_script := self._generate_startup_script(connections):
                 metadata_key, script = startup_script
                 self._merge_metadata_item(metadata['items'], {"key": metadata_key, "value": script})
+        if bootstrap := getattr(self, 'nested_bootstrap', None):
+            self._merge_metadata_item(metadata['items'], {"key": "startup-script", "value": bootstrap})
         if self.server_spec.startup_script:
             # Merged, not appended: a Linux user script shares the startup-script key (Working Note 21).
             self._merge_metadata_item(
@@ -545,6 +620,8 @@ class ImageTemplateManager(BaseComputeManager):
             )
         if self.server_spec.ssh_keys:
             self._merge_metadata_item(metadata['items'], {"key": "ssh-keys", "value": self._ssh_keys()})
+        for item in getattr(self, 'nested_metadata', None) or []:
+            self._merge_metadata_item(metadata['items'], dict(item))
         self.server_spec.metadata = metadata
 
     def _add_nics(self) -> None:
@@ -604,6 +681,7 @@ class ImageTemplateManager(BaseComputeManager):
         self,
         status: ImageStatus = ImageStatus.CHECKED_OUT,
         image_created: bool = False,
+        nested_phase: str = None,
     ) -> None:
         """Updates image status and state.
         Resets image record to default state if image is marked as checked-in.
@@ -611,6 +689,7 @@ class ImageTemplateManager(BaseComputeManager):
         Args:
             status (ImageStatus): Status of current image
             image_created (bool): A new production image was successfully created and verified.
+            nested_phase (str): The `nested_build.phase` a nested host's check-out reached.
         """
         db_image = self.db.get(collection_name=self.collection, doc_id=self.server_name)
 
@@ -622,6 +701,15 @@ class ImageTemplateManager(BaseComputeManager):
             db_image['image'] = self.image_name
             db_image['in_use_by'] = self.user
             db_image['dns_record'] = self.dns_record
+            if nested_phase:
+                build = dict(db_image.get('nested_build') or {})
+                now = datetime.now(timezone.utc).isoformat()
+                if build.get('phase') != nested_phase:
+                    build['phase'] = nested_phase
+                    build['updated_at'] = now
+                if nested_phase == 'provisioning' and not build.get('started_at'):
+                    build['started_at'] = now
+                db_image['nested_build'] = build
         elif status == ImageStatus.CHECKED_IN:
             db_image['status'] = status.value
             db_image['state'] = ServerStates.START.value
