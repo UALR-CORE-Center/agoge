@@ -159,7 +159,9 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V3** License on check-in — spec + done-when at PRD.md:1665
 - [x] **V4** Template startup-script merge — spec + done-when at PRD.md:1667
 - [x] **V5** Models and constants — spec + done-when at PRD.md:1669 (`common/constants/nested.py` already exists from V2 with `NESTED_MACHINE_FAMILIES`, `NESTED_MAX_MACHINE_MEMORY_MB`, `STANDARD_MAX_MACHINE_MEMORY_MB`; extend it)
-- [ ] **V6** OS catalog and seeding — spec + done-when at PRD.md:1671 — **BLOCKED (iteration 95):** its done-when needs Open Question V-5 answered first, and V-5 is human research. Microsoft Evaluation Center does not publish SHA-256 values, so each eval ISO (Server 2016/2019/2025, Windows 10/11 Enterprise) must be downloaded and hashed by a person. The Kali cloud image URL and format still need to be confirmed. The loop must not invent hashes. Unblock by recording V-5's answers (URL + sha256 per entry) in progress.md.
+- [ ] **V6** OS catalog and seeding — spec + done-when at PRD.md:1671 — **BLOCKED (iteration 95):** its done-when needs Open Question V-5 answered first, and V-5 is human research. Microsoft Evaluation Center does not publish SHA-256 values, so each eval ISO (Server 2016/2019/2025, Windows 10/11 Enterprise) must be downloaded and hashed by a person. The Kali cloud image URL and format still need to be confirmed. The loop must not invent hashes. Unblock by recording V-5's answers (URL + sha256 per entry) in progress.md. **Split in iteration 115** into V6a and V6b below; V6 closes when V6b does.
+  - [x] **V6a** (iteration 115) The sync setup operation **Synchronize Nested Guest OS Catalog** (`nested_os_catalog_sync.py`, option 25), plus `common/data/nested_os_catalog.json` holding the 19 upload-only entries that need no V-5 answer: Windows Vista–11 and Server 2008–2025 (licensed, `unattended_iso`), XP/2003 (`manual_iso` and `disk_image`), and custom ISO/disk. Tests cover every V6 done-when rule except V-5.
+  - [ ] **V6b** Add the downloadable entries to the JSON: the Kali cloud image and the Kali QEMU VM, the Debian, Ubuntu, Fedora, Rocky, Alma, CentOS, openSUSE, Arch and Alpine cloud images, Metasploitable 2, the Server 2016–2025 and Windows 10/11 Enterprise evaluations, and pfSense, OPNsense, VyOS and Security Onion. Each needs a pinned `https` URL and its SHA-256. **BLOCKED on V-5** for the Microsoft and Kali entries: a person must download and hash them. The Linux images and appliances also need pinned, dated releases with published hashes, not `current/` URLs whose hashes rotate. `test_nested_os_catalog_sync.py` already checks the https/SHA-256 and Microsoft-host rules for any entry added.
 - [x] **V7** Nested host validator — spec + done-when at PRD.md:1673
 - [x] **V8** Manifest and unattend rendering — spec + done-when at PRD.md:1675
 - [x] **V9** Builder script — spec + done-when at PRD.md:1677 (must install the V10 runtime from `nested_scripts.render_runtime()`/`render_runtime_unit()` and write `/etc/agoge-nested/host.json` in the shape `runtime.sh` documents; see iteration 97)
@@ -2111,3 +2113,26 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - CTF ESLint gate: exit 0. CTF tsc gate: 0 CTF matches (repo-wide tsc exits 2 on pre-existing errors).
   - Group V ESLint gate: exit 0. Group V tsc gate: 0 matches.
 - **Reopened:** none.
+
+### Iteration 115 — 2026-10-17
+- **Diagnosis:** iterations 40 and 41 of this run made no commit. Every open item was BLOCKED (V6) or human-only (I4b, V25, HUMAN), and both iterations stopped without changing anything. V6 had been treated as all-or-nothing. But the sync operation and the upload-only entries depend on no V-5 answer: under the contract a `requires_upload` entry has no URL and no hash. So I split V6 into V6a, done here, and V6b, which stays BLOCKED on V-5.
+- **Completed:** V6a.
+  - `build_files/cloud_deployment/operations/images_and_specs/nested_os_catalog_sync.py` (`NestedOsCatalogSync`) has the four menu edits (`SetupOptions.NESTED_OS_CATALOG = 25`, Server Images & Build Specs).
+    - It validates the JSON and rejects repeated ids.
+    - It upserts by id, keeping a stored boolean `is_enabled`, and writes only entries whose stored document differs. A second sync therefore writes nothing.
+    - It never deletes entries missing from the JSON.
+  - `common/data/nested_os_catalog.json` has 19 upload-only entries.
+- **Learned:**
+  - The current stable virtio-win (stable-virtio redirect, 2026-10-17) is `0.1.302-1`. Its ISO has the `w10`/`w11`/`2k16`–`2k25` driver directories, which I checked by reading the ISO's first 8 MB. Win10/11 and Server 2016+ pin it. Vista–8.1 and Server 2008–2012 R2 use SATA + e1000 with `virtio_win_version: null` and `agent: false` until V-3 pins their last virtio-win release.
+  - `windows_image_index` is 1 for client and 2008/2008 R2, and 2 (Standard with GUI) for 2012+. The license note tells the instructor which index gets installed.
+  - The custom ISO/disk entries use family/group `appliance`, which gives console-only hints, and `osinfo: generic`.
+  - `test_nested_manifest.py` now also runs over the 13 JSON `unattended_iso` entries (+52 tests).
+- **Tests:** `build_files/cloud_deployment/tests/test_nested_os_catalog_sync.py` (60).
+- **Gate results:**
+  - build_files: 387 passed.
+  - cloud_functions/tests: 879 passed, coverage 94.28%.
+  - api/unit_tests: 1654 passed, coverage 97.67%.
+  - No frontend files changed.
+  - agoge-reviewer found no violations.
+- **Blockers:** V6b is BLOCKED on Open Question V-5 (Microsoft eval and Kali URLs and SHA-256s need a person). V25 and HUMAN need a person.
+- **Next:** V6b only once V-5 is answered. Its Linux and appliance entries also need pinned, dated release URLs and their published SHA-256s.

@@ -43,6 +43,7 @@ class SetupOptions(bytes, Enum):
     REFRESH_GUACAMOLE_IMAGE_AND_CERT = (12, "Refresh/Create guacamole image and certificate.")
     SYNC_PUBLIC_IMAGES = (23, "Synchronize Public OS Images")
     NESTED_MEDIA_BUCKET = (24, "Configure Nested Image Media Bucket")
+    NESTED_OS_CATALOG = (25, "Synchronize Nested Guest OS Catalog")
 
     # Environment & Quotas
     ENV = (10, "Synchronize Environment Variables")
@@ -111,6 +112,7 @@ category_menu = {
             ),
             (SetupOptions.SYNC_PUBLIC_IMAGES, SetupOptions.SYNC_PUBLIC_IMAGES.description),
             (SetupOptions.NESTED_MEDIA_BUCKET, SetupOptions.NESTED_MEDIA_BUCKET.description),
+            (SetupOptions.NESTED_OS_CATALOG, SetupOptions.NESTED_OS_CATALOG.description),
             (SetupOptions.BACK, SetupOptions.BACK.description),
         ],
     },
