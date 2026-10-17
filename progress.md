@@ -162,6 +162,10 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [ ] **V6** OS catalog and seeding — spec + done-when at PRD.md:1671 — **BLOCKED (iteration 95):** its done-when needs Open Question V-5 answered first, and V-5 is human research. Microsoft Evaluation Center does not publish SHA-256 values, so each eval ISO (Server 2016/2019/2025, Windows 10/11 Enterprise) must be downloaded and hashed by a person. The Kali cloud image URL and format still need to be confirmed. The loop must not invent hashes. Unblock by recording V-5's answers (URL + sha256 per entry) in progress.md. **Split in iteration 115** into V6a and V6b below; V6 closes when V6b does.
   - [x] **V6a** (iteration 115) The sync setup operation **Synchronize Nested Guest OS Catalog** (`nested_os_catalog_sync.py`, option 25), plus `common/data/nested_os_catalog.json` holding the 19 upload-only entries that need no V-5 answer: Windows Vista–11 and Server 2008–2025 (licensed, `unattended_iso`), XP/2003 (`manual_iso` and `disk_image`), and custom ISO/disk. Tests cover every V6 done-when rule except V-5.
   - [ ] **V6b** Add the downloadable entries to the JSON: the Kali cloud image and the Kali QEMU VM, the Debian, Ubuntu, Fedora, Rocky, Alma, CentOS, openSUSE, Arch and Alpine cloud images, Metasploitable 2, the Server 2016–2025 and Windows 10/11 Enterprise evaluations, and pfSense, OPNsense, VyOS and Security Onion. Each needs a pinned `https` URL and its SHA-256. **BLOCKED on V-5** for the Microsoft and Kali entries: a person must download and hash them. The Linux images and appliances also need pinned, dated releases with published hashes, not `current/` URLs whose hashes rotate. `test_nested_os_catalog_sync.py` already checks the https/SHA-256 and Microsoft-host rules for any entry added.
+    - [x] **V6b1** (iteration 116) Ubuntu 20.04, 22.04, 24.04 and 26.04 cloud images, pinned to dated `cloud-images.ubuntu.com/releases/<codename>/release-YYYYMMDD/` files with the SHA-256s from each release's published `SHA256SUMS`.
+    - [ ] **V6b2** The rest of V6b (Kali, Debian, Fedora/Rocky/Alma/CentOS, openSUSE/Arch/Alpine, Metasploitable 2, Microsoft evals, appliances). Microsoft and Kali stay BLOCKED on V-5. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file. Debian publishes only SHA512SUMS, so its SHA-256 must come from another source or V-5.
+- [ ] **V6c** (found in iteration 116) Ubuntu 16.04's cloud image needs `net_config: ifupdown`. But its `/etc/network/interfaces` sources only `interfaces.d/*.cfg`, so `builder.sh` `write_network_config` must write `interfaces.d/agoge.cfg`, not `interfaces.d/agoge` (Debian sources `*`, so the rename is safe there). Then add `ubuntu-16.04` (`xenial/release-20211001/ubuntu-16.04-server-cloudimg-amd64-disk1.img`, sha256 `fff2494a70bcaffb59f26f71ec49e137dd87d319341c35832dbe0ea65ff15140`).
+- [ ] **V6d** (found in iteration 116) Ubuntu 18.04 ships netplan.io 0.99 (`bionic/release-20230607` manifest), and `routes: [{to: default}]` needs netplan 0.103+. Make `builder.sh` write `to: 0.0.0.0/0`, which every netplan version accepts. Then add `ubuntu-18.04` (`bionic/release-20230607/ubuntu-18.04-server-cloudimg-amd64.img`, sha256 `8dd2e6b5e5aad20c3f836123b300cba9861249408cbb07c359145a65d6bab6b6`).
 - [x] **V7** Nested host validator — spec + done-when at PRD.md:1673
 - [x] **V8** Manifest and unattend rendering — spec + done-when at PRD.md:1675
 - [x] **V9** Builder script — spec + done-when at PRD.md:1677 (must install the V10 runtime from `nested_scripts.render_runtime()`/`render_runtime_unit()` and write `/etc/agoge-nested/host.json` in the shape `runtime.sh` documents; see iteration 97)
@@ -2136,3 +2140,21 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - agoge-reviewer found no violations.
 - **Blockers:** V6b is BLOCKED on Open Question V-5 (Microsoft eval and Kali URLs and SHA-256s need a person). V25 and HUMAN need a person.
 - **Next:** V6b only once V-5 is answered. Its Linux and appliance entries also need pinned, dated release URLs and their published SHA-256s.
+
+### Iteration 116 — 2026-10-17
+- **Diagnosis:** every open item was BLOCKED or human-only again. But V6b's Linux entries need no V-5 answer: they need only a pinned, dated URL and the publisher's published SHA-256. So I split V6b into V6b1 (done here) and V6b2 (still partly BLOCKED).
+- **Completed:** V6b1. `common/data/nested_os_catalog.json` now has 23 entries. The 4 new ones are `ubuntu-20.04`, `-22.04`, `-24.04` and `-26.04`: `cloud_image`, qcow2, netplan, agent, BIOS, and virtio disk and NIC. Each URL is a dated `releases/<codename>/release-YYYYMMDD/` file. Each SHA-256 comes from that directory's `SHA256SUMS`, fetched over https on 2026-10-17. I checked every file's magic number, and each is `QFI\xfb` (qcow2).
+- **Tests:**
+  - `test_nested_os_catalog_sync.py` adds two rules: no downloadable URL has a `current`, `latest` or `daily` path segment, and every `cloud_image` entry is a Linux disk format with an agent and a real `net_config`.
+  - `test_nested_manifest.py` renders a manifest for each seeded cloud image.
+- **Learned:**
+  - Ubuntu 16.04 and 18.04 would build but get no network config, so they are queued as V6c and V6d, each with its URL and hash.
+  - The `osinfo` ids `ubuntu24.04` and `ubuntu26.04` may be missing from Debian 12's osinfo-db. `define_domain` already falls back to `generic`.
+  - Ubuntu prunes old dated release dirs eventually, so a pinned URL can start returning 404. The guide's "could not download the media" row covers that case.
+- **Gate results:**
+  - api/unit_tests: 1654 passed, 97.67%.
+  - cloud_functions/tests: 883 passed, 94.28%.
+  - build_files: 399 passed.
+  - No frontend files changed.
+- **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. V25 and HUMAN need a person.
+- **Next:** V6d, then V6c. Both are small `builder.sh` fixes plus one catalog entry each. After them, V6b2's Fedora/Rocky/Alma entries, done like V6b1.
