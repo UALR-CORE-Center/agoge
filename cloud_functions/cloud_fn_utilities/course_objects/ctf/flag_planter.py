@@ -33,10 +33,11 @@ LINUX_ENVIRONMENT_FILE = '/etc/environment'
 
 # Shared bash prologue. All output is discarded before anything else runs (startup-script output reaches
 # the serial console and Cloud Logging), and values are only ever passed to builtins (printf), so they
-# never appear in a process argument list either.
+# never appear in a process argument list either. {save_stdout} is empty for a server payload; a guest
+# payload keeps the relay's stdout on fd 3 for its one result line (_LINUX_GUEST_SAVE_STDOUT).
 _LINUX_PROLOGUE = """#!/bin/bash
 # agoge-ctf plant payload. Never prints a flag value.
-exec >/dev/null 2>&1
+{save_stdout}exec >/dev/null 2>&1
 umask 022
 agoge_ctf_nonce={nonce}
 agoge_ctf_env_file={env_file}
@@ -74,18 +75,26 @@ agoge_ctf_plant_env() {{
 }}
 """
 
-_LINUX_EPILOGUE = """if [ -z "$agoge_ctf_errors" ]; then
+_LINUX_RESULT = """if [ -z "$agoge_ctf_errors" ]; then
   agoge_ctf_result="{ok}:$agoge_ctf_nonce"
 else
   agoge_ctf_result="{error}:$agoge_ctf_nonce:${{agoge_ctf_errors:0:{max_message}}}"
 fi
-curl -s -X PUT -H "Metadata-Flavor: Google" --data "$agoge_ctf_result" {url}
+"""
+
+_LINUX_EPILOGUE = _LINUX_RESULT + """curl -s -X PUT -H "Metadata-Flavor: Google" --data "$agoge_ctf_result" {url}
+"""
+
+# Guest payload (Nested Guest Contract): no guest attributes exist inside a nested guest, so the result line
+# goes to the stdout saved on fd 3, which the parent's relay reads back as guest-exec out-data.
+_LINUX_GUEST_SAVE_STDOUT = "exec 3>&1\n"
+_LINUX_GUEST_EPILOGUE = _LINUX_RESULT + """printf '%s\\n' "$agoge_ctf_result" >&3
 """
 
 # Runs as SYSTEM under -File from the Windows loader. Every cmdlet that returns an object is piped to
 # Out-Null, and error messages are built from flag ids only, never from an exception that could quote a value.
 _WINDOWS_PROLOGUE = """# agoge-ctf plant payload. Never prints a flag value.
-$ErrorActionPreference = 'Stop'
+{save_stdout}$ErrorActionPreference = 'Stop'
 $agogeCtfNonce = {nonce}
 $agogeCtfErrors = New-Object System.Collections.Generic.List[string]
 function Clear-AgogeCtfAttributes([string]$Path) {{
@@ -145,16 +154,33 @@ function Set-AgogeCtfStream([string]$Path, [string]$Stream, [string]$Value, [str
 }}
 """
 
-_WINDOWS_EPILOGUE = """if ($agogeCtfErrors.Count -eq 0) {{
+_WINDOWS_RESULT = """if ($agogeCtfErrors.Count -eq 0) {{
   $agogeCtfResult = "{ok}:$agogeCtfNonce"
 }} else {{
   $agogeCtfMessage = $agogeCtfErrors -join '; '
   if ($agogeCtfMessage.Length -gt {max_message}) {{ $agogeCtfMessage = $agogeCtfMessage.Substring(0, {max_message}) }}
   $agogeCtfResult = "{error}:${{agogeCtfNonce}}:$agogeCtfMessage"
 }}
-try {{
+"""
+
+_WINDOWS_EPILOGUE = _WINDOWS_RESULT + """try {{
   Invoke-RestMethod -Method Put -Uri {url} -Headers @{{'Metadata-Flavor' = 'Google'}} -Body $agogeCtfResult | Out-Null
 }} catch {{ }}
+"""
+
+# Guest payload: keep the real stdout writer, then point the console and every chatty stream at nothing,
+# so the result line written to the saved writer is the only thing the relay reads back.
+_WINDOWS_GUEST_SAVE_STDOUT = """$agogeCtfStdout = [Console]::Out
+[Console]::SetOut([System.IO.TextWriter]::Null)
+[Console]::SetError([System.IO.TextWriter]::Null)
+$ProgressPreference = 'SilentlyContinue'
+$WarningPreference = 'SilentlyContinue'
+$InformationPreference = 'SilentlyContinue'
+$VerbosePreference = 'SilentlyContinue'
+$DebugPreference = 'SilentlyContinue'
+"""
+_WINDOWS_GUEST_EPILOGUE = _WINDOWS_RESULT + """$agogeCtfStdout.WriteLine($agogeCtfResult)
+$agogeCtfStdout.Flush()
 """
 
 
@@ -435,6 +461,58 @@ class FlagPlanter:
             raise BadRequest(
                 f"{self.class_name}:{self.event.id} - Flags on server '{server}' mix operating systems"
             )
+        planted = self._planted(board, flags, seed)
+        if operating_systems == {'windows'}:
+            return self._windows_payload(planted, nonce)
+        return self._linux_payload(planted, nonce)
+
+    def build_guest_payload(
+        self,
+        board: Union[CtfBoardModel, dict],
+        server: str,
+        guest: str,
+        nonce: str,
+        seed: str
+    ) -> str:
+        """
+        Returns the bash or PowerShell body (per the guest's operating_system) that writes this board's flags
+        for one nested guest of `server` (Nested Guest Contract). It writes no guest attribute: its epilogue
+        prints exactly one line, ok:<nonce> or error:<nonce>:<message>, to the stdout saved before the
+        prologue silences everything else, and the parent's relay reads that line back.
+        Raises BadRequest if the guest is not declared on the server, has no flags on the board, a flag's
+        operating system differs from the guest's, or any interpolated string fails its pattern.
+        """
+        if not isinstance(board, CtfBoardModel):
+            board = ModelValidator(model=CtfBoardModel, log_location=LoggerNames.CLOUD_FN).load(data=board)
+        if not seed:
+            raise ValueError(f"{self.class_name}:{self.event.id} - CTF flag seed is not configured")
+        if not re.fullmatch(_NONCE_PATTERN, str(nonce)):
+            raise BadRequest(f"{self.class_name}:{self.event.id} - Invalid plant nonce")
+
+        declared = next(
+            (g for g in self.event.spec.nested_guests if g.server == server and g.name == guest), None
+        )
+        if declared is None:
+            raise BadRequest(
+                f"{self.class_name}:{self.event.id} - Guest '{guest}' is not declared on server '{server}'"
+            )
+        flags = [flag for flag in self._board_flags_on(board, server) if flag.guest == guest]
+        if not flags:
+            raise BadRequest(
+                f"{self.class_name}:{self.event.id} - Board {board.id} has no flags on guest '{guest}' of '{server}'"
+            )
+        for flag in flags:
+            if flag.operating_system != declared.operating_system:
+                raise BadRequest(
+                    f"{self.class_name}:{self.event.id} - Flag {flag.id} operating system differs from guest '{guest}'"
+                )
+        planted = self._planted(board, flags, seed)
+        if declared.operating_system == 'windows':
+            return self._windows_payload(planted, nonce, guest=True)
+        return self._linux_payload(planted, nonce, guest=True)
+
+    def _planted(self, board: CtfBoardModel, flags: List[CtfFlagSpecModel], seed: str) -> list:
+        """(flag, value) pairs, each path and derived value checked against its pattern before interpolation."""
         prefix = self.event.spec.scoring.flag_prefix
         planted = []
         for flag in flags:
@@ -443,10 +521,7 @@ class FlagPlanter:
             if not re.fullmatch(_VALUE_PATTERN, value):
                 raise BadRequest(f"{self.class_name}:{self.event.id} - Flag {flag.id} derived an unsafe value")
             planted.append((flag, value))
-
-        if operating_systems == {'windows'}:
-            return self._windows_payload(planted, nonce)
-        return self._linux_payload(planted, nonce)
+        return planted
 
     def _server_flags(self, board: CtfBoardModel, server: str) -> List[CtfFlagSpecModel]:
         flags = self._board_flags_on(board, server)
@@ -475,10 +550,11 @@ class FlagPlanter:
                 raise BadRequest(f"{self.class_name}:{self.event.id} - Flag {flag.id} has an invalid windows_user")
 
     @staticmethod
-    def _linux_payload(planted: list, nonce: str) -> str:
+    def _linux_payload(planted: list, nonce: str, guest: bool = False) -> str:
         q = shlex.quote
         lines = [_LINUX_PROLOGUE.format(
-            nonce=q(nonce), env_file=q(LINUX_ENVIRONMENT_FILE), metadata_ip=_METADATA_SERVER_IP
+            nonce=q(nonce), env_file=q(LINUX_ENVIRONMENT_FILE), metadata_ip=_METADATA_SERVER_IP,
+            save_stdout=_LINUX_GUEST_SAVE_STDOUT if guest else ''
         )]
         for flag, value in planted:
             if flag.location_type == 'file':
@@ -489,15 +565,16 @@ class FlagPlanter:
                 )
             else:
                 lines.append(f"agoge_ctf_plant_env {q(flag.path)} {q(value)} {q(flag.id)}")
-        lines.append(_LINUX_EPILOGUE.format(
+        epilogue = _LINUX_GUEST_EPILOGUE if guest else _LINUX_EPILOGUE
+        lines.append(epilogue.format(
             ok=RESULT_OK, error=RESULT_ERROR, max_message=MAX_RESULT_MESSAGE_LENGTH, url=q(_GUEST_ATTRIBUTE_URL)
         ))
         return "\n".join(lines)
 
     @staticmethod
-    def _windows_payload(planted: list, nonce: str) -> str:
+    def _windows_payload(planted: list, nonce: str, guest: bool = False) -> str:
         q = FlagPlanter._ps_quote
-        lines = [_WINDOWS_PROLOGUE.format(nonce=q(nonce))]
+        lines = [_WINDOWS_PROLOGUE.format(nonce=q(nonce), save_stdout=_WINDOWS_GUEST_SAVE_STDOUT if guest else '')]
         for flag, value in planted:
             if flag.location_type == 'file':
                 lines.append(f"Set-AgogeCtfFile {q(flag.path)} {q(value)} {q(flag.id)}")
@@ -515,7 +592,8 @@ class FlagPlanter:
                 lines.append(f"Set-AgogeCtfStream {q(path)} {q(stream)} {q(value)} {q(flag.id)}")
                 # A stream shares its host file's permissions and attributes
                 lines.extend(FlagPlanter._windows_file_options(flag, path))
-        lines.append(_WINDOWS_EPILOGUE.format(
+        epilogue = _WINDOWS_GUEST_EPILOGUE if guest else _WINDOWS_EPILOGUE
+        lines.append(epilogue.format(
             ok=RESULT_OK, error=RESULT_ERROR, max_message=MAX_RESULT_MESSAGE_LENGTH, url=q(_GUEST_ATTRIBUTE_URL)
         ))
         return "\n".join(lines)
