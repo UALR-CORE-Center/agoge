@@ -1,3 +1,5 @@
+import base64
+import json
 import re
 import shlex
 import time
@@ -9,14 +11,16 @@ from common.models.agoge import CtfBoardModel, CtfEventModel, CtfFlagSpecModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.ctf_flags import derive_flag_value
 from common.utilities.ctf_plant_contract import (
-    GUEST_ATTRIBUTE_NAMESPACE, GUEST_ATTRIBUTE_PATH, GUEST_ATTRIBUTE_RESULT_KEY, GUEST_ATTRIBUTES_ENABLE_KEY,
-    GUEST_ATTRIBUTES_ENABLE_VALUE, LOCATION_PATH_PATTERNS, MAX_RESULT_MESSAGE_LENGTH, PLANT_METADATA_KEY,
-    RESULT_ERROR, RESULT_OK, parse_plant_result
+    GUEST_ATTRIBUTE_ACK_PATH, GUEST_ATTRIBUTE_NAMESPACE, GUEST_ATTRIBUTE_PATH, GUEST_ATTRIBUTE_RESULT_KEY,
+    GUEST_ATTRIBUTES_ENABLE_KEY, GUEST_ATTRIBUTES_ENABLE_VALUE, LOCATION_PATH_PATTERNS, MAX_RESULT_MESSAGE_LENGTH,
+    PLANT_METADATA_KEY, PLANT_PAYLOAD_MAX_BYTES, RELAY_BUDGET_SECONDS, RESULT_ERROR, RESULT_OK, guest_result_path,
+    parse_plant_result
 )
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.id_generator import IdGenerator
 
-_GUEST_ATTRIBUTE_URL = f"http://metadata.google.internal/computeMetadata/v1/instance/guest-attributes/{GUEST_ATTRIBUTE_PATH}"
+_GUEST_ATTRIBUTES_URL = "http://metadata.google.internal/computeMetadata/v1/instance/guest-attributes/"
+_GUEST_ATTRIBUTE_URL = f"{_GUEST_ATTRIBUTES_URL}{GUEST_ATTRIBUTE_PATH}"
 _METADATA_SERVER_IP = "169.254.169.254"
 # Every string interpolated into a payload is checked against one of these first, so a script never
 # receives anything that could break out of its quoting.
@@ -34,11 +38,12 @@ LINUX_ENVIRONMENT_FILE = '/etc/environment'
 # Shared bash prologue. All output is discarded before anything else runs (startup-script output reaches
 # the serial console and Cloud Logging), and values are only ever passed to builtins (printf), so they
 # never appear in a process argument list either. {save_stdout} is empty for a server payload; a guest
-# payload keeps the relay's stdout on fd 3 for its one result line (_LINUX_GUEST_SAVE_STDOUT).
+# payload keeps the relay's stdout on fd 3 for its one result line (_LINUX_GUEST_SAVE_STDOUT). {ack} is
+# empty except on a nested host, whose payload writes plant-ack as its first action (_LINUX_ACK).
 _LINUX_PROLOGUE = """#!/bin/bash
 # agoge-ctf plant payload. Never prints a flag value.
 {save_stdout}exec >/dev/null 2>&1
-umask 022
+{ack}umask 022
 agoge_ctf_nonce={nonce}
 agoge_ctf_env_file={env_file}
 agoge_ctf_errors=''
@@ -182,6 +187,100 @@ $DebugPreference = 'SilentlyContinue'
 _WINDOWS_GUEST_EPILOGUE = _WINDOWS_RESULT + """$agogeCtfStdout.WriteLine($agogeCtfResult)
 $agogeCtfStdout.Flush()
 """
+
+# Nested host (Nested Guest Contract): the ack tells FlagPlanter the watcher picked the payload up.
+_LINUX_ACK = """curl -s -X PUT -H "Metadata-Flavor: Google" --data {nonce} {url}
+"""
+
+# qemu-agent relay, defined after the parent's own placements. virsh runs in shell mode with its commands
+# on stdin, so no agent JSON (and so no guest payload, which travels as guest-exec input-data) is ever in a
+# process argument list; printf is a builtin. Replies are matched with patterns that never occur in the
+# request, because virsh may echo each command line after its prompt. Every agent JSON is single-quoted on the
+# virsh line: unquoted, virsh's own tokenizer would strip its double quotes. Each section has its own deadline;
+# a virsh call started just before it may overrun by at most {virsh_timeout} s, still inside the
+# confirmation window. A section never starts a guest.
+_LINUX_RELAY = """agoge_ctf_ping={ping}
+agoge_ctf_status_open={status_open}
+agoge_ctf_status_close={status_close}
+agoge_ctf_virsh() {{
+  timeout {virsh_timeout} virsh -q
+}}
+# guest result_url result
+agoge_ctf_guest_result() {{
+  curl -s -X PUT -H "Metadata-Flavor: Google" --data "$3" "$2"
+}}
+# guest domain result_url exec_command
+agoge_ctf_relay_qemu() {{
+  local guest="$1" domain="$2" url="$3" exec_command="$4"
+  local deadline=$((SECONDS + {budget}))
+  local reply pid out line
+  if ! command -v virsh >/dev/null 2>&1; then
+    agoge_ctf_guest_result "$guest" "$url" "{error}:$agoge_ctf_nonce:$guest: virsh is not available"
+    return
+  fi
+  if [ "$(timeout {virsh_timeout} virsh -q domstate "$domain" | head -n 1)" != running ]; then
+    agoge_ctf_guest_result "$guest" "$url" "{error}:$agoge_ctf_nonce:$guest: guest is not running"
+    return
+  fi
+  until printf '%s\\n' "qemu-agent-command $domain '$agoge_ctf_ping' --timeout {agent_timeout}" \\
+      | agoge_ctf_virsh | grep -q '"return"'; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      agoge_ctf_guest_result "$guest" "$url" "{error}:$agoge_ctf_nonce:$guest: guest agent did not respond"
+      return
+    fi
+    sleep {ping_interval}
+  done
+  reply="$(printf '%s\\n' "$exec_command" | agoge_ctf_virsh)"
+  pid="$(printf '%s\\n' "$reply" | grep -o '"pid": *[0-9][0-9]*' | head -n 1 | tr -dc '0-9')"
+  if [ -z "$pid" ]; then
+    agoge_ctf_guest_result "$guest" "$url" "{error}:$agoge_ctf_nonce:$guest: guest-exec failed"
+    return
+  fi
+  while :; do
+    reply="$(printf '%s\\n' "qemu-agent-command $domain '$agoge_ctf_status_open$pid$agoge_ctf_status_close' --timeout {agent_timeout}" \\
+      | agoge_ctf_virsh)"
+    if printf '%s\\n' "$reply" | grep -q '"exited": *true'; then
+      break
+    fi
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      agoge_ctf_guest_result "$guest" "$url" "{error}:$agoge_ctf_nonce:$guest: guest payload did not finish"
+      return
+    fi
+    sleep {status_interval}
+  done
+  out="$(printf '%s\\n' "$reply" | grep -o '"out-data": *"[A-Za-z0-9+/=]*' | head -n 1 | sed 's/^.*"//')"
+  line="$(printf '%s' "$out" | base64 -d 2>/dev/null | head -n 1 | tr -d '\\r')"
+  # Only a line in the result grammar for this nonce is passed on, capped at the longest valid one
+  case "$line" in
+    "{ok}:$agoge_ctf_nonce"|"{error}:$agoge_ctf_nonce:"*) ;;
+    *) line="{error}:$agoge_ctf_nonce:$guest: guest payload returned no result" ;;
+  esac
+  agoge_ctf_guest_result "$guest" "$url" "${{line:0:{max_line}}}"
+}}
+"""
+
+# Fixed bootstrap the relay starts in a Windows guest with -EncodedCommand: reads the guest payload from
+# stdin, writes it under the same SYSTEM-only directory ACL as WINDOWS_LOADER, runs it with -File (whose
+# one result line is the only output), and deletes it.
+_WINDOWS_GUEST_BOOTSTRAP = """$ErrorActionPreference = 'SilentlyContinue'
+$agogeCtfReader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), (New-Object System.Text.UTF8Encoding $false))
+$agogeCtfPayload = $agogeCtfReader.ReadToEnd()
+if (-not $agogeCtfPayload) { exit 1 }
+$agogeCtfDir = Join-Path $env:ProgramData 'agoge-ctf'
+New-Item -ItemType Directory -Force -Path $agogeCtfDir | Out-Null
+icacls.exe $agogeCtfDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' | Out-Null
+$agogeCtfFile = Join-Path $agogeCtfDir ('plant-' + [guid]::NewGuid().ToString() + '.ps1')
+try {
+  [System.IO.File]::WriteAllText($agogeCtfFile, $agogeCtfPayload, (New-Object System.Text.UTF8Encoding $true))
+  & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $agogeCtfFile
+} finally {
+  Remove-Item -Force -LiteralPath $agogeCtfFile -ErrorAction SilentlyContinue
+}
+"""
+_RELAY_VIRSH_TIMEOUT_SECONDS = 30
+_RELAY_AGENT_TIMEOUT_SECONDS = 10
+_RELAY_PING_INTERVAL_SECONDS = 5
+_RELAY_STATUS_INTERVAL_SECONDS = 2
 
 
 def board_servers(event: CtfEventModel, board: CtfBoardModel) -> List[str]:
@@ -445,8 +544,9 @@ class FlagPlanter:
         """
         Returns the bash (Linux) or PowerShell (Windows) script that writes this board's flags for one
         server, idempotently, and reports ok:<nonce> or error:<nonce>:<message> to the guest attribute.
-        Raises BadRequest if the server has no flags on the board or any interpolated string fails its
-        Flag Location Formats pattern.
+        A server with nested_guests gets the nested host payload instead (_nested_host_payload).
+        Raises BadRequest if the server has no flags on the board, any interpolated string fails its
+        Flag Location Formats pattern, or the payload exceeds the metadata size limit.
         """
         if not isinstance(board, CtfBoardModel):
             board = ModelValidator(model=CtfBoardModel, log_location=LoggerNames.CLOUD_FN).load(data=board)
@@ -455,6 +555,15 @@ class FlagPlanter:
         if not re.fullmatch(_NONCE_PATTERN, str(nonce)):
             raise BadRequest(f"{self.class_name}:{self.event.id} - Invalid plant nonce")
 
+        if any(guest.server == server for guest in self.event.spec.nested_guests):
+            payload = self._nested_host_payload(board, server, nonce, seed)
+        else:
+            payload = self._server_payload(board, server, nonce, seed)
+        if len(payload.encode('utf-8')) > PLANT_PAYLOAD_MAX_BYTES:
+            raise BadRequest(f"{self.class_name}:{self.event.id} - Plant payload exceeds the metadata size limit")
+        return payload
+
+    def _server_payload(self, board: CtfBoardModel, server: str, nonce: str, seed: str) -> str:
         flags = self._server_flags(board, server)
         operating_systems = {flag.operating_system for flag in flags}
         if len(operating_systems) != 1:
@@ -511,6 +620,32 @@ class FlagPlanter:
             return self._windows_payload(planted, nonce, guest=True)
         return self._linux_payload(planted, nonce, guest=True)
 
+    def _nested_host_payload(self, board: CtfBoardModel, server: str, nonce: str, seed: str) -> str:
+        """
+        Parent payload for a nested host (Nested Guest Contract): ack first, then the parent's own flags,
+        then one relay section per qemu-agent guest with board flags, run in parallel, then plant-result
+        last, reporting the parent's flags only. Guests with the offline driver are not relayed here.
+        """
+        board_flags = self._board_flags_on(board, server)
+        parent_flags = [flag for flag in board_flags if flag.guest is None]
+        guests = [
+            guest for guest in self.event.spec.nested_guests
+            if guest.server == server and guest.driver == 'qemu-agent'
+            and any(flag.guest == guest.name for flag in board_flags)
+        ]
+        if not parent_flags and not guests:
+            raise BadRequest(
+                f"{self.class_name}:{self.event.id} - Board {board.id} has no flags on server '{server}'"
+            )
+        if any(flag.operating_system != 'linux' for flag in parent_flags):
+            raise BadRequest(
+                f"{self.class_name}:{self.event.id} - Flags on nested host '{server}' must be linux"
+            )
+        relays = [
+            (guest, self.build_guest_payload(board, server, guest.name, nonce, seed)) for guest in guests
+        ]
+        return self._linux_payload(self._planted(board, parent_flags, seed), nonce, relays=relays)
+
     def _planted(self, board: CtfBoardModel, flags: List[CtfFlagSpecModel], seed: str) -> list:
         """(flag, value) pairs, each path and derived value checked against its pattern before interpolation."""
         prefix = self.event.spec.scoring.flag_prefix
@@ -550,11 +685,13 @@ class FlagPlanter:
                 raise BadRequest(f"{self.class_name}:{self.event.id} - Flag {flag.id} has an invalid windows_user")
 
     @staticmethod
-    def _linux_payload(planted: list, nonce: str, guest: bool = False) -> str:
+    def _linux_payload(planted: list, nonce: str, guest: bool = False, relays: Optional[list] = None) -> str:
+        """`relays` (nested host only) is a list of (guest spec, guest payload) to relay after the placements."""
         q = shlex.quote
+        ack = _LINUX_ACK.format(nonce=q(nonce), url=q(_GUEST_ATTRIBUTES_URL + GUEST_ATTRIBUTE_ACK_PATH))
         lines = [_LINUX_PROLOGUE.format(
             nonce=q(nonce), env_file=q(LINUX_ENVIRONMENT_FILE), metadata_ip=_METADATA_SERVER_IP,
-            save_stdout=_LINUX_GUEST_SAVE_STDOUT if guest else ''
+            save_stdout=_LINUX_GUEST_SAVE_STDOUT if guest else '', ack=ack if relays is not None else ''
         )]
         for flag, value in planted:
             if flag.location_type == 'file':
@@ -565,10 +702,46 @@ class FlagPlanter:
                 )
             else:
                 lines.append(f"agoge_ctf_plant_env {q(flag.path)} {q(value)} {q(flag.id)}")
+        if relays:
+            lines.append(FlagPlanter._linux_relays(relays))
         epilogue = _LINUX_GUEST_EPILOGUE if guest else _LINUX_EPILOGUE
         lines.append(epilogue.format(
             ok=RESULT_OK, error=RESULT_ERROR, max_message=MAX_RESULT_MESSAGE_LENGTH, url=q(_GUEST_ATTRIBUTE_URL)
         ))
+        return "\n".join(lines)
+
+    @staticmethod
+    def _linux_relays(relays: list) -> str:
+        """The relay functions, one background section per guest, and the wait that precedes plant-result."""
+        q = shlex.quote
+        compact = {'separators': (',', ':')}
+        lines = [_LINUX_RELAY.format(
+            ping=q(json.dumps({'execute': 'guest-ping'}, **compact)),
+            status_open=q('{"execute":"guest-exec-status","arguments":{"pid":'), status_close=q('}}'),
+            virsh_timeout=_RELAY_VIRSH_TIMEOUT_SECONDS, agent_timeout=_RELAY_AGENT_TIMEOUT_SECONDS,
+            budget=RELAY_BUDGET_SECONDS, ping_interval=_RELAY_PING_INTERVAL_SECONDS,
+            status_interval=_RELAY_STATUS_INTERVAL_SECONDS, ok=RESULT_OK, error=RESULT_ERROR,
+            # error:<nonce>:<message>, with the longest nonce _NONCE_PATTERN allows
+            max_line=len(RESULT_ERROR) + 64 + MAX_RESULT_MESSAGE_LENGTH + 2
+        )]
+        for guest, payload in relays:
+            arguments = {'input-data': base64.b64encode(payload.encode('utf-8')).decode('ascii'), 'capture-output': True}
+            if guest.operating_system == 'windows':
+                bootstrap = base64.b64encode(_WINDOWS_GUEST_BOOTSTRAP.encode('utf-16-le')).decode('ascii')
+                arguments.update(path='powershell.exe', arg=[
+                    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', bootstrap
+                ])
+            else:
+                arguments.update(path='/bin/bash', arg=['-s'])
+            request = json.dumps({'execute': 'guest-exec', 'arguments': arguments}, **compact)
+            # Single-quoted for virsh's own tokenizer; base64 and the fixed arguments hold no quote
+            if "'" in request:
+                raise BadRequest(f"Relay request for guest '{guest.name}' cannot be quoted")
+            exec_command = f"qemu-agent-command {guest.domain} '{request}' --timeout {_RELAY_AGENT_TIMEOUT_SECONDS}"
+            url = _GUEST_ATTRIBUTES_URL + guest_result_path(guest.name)
+            lines.append(f"agoge_ctf_relay_qemu {q(guest.name)} {q(guest.domain)} {q(url)} {q(exec_command)} &")
+        # plant-result (the epilogue) is written only once every guest section has written its own key
+        lines.append("wait\n")
         return "\n".join(lines)
 
     @staticmethod

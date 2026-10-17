@@ -52,6 +52,9 @@ NESTED_CONFIRM_TIMEOUT_SECONDS = 420
 # Each guest relay section runs in parallel under this bound, inside the confirmation window.
 RELAY_BUDGET_SECONDS = 360
 
+# GCE metadata value limit: a plant payload larger than this cannot be written to PLANT_METADATA_KEY.
+PLANT_PAYLOAD_MAX_BYTES = 256 * 1024
+
 # (location_type, operating_system) -> path pattern, from the PRD's Flag Location Formats table.
 # The spec validator enforces these at save time and FlagPlanter re-checks them before a path
 # reaches a script; always match with re.fullmatch ('$' alone accepts a trailing newline).
