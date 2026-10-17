@@ -2296,3 +2296,18 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. CentOS Stream 9 has no published SHA-256. V25 and HUMAN need a person.
 - **Next:** V6e (scratch sizing for large media). Or the rest of V6b2's appliances: VyOS (versioned stream ISO), OPNsense (`.iso.bz2` needs a decompress step in `fetch_media` or a new format), and pfSense CE (`.iso.gz`, likewise). Alpine needs builder work too.
+
+### Verification — 2026-10-17 — PASS
+- **Checked:** the items ticked since the last verification (1612733): V6b2b, V6b2c, V6b2d, V6b2e and V6b2f. Parent V6, V6b and V6b2 are still `[ ]`, and so are V6e, V25, I4b and HUMAN.
+  - Catalog entries: I re-fetched each publisher's checksum file over https and compared all six new hashes. All six match the JSON exactly: Fedora 43 and 44 (`CHECKSUM`), CentOS Stream 10 (`.SHA256SUM`), Arch `v20261001.604814` (`.SHA256`), Leap 16.0 Build18.81 (`.sha256`), and Security Onion 3.3.0-20260911 (`3/main` `DOWNLOAD_AND_VERIFY_ISO.md`, which also lists the same pinned ISO URL). Every URL is a dated or versioned path.
+  - `builder.sh`: the Arch keyring init and `pacman -Syu` come before `--install` in `args`. Arch swaps `openssh-server` for `openssh,sudo`. SUSE gets both single-line sudoers drop-ins with mode 0440. `opensuse` joined `RHEL_FAMILY`, where the qemu-ga edit is guarded by `[ -f ]`. The firstboot grow uses `findmnt -nvo` (`--nofsroot`) and picks the resize tool by `FSTYPE`.
+  - Tests: the new builder tests run the real rendered script, and the grow test runs the extracted command against stub tools. `-rs` shows none of them are skipped (`test_nested_builder.py` + `test_nested_manifest.py`: 162 passed). The new manifest test is parametrized over the JSON's downloaded `manual_iso` entries. The new code has no TODO, FIXME or `NotImplemented`.
+  - Known gap: V6e is still open, so the 14 GB Security Onion ISO exceeds `NESTED_BUILD_SCRATCH_GB` (12). It is tracked as an open task and does not reopen V6b2f.
+- **Gate results:**
+  - api/unit_tests: 1654 passed, coverage 97.67% (≥85%).
+  - cloud_functions/tests: 905 passed, 96.19% (≥85%).
+  - build_files: 450 passed.
+  - Frontend `npm test`: 47 files, 572 tests passed.
+  - CTF eslint: exit 0. CTF tsc grep: no matches.
+  - Group V eslint: exit 0. Group V tsc grep: no matches. `tsc` itself exits 2, but only on files outside both scopes.
+- **Reopened:** none.
