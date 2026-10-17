@@ -18,12 +18,15 @@ import {
     useMediaQuery,
     useTheme,
 } from "@mui/material";
-import React, {useEffect, useState} from "react";
+import React, {useEffect, useMemo, useState} from "react";
 import {useNavigate} from "react-router-dom";
 import {URL_TEACHER_SERVERS} from "../../../../../router/urls";
+import {NestedMedia} from "../../../../../services/Server/nested.model";
 import {nestedService} from "../../../../../services/Server/nested.service";
+import GuestsStep, {CatalogOptions} from "./GuestsStep";
 import HostStep, {MachineTypeOptions} from "./HostStep";
 import NetworksStep from "./NetworksStep";
+import {GuestRuleContext} from "./guestRules";
 import {
     effectiveDiskSize,
     hasErrors,
@@ -36,7 +39,7 @@ import {
     validateStep,
 } from "./nestedWizardState";
 
-// A read-only view of what a step holds; V19–V20 replace these with the step editors.
+// A read-only view of what a step holds; V20 replaces these with the step editors.
 const StepSummary: React.FC<{step: NestedWizardSteps; state: NestedWizardState; errors: StepErrors}> = (
     {step, state, errors}
 ) => {
@@ -44,11 +47,6 @@ const StepSummary: React.FC<{step: NestedWizardSteps; state: NestedWizardState; 
     return (
         <Stack gap={2} mt={2}>
             {messages.map(message => <Alert key={message} severity="error">{message}</Alert>)}
-            {step === NestedWizardSteps.Guests && (
-                <Typography color="text.secondary">
-                    {state.guests.length === 0 ? "No guests yet." : `${state.guests.length} guest(s).`}
-                </Typography>
-            )}
             {step === NestedWizardSteps.Access && (
                 <Typography color="text.secondary">
                     Exposed NICs and consoles follow from the guests.
@@ -80,6 +78,9 @@ const NestedImageWizard: React.FC = () => {
     // Errors appear for a step once the instructor has tried to move past it, not while they first type.
     const [checkedSteps, setCheckedSteps] = useState<Set<number>>(new Set());
     const [machineTypes, setMachineTypes] = useState<MachineTypeOptions>({pending: true, data: [], error: ""});
+    const [catalog, setCatalog] = useState<CatalogOptions>({pending: true, data: [], error: ""});
+    const [media, setMedia] = useState<NestedMedia[]>([]);
+    const guestContext: GuestRuleContext = useMemo(() => ({catalog: catalog.data, media}), [catalog.data, media]);
 
     useEffect(() => {
         let active = true;
@@ -100,19 +101,37 @@ const NestedImageWizard: React.FC = () => {
                     error: `Could not load machine types: ${error?.message || "unknown error"}`,
                 });
             });
+        nestedService.list_catalog()
+            .then(entries => {
+                if (active) setCatalog({pending: false, data: entries, error: ""});
+            })
+            .catch((error) => {
+                if (active) {
+                    setCatalog({pending: false, data: [], error: `Could not load the OS catalog: ${error?.message || "unknown error"}`});
+                }
+            });
+        // The library only feeds the media pickers; without it, uploads still work.
+        nestedService.list_media()
+            .then(items => {
+                if (active) setMedia(items);
+            })
+            .catch(() => undefined);
         return () => {
             active = false;
         };
     }, []);
 
+    const handleMediaUploaded = (uploaded: NestedMedia) =>
+        setMedia(prev => [...prev.filter(item => item.id !== uploaded.id), uploaded]);
+
     const errorsFor = (index: number): StepErrors =>
-        validateStep(NESTED_WIZARD_STEPS[index], state, machineTypes.data);
+        validateStep(NESTED_WIZARD_STEPS[index], state, machineTypes.data, guestContext);
     const shownErrors = (index: number): StepErrors => checkedSteps.has(index) ? errorsFor(index) : {};
 
     const handleChange = (patch: Partial<NestedWizardState>) => setState(prev => ({...prev, ...patch}));
 
     const goTo = (target: number) => {
-        const destination = resolveNavigation(activeStep, target, state, machineTypes.data);
+        const destination = resolveNavigation(activeStep, target, state, machineTypes.data, guestContext);
         if (target > activeStep) {
             // Moving forward submits every step before the target; the target itself is not checked on arrival.
             setCheckedSteps(prev => {
@@ -188,7 +207,17 @@ const NestedImageWizard: React.FC = () => {
                     {step === NestedWizardSteps.Networks && (
                         <NetworksStep state={state} errors={currentErrors} onChange={handleChange} />
                     )}
-                    {step !== NestedWizardSteps.Host && step !== NestedWizardSteps.Networks && (
+                    {step === NestedWizardSteps.Guests && (
+                        <GuestsStep
+                            state={state}
+                            errors={currentErrors}
+                            catalog={catalog}
+                            media={media}
+                            onChange={handleChange}
+                            onMediaUploaded={handleMediaUploaded}
+                        />
+                    )}
+                    {(step === NestedWizardSteps.Access || step === NestedWizardSteps.Review) && (
                         <StepSummary step={step} state={state} errors={currentErrors} />
                     )}
                 </Box>
