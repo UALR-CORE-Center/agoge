@@ -163,7 +163,8 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - [x] **V6a** (iteration 115) The sync setup operation **Synchronize Nested Guest OS Catalog** (`nested_os_catalog_sync.py`, option 25), plus `common/data/nested_os_catalog.json` holding the 19 upload-only entries that need no V-5 answer: Windows Vista–11 and Server 2008–2025 (licensed, `unattended_iso`), XP/2003 (`manual_iso` and `disk_image`), and custom ISO/disk. Tests cover every V6 done-when rule except V-5.
   - [ ] **V6b** Add the downloadable entries to the JSON: the Kali cloud image and the Kali QEMU VM, the Debian, Ubuntu, Fedora, Rocky, Alma, CentOS, openSUSE, Arch and Alpine cloud images, Metasploitable 2, the Server 2016–2025 and Windows 10/11 Enterprise evaluations, and pfSense, OPNsense, VyOS and Security Onion. Each needs a pinned `https` URL and its SHA-256. **BLOCKED on V-5** for the Microsoft and Kali entries: a person must download and hash them. The Linux images and appliances also need pinned, dated releases with published hashes, not `current/` URLs whose hashes rotate. `test_nested_os_catalog_sync.py` already checks the https/SHA-256 and Microsoft-host rules for any entry added.
     - [x] **V6b1** (iteration 116) Ubuntu 20.04, 22.04, 24.04 and 26.04 cloud images, pinned to dated `cloud-images.ubuntu.com/releases/<codename>/release-YYYYMMDD/` files with the SHA-256s from each release's published `SHA256SUMS`.
-    - [ ] **V6b2** The rest of V6b (Kali, Debian, Fedora/Rocky/Alma/CentOS, openSUSE/Arch/Alpine, Metasploitable 2, Microsoft evals, appliances). Microsoft and Kali stay BLOCKED on V-5. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file. Debian publishes only SHA512SUMS, so its SHA-256 must come from another source or V-5.
+    - [x] **V6b2a** (iteration 119) Rocky Linux 8.10/9.8/10.2 and AlmaLinux 8.10/9.8/10.2 GenericCloud images (`nm-keyfile`), pinned to dated files under each publisher's versioned (not major-only) directory, with SHA-256s from the published `CHECKSUM` files.
+    - [ ] **V6b2** The rest of V6b (Kali, Debian, Fedora/CentOS, openSUSE/Arch/Alpine, Metasploitable 2, Microsoft evals, appliances). Microsoft and Kali stay BLOCKED on V-5. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file. Debian publishes only SHA512SUMS, so its SHA-256 must come from another source or V-5.
 - [x] **V6c** (found in iteration 116; done in iteration 118) Ubuntu 16.04's cloud image needs `net_config: ifupdown`. But its `/etc/network/interfaces` sources only `interfaces.d/*.cfg`, so `builder.sh` `write_network_config` must write `interfaces.d/agoge.cfg`, not `interfaces.d/agoge` (Debian sources `*`, so the rename is safe there). Then add `ubuntu-16.04` (`xenial/release-20211001/ubuntu-16.04-server-cloudimg-amd64-disk1.img`, sha256 `fff2494a70bcaffb59f26f71ec49e137dd87d319341c35832dbe0ea65ff15140`).
 - [x] **V6d** (found in iteration 116; done in iteration 117) Ubuntu 18.04 ships netplan.io 0.99 (`bionic/release-20230607` manifest), and `routes: [{to: default}]` needs netplan 0.103+. Make `builder.sh` write `to: 0.0.0.0/0`, which every netplan version accepts. Then add `ubuntu-18.04` (`bionic/release-20230607/ubuntu-18.04-server-cloudimg-amd64.img`, sha256 `8dd2e6b5e5aad20c3f836123b300cba9861249408cbb07c359145a65d6bab6b6`).
 - [x] **V7** Nested host validator — spec + done-when at PRD.md:1673
@@ -2186,3 +2187,18 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. V25 and HUMAN need a person.
 - **Next:** V6b2's Fedora/Rocky/Alma entries, done like V6b1: a dated release dir with a published SHA-256 file.
+
+### Iteration 119 — 2026-10-17
+- **Completed:** V6b2a, split out of V6b2. `common/data/nested_os_catalog.json` has 31 entries. The 6 new ones follow `ubuntu-26.04`: `rocky-8`, `rocky-9`, `rocky-10`, `almalinux-8`, `almalinux-9` and `almalinux-10`. Each is a `cloud_image` (qcow2) with `nm-keyfile`, an agent, BIOS, virtio, and 1024 MB minimum memory.
+- **Learned:**
+  - Each URL sits in a versioned directory (`rocky/9.8/`, `almalinux/9.8/`), not the rolling major dir (`9/`). Each SHA-256 comes from the publisher's `CHECKSUM` file, fetched over https on 2026-10-17. Every file's magic is `QFI\xfb` (qcow2), and every virtual size is 10 GiB.
+  - Neither vault has a copy of a current minor release. When the next minor ships, the pinned `/pub` URL moves to `vault` and returns 404 until someone re-pins it. AlmaLinux also prunes old dated builds.
+  - Rocky 10 and AlmaLinux 10 need an x86-64-v3 CPU. `define_domain` already uses `host-passthrough`.
+- **Tests:** `test_nested_os_catalog_sync.py::test_nm_keyfile_entries_match_the_builders_rhel_family` checks every `nm-keyfile` entry's osinfo against `builder.sh`'s `RHEL_FAMILY`. Only those entries get `--selinux-relabel`, and without it SELinux makes NetworkManager ignore the uploaded keyfile.
+- **Gate results:**
+  - api/unit_tests: 1654 passed, 97.67%.
+  - cloud_functions/tests: 893 passed, 94.28%.
+  - build_files: 429 passed.
+  - No frontend files changed.
+- **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. V25 and HUMAN need a person.
+- **Next:** V6b2's Fedora 43/44 entries (`dl.fedoraproject.org/pub/fedora/linux/releases/<n>/Cloud/x86_64/images/` with its `CHECKSUM`), done the same way.

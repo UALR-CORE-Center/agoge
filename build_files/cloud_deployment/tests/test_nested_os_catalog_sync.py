@@ -1,6 +1,8 @@
 """Synchronize Nested Guest OS Catalog (PRD V6): the seeded JSON's rules and the idempotent upsert."""
 import copy
 import json
+import re
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 from urllib.parse import urlsplit
@@ -84,6 +86,16 @@ def test_cloud_image_entries_are_linux_disk_images_with_an_agent(entry):
     assert entry.media_formats[0] in {'qcow2', 'raw', 'img.xz'}
     assert entry.net_config in {'networkd', 'netplan', 'nm-keyfile', 'ifupdown'}
     assert entry.agent is True
+
+
+@pytest.mark.parametrize('entry', [entry for entry in _entries() if entry.net_config == 'nm-keyfile'],
+                         ids=lambda entry: entry.id)
+def test_nm_keyfile_entries_match_the_builders_rhel_family(entry):
+    # Only a RHEL_FAMILY osinfo gets --selinux-relabel; unlabelled, the uploaded keyfile is ignored under enforcing SELinux.
+    builder = (Path(__file__).parents[3] / 'cloud_functions' / 'cloud_fn_utilities' / 'server_specific' / 'nested'
+               / 'builder.sh').read_text()
+    rhel_family = re.search(r"^RHEL_FAMILY='([^']+)'$", builder, re.MULTILINE).group(1)
+    assert re.match(rhel_family, entry.osinfo)
 
 
 @pytest.mark.parametrize('entry', [entry for entry in _entries() if entry.family == 'windows'],
