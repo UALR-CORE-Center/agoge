@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from common.constants.database import DbCollections, DbOperationTypes
+from common.constants.nested import NESTED_MEDIA_MAX_BYTES
 from common.models.agoge import NestedOsCatalogModel
 
 from cloud_deployment import setup_manager as setup_manager_module
@@ -68,6 +69,15 @@ def test_downloaded_entries_have_an_https_url_and_sha256(entry):
     else:
         assert entry.media_url.startswith('https://')
         assert entry.media_sha256 and len(entry.media_sha256) == 64
+
+
+@pytest.mark.parametrize('entry', _entries(), ids=lambda entry: entry.id)
+def test_downloaded_entries_record_their_size_for_the_parent_disk(entry):
+    # Without a size NestedHostValidator reserves the 20 GiB upload limit for the download (V6e).
+    if entry.requires_upload:
+        assert entry.media_size_bytes is None
+    else:
+        assert 0 < entry.media_size_bytes <= NESTED_MEDIA_MAX_BYTES
 
 
 @pytest.mark.parametrize('entry', [entry for entry in _entries() if not entry.requires_upload],

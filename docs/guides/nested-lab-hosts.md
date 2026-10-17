@@ -30,7 +30,7 @@ The wizard checks these limits before it lets you create the image:
 | Machine type | **Build machine type** and **Lab machine type** must be N1 or N2 (nested-capable). E2 is not offered. Types up to 64 GB of memory are listed. |
 | Memory | The guests' memory plus 2048 MB for the parent must fit in both machine types. |
 | vCPUs | The guests' vCPUs may total at most twice the machine's vCPUs. |
-| Disk | At least 20 GB for the parent, plus every guest's disk, plus 12 GB of build scratch space. At most 1000 GB. The wizard fills in this minimum; you can raise it. |
+| Disk | At least 20 GB for the parent, plus every guest's disk, plus 12 GB of build scratch space, plus the size of each installation medium (cloud image, ISO, or upload), rounded up to whole GB. Media stay on the parent until the build finishes, and guests that share one medium count it once. At most 1000 GB. Leave it empty to use this minimum; you can raise it. |
 | Guests | 1 to 8, each with 1 to 4 NICs. |
 | Exposed NICs | At most 8. |
 

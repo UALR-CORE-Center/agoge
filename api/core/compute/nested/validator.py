@@ -1,9 +1,10 @@
 """Validation and derivation for a nested image create request (Nested Image Builder Contract)."""
 import ipaddress
+import math
 import re
 import secrets
 import string
-from typing import Dict, List, Optional
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from common.constants.database import DatabaseTypes, DbCollections, DATABASE_NAME
 from common.constants.nested import (
@@ -12,6 +13,7 @@ from common.constants.nested import (
     NESTED_MACHINE_FAMILIES,
     NESTED_MAX_DISK_GB,
     NESTED_MAX_EXPOSURES,
+    NESTED_MEDIA_MAX_BYTES,
     NESTED_PARENT_BASE_DISK_GB,
     NESTED_PARENT_OVERHEAD_MB,
 )
@@ -43,6 +45,14 @@ MIN_PASSWORD_LENGTH = 8
 # VNC authentication only uses the first eight characters of a password.
 VNC_PASSWORD_LENGTH = 8
 VNC_PASSWORD_ALPHABET = string.ascii_letters + string.digits
+GIB = 1024 ** 3
+
+
+class NestedValidation(NamedTuple):
+    entries: Dict[str, NestedOsCatalogModel]
+    """Each guest's catalog entry by guest name."""
+    disk_size: int
+    """The parent disk in GB: the request's disk_size, or the computed minimum when it was left empty."""
 
 
 class NestedHostValidator:
@@ -63,23 +73,50 @@ class NestedHostValidator:
         self.catalog_validator = ModelValidator(model=NestedOsCatalogModel)
         self.media_validator = ModelValidator(model=NestedMediaModel)
 
-    def validate(self, request: NestedImageCreateRequest) -> Dict[str, NestedOsCatalogModel]:
-        """Raise BadRequest on the first broken rule; return each guest's catalog entry by guest name."""
+    def validate(self, request: NestedImageCreateRequest) -> NestedValidation:
+        """Raise BadRequest on the first broken rule; return the guests' catalog entries and the parent disk size."""
         spec = request.nested
         self._validate_server_name(request.server_name)
         networks = self._validate_networks(spec.networks)
-        entries = self._validate_guests(spec.guests)
+        entries, media = self._validate_guests(spec.guests)
         self._validate_nics(spec.guests, spec.networks, networks)
         self._validate_credentials(spec.guests, entries, request.product_keys)
         for field, name in (('machine_type', request.machine_type), ('build_machine_type', spec.build_machine_type)):
             self._validate_capacity(field, self._machine_type(field, name), spec.guests)
-        self._validate_disk_size(request.disk_size, spec.guests)
-        return entries
+        minimum = self.min_disk_size(spec.guests, self.media_sizes(spec.guests, entries, media))
+        return NestedValidation(entries=entries, disk_size=self._validate_disk_size(request.disk_size, minimum))
 
     @staticmethod
-    def min_disk_size(guests: List[NestedGuestModel]) -> int:
-        """The parent boot disk the guests need, in GB; used when the request leaves disk_size empty."""
-        return NESTED_PARENT_BASE_DISK_GB + sum(guest.disk_gb for guest in guests) + NESTED_BUILD_SCRATCH_GB
+    def min_disk_size(guests: List[NestedGuestModel], media_sizes: Dict[str, int]) -> int:
+        """The parent boot disk the guests need, in GB; used when the request leaves disk_size empty.
+
+        The builder keeps every medium in MEDIA_DIR on the parent disk until finalize, so each one is reserved
+        on top of the scratch space that archive extraction and conversion use. media_sizes is media_sizes().
+        """
+        media_gb = sum(math.ceil(size / GIB) for size in media_sizes.values())
+        return (NESTED_PARENT_BASE_DISK_GB + sum(guest.disk_gb for guest in guests) + NESTED_BUILD_SCRATCH_GB
+                + media_gb)
+
+    @staticmethod
+    def media_sizes(guests: List[NestedGuestModel], entries: Dict[str, NestedOsCatalogModel],
+                    media: Dict[str, NestedMediaModel]) -> Dict[str, int]:
+        """Bytes of each distinct medium the build downloads, keyed the way builder.sh fetch_media caches it.
+
+        Guests sharing a medium share one cached file, so it is counted once. A size the API cannot know
+        (a catalog entry synced before media_size_bytes, or an upload record that is gone) reserves the
+        upload limit rather than nothing.
+        """
+        sizes: Dict[str, int] = {}
+        for guest in guests:
+            # nested_manifest._media_source: a guest's media_id wins over the entry's media_url.
+            if guest.media_id:
+                medium = media.get(guest.media_id)
+                key = (medium.sha256 if medium else None) or f'upload-{guest.media_id}'
+                sizes[key] = medium.size_bytes if medium else NESTED_MEDIA_MAX_BYTES
+            else:
+                entry = entries[guest.name]
+                sizes[entry.media_sha256 or entry.id] = entry.media_size_bytes or NESTED_MEDIA_MAX_BYTES
+        return sizes
 
     @staticmethod
     def derive(spec: NestedHostSpecModel) -> NestedHostSpecModel:
@@ -173,15 +210,23 @@ class NestedHostValidator:
             raise BadRequest(f'{label} {value} is the network or broadcast address of {cidr}.')
         return address
 
-    def _validate_guests(self, guests: List[NestedGuestModel]) -> Dict[str, NestedOsCatalogModel]:
+    def _validate_guests(self, guests: List[NestedGuestModel]
+                         ) -> Tuple[Dict[str, NestedOsCatalogModel], Dict[str, NestedMediaModel]]:
+        """Return each guest's catalog entry by guest name, and every named upload by media_id."""
         entries: Dict[str, NestedOsCatalogModel] = {}
+        media: Dict[str, NestedMediaModel] = {}
         for guest in guests:
             name = guest.name
             if name in entries:
                 raise BadRequest(f'Guest {name}: the name is used by more than one guest.')
             entry = self._catalog_entry(guest)
             if entry.requires_upload:
-                self._validate_media(guest, entry)
+                media[guest.media_id] = self._validate_media(guest, entry)
+            elif guest.media_id and guest.media_id not in media:
+                # The manifest uses an upload even for a downloadable entry; it is loaded here only for its size.
+                medium = self._load_media(guest.media_id)
+                if medium:
+                    media[guest.media_id] = medium
             if guest.memory_mb < entry.min_memory_mb:
                 raise BadRequest(f'Guest {name}: memory_mb must be at least {entry.min_memory_mb} for {entry.display_name}.')
             if guest.disk_gb < entry.min_disk_gb:
@@ -192,7 +237,7 @@ class NestedHostValidator:
                 if not PACKAGE_NAME.fullmatch(package):
                     raise BadRequest(f'Guest {name}: {package!r} is not a valid package name.')
             entries[name] = entry
-        return entries
+        return entries, media
 
     def _catalog_entry(self, guest: NestedGuestModel) -> NestedOsCatalogModel:
         record = self.db.get(collection_name=DbCollections.NESTED_OS_CATALOG, doc_id=guest.os_id)
@@ -201,16 +246,20 @@ class NestedHostValidator:
             raise BadRequest(f'Guest {guest.name}: os_id {guest.os_id} is not an enabled catalog entry.')
         return entry
 
-    def _validate_media(self, guest: NestedGuestModel, entry: NestedOsCatalogModel) -> None:
+    def _load_media(self, media_id: str) -> Optional[NestedMediaModel]:
+        record = self.db.get(collection_name=DbCollections.NESTED_MEDIA, doc_id=media_id)
+        return self.media_validator.load(record, halt_on_error=False) if record else None
+
+    def _validate_media(self, guest: NestedGuestModel, entry: NestedOsCatalogModel) -> NestedMediaModel:
         if not guest.media_id:
             raise BadRequest(f'Guest {guest.name}: {entry.display_name} requires uploaded media (media_id).')
-        record = self.db.get(collection_name=DbCollections.NESTED_MEDIA, doc_id=guest.media_id)
-        media = self.media_validator.load(record, halt_on_error=False) if record else None
+        media = self._load_media(guest.media_id)
         if not media or not media.complete:
             raise BadRequest(f'Guest {guest.name}: media {guest.media_id} is not a completed upload.')
         if media.format not in entry.media_formats:
             raise BadRequest(f'Guest {guest.name}: media format {media.format} is not accepted for '
                              f'{entry.display_name} ({", ".join(entry.media_formats)}).')
+        return media
 
     def _validate_nics(self, guests: List[NestedGuestModel], networks: List[NestedNetworkModel],
                        cidrs: Dict[str, ipaddress.IPv4Network]) -> None:
@@ -287,10 +336,11 @@ class NestedHostValidator:
             raise BadRequest(f'{field}: {machine_type.name} allows at most {2 * machine_type.guest_cpus} '
                              f'guest vCPUs; the guests ask for {vcpus}.')
 
-    def _validate_disk_size(self, disk_size: Optional[int], guests: List[NestedGuestModel]) -> None:
-        minimum = self.min_disk_size(guests)
+    @staticmethod
+    def _validate_disk_size(disk_size: Optional[int], minimum: int) -> int:
         size = minimum if disk_size is None else disk_size
         if size < minimum:
-            raise BadRequest(f'disk_size: {disk_size} GB is below the {minimum} GB the guests need.')
+            raise BadRequest(f'disk_size: {disk_size} GB is below the {minimum} GB the guests and their media need.')
         if size > NESTED_MAX_DISK_GB:
             raise BadRequest(f'disk_size: {size} GB exceeds the {NESTED_MAX_DISK_GB} GB limit.')
+        return size
