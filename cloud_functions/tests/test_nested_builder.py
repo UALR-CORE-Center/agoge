@@ -504,6 +504,26 @@ def test_netplan_default_route_uses_a_cidr_older_netplan_accepts(builder):
 
 
 @needs_tools
+def test_ifupdown_config_is_a_cfg_file_ubuntu_16_04_sources(builder):
+    ubuntu = _entry('ubuntu-16.04', family='linux', group='linux', install_method='cloud_image',
+                    media_url='https://cloud.debian.example/debian-12.qcow2', media_sha256=_sha(DEB_IMAGE),
+                    media_formats=['qcow2'], osinfo='ubuntu16.04', agent=True, net_config='ifupdown')
+    CATALOG['ubuntu-16.04'] = ubuntu
+    try:
+        result, log = builder(spec=_spec(deb={'os_id': 'ubuntu-16.04'}))
+    finally:
+        del CATALOG['ubuntu-16.04']
+
+    customize = _commands(log, 'virt-customize')[0]
+    assert result.returncode == 0, result.stderr
+    # Ubuntu 16.04's /etc/network/interfaces sources only interfaces.d/*.cfg; a bare "agoge" is ignored.
+    assert '/etc/network/interfaces.d/agoge.cfg' in customize
+    assert '/etc/systemd/network/10-agoge-0.link' in customize
+    interfaces = (builder.root / 'var/lib/agoge-nested/work/net-deb/agoge.cfg').read_text()
+    assert 'iface agoge0 inet static\n  address 10.10.0.10/24\n  gateway 10.10.0.1\n' in interfaces
+
+
+@needs_tools
 def test_post_install_runs_through_guest_exec_with_the_script_as_input(builder):
     result, _ = builder()
 
