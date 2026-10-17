@@ -161,7 +161,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V5** Models and constants — spec + done-when at PRD.md:1669 (`common/constants/nested.py` already exists from V2 with `NESTED_MACHINE_FAMILIES`, `NESTED_MAX_MACHINE_MEMORY_MB`, `STANDARD_MAX_MACHINE_MEMORY_MB`; extend it)
 - [ ] **V6** OS catalog and seeding — spec + done-when at PRD.md:1671 — **BLOCKED (iteration 95):** its done-when needs Open Question V-5 answered first, and V-5 is human research. Microsoft Evaluation Center does not publish SHA-256 values, so each eval ISO (Server 2016/2019/2025, Windows 10/11 Enterprise) must be downloaded and hashed by a person. The Kali cloud image URL and format still need to be confirmed. The loop must not invent hashes. Unblock by recording V-5's answers (URL + sha256 per entry) in progress.md.
 - [x] **V7** Nested host validator — spec + done-when at PRD.md:1673
-- [ ] **V8** Manifest and unattend rendering — spec + done-when at PRD.md:1675
+- [x] **V8** Manifest and unattend rendering — spec + done-when at PRD.md:1675
 - [ ] **V9** Builder script — spec + done-when at PRD.md:1677
 - [ ] **V10** Runtime service — spec + done-when at PRD.md:1679
 - [ ] **V11** Nested template server provisioning — spec + done-when at PRD.md:1681
@@ -1522,3 +1522,34 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6 is BLOCKED on Open Question V-5. Microsoft publishes no SHA-256 values for its Evaluation Center ISOs, so a person must download and hash them.
 - **Next:** V8 (manifest and unattend rendering). V8's XML test iterates over the `unattended_iso` catalog entries, so it may need fixture entries until V6 is unblocked.
+
+### Iteration 96 — 2026-10-17
+- **Completed:** V8.
+  - `common/utilities/nested_manifest.py` contains:
+    - `render_manifest(spec, catalog, media)`, where `catalog` is keyed by entry **id** (not by guest name, unlike `NestedHostValidator.validate`'s return).
+    - `build_secrets` / `render_secrets(spec, product_keys)`.
+    - `render_autounattend(guest, entry, secrets, networks=(), template=None)`, where `secrets` is the `build_secrets` map.
+    - `guest_mac(guest, nic_index)`.
+  - The manifest drops `admin_password` and `vnc_passwords`. Each NIC gains a deterministic `mac`, and each guest gains `catalog` (the entry dump) and `media` (`{source: url|gcs, ...}`).
+  - Template: `cloud_functions/cloud_fn_utilities/server_specific/nested/autounattend.xml.tmpl` (`string.Template`). The loader tries the `.staging` layout first, then the repo layout.
+  - New constant `NESTED_METADATA_MAX_BYTES = 262144`. Either JSON over it raises `BadRequest`. Caller bugs (a missing entry, medium, or network) raise `ValueError`.
+- **Choices beyond the contract:**
+  - The builder must pass each manifest NIC's `mac` to `virt-install --network ...,mac=`. The unattend static-IP commands find NICs by that MAC.
+  - The `networks` argument is needed for the static IPs.
+  - FirstLogonCommands also clear Winlogon `DefaultPassword` (AutoLogon leaves the password there).
+  - Static IPs use PowerShell `Get-WmiObject`, so Vista (no PowerShell) gets no static IP.
+  - virtio drivers are listed for CD letters D–G, with `start "" /wait msiexec`.
+  - LabConfig is keyed on osinfo `win11` / `win2k25`. A virtio entry whose osinfo is not in `VIRTIO_OS_DIRECTORIES` raises `ValueError`, so V6 must use those osinfo ids.
+- **Tests:** `cloud_functions/tests/test_nested_manifest.py` (58). The per-entry XML tests run over fixture Windows entries plus any `unattended_iso` entries in `common/data/nested_os_catalog.json` once V6 writes it.
+- **Learned:**
+  - Eight maximum-length `post_install_script`s total 512 KB, twice the 256 KB per-value metadata limit, so `render_manifest` refuses them. V12 must map that `BadRequest` to a 400.
+  - V11 should note that all of an instance's metadata together is capped at 512 KB (manifest + secrets + startup-script).
+  - The contract has the builder (bash) "render" the unattend, but it holds the admin password. V9/V11 must decide how the rendered XML reaches the parent. Recommendation: the Cloud Function renders it and ships it inside `agoge-nested-secrets` (removed after build).
+- **Gate results:**
+  - api/unit_tests: 1554 passed (97.75%).
+  - cloud_functions/tests: 699 passed (94.28%).
+  - build_files: 319 passed.
+  - common/tests: 235 passed.
+  - No frontend files changed.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V9 (builder script).

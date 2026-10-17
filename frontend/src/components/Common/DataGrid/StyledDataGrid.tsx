@@ -79,7 +79,9 @@ const StyledDataGrid: React.FC<DataGridProps> = ({
         // Creates a delay when updating the internal refreshing logic. This prevents
         // "Refreshing" from popping up for .5 seconds and then disappearing - right now
         // we're using a 1.5s buffer
-        setTimeout(() => setInternalRefreshing(refreshing), refreshing ? 0: 1500)
+        // Clear on change/unmount so a stale timer can't fire after the component is gone.
+        const timer = setTimeout(() => setInternalRefreshing(refreshing), refreshing ? 0: 1500)
+        return () => clearTimeout(timer);
     }, [refreshing]);
 
 
