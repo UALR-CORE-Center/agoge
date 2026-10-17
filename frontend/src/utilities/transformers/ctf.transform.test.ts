@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {CtfEvent, CtfTeamRow, CtfTemplateRow} from "../../services/Ctf/ctf.model";
+import {CtfEvent, CtfFlagSpec, CtfNestedGuestSpec, CtfTeamRow, CtfTemplateRow} from "../../services/Ctf/ctf.model";
 import {
     transformToCtfEvent,
     transformToCtfTeamList,
@@ -70,5 +70,51 @@ describe("transformToCtfEvent join_code", () => {
     it("keeps a join code and nulls a missing one", () => {
         expect(transformToCtfEvent({...base, join_code: "ABC123"}).join_code).toBe("ABC123");
         expect(transformToCtfEvent(base).join_code).toBeNull();
+    });
+});
+
+describe("transformToCtfEvent nested guests", () => {
+    const flag: CtfFlagSpec = {
+        id: "dc-flag", server: "hv", slot: 1, location_type: "file", path: "/f", points: 10,
+        operating_system: "windows", decoy: false, guest: "win-dc",
+    } as CtfFlagSpec;
+    const guest: CtfNestedGuestSpec = {
+        name: "win-dc", server: "hv", domain: "win-dc-vm", operating_system: "windows", driver: "offline",
+    };
+    const eventWith = (spec: Record<string, unknown>) => ({
+        id: "abcdefghij", unit_id: "klmnopqrst", instructor_id: [], seed_version: 1, creation_timestamp: 1,
+        accumulated_pause_seconds: 0, state: 0, state_timestamp: "t",
+        spec: {
+            name: "S", flags: [], scoring: {flag_prefix: "agoge", submission_rate_limit: 10, reveal_decoy_penalty: false},
+            ...spec,
+        },
+    }) as unknown as CtfEvent;
+
+    it("round-trips guests and a flag's guest unchanged, and is idempotent", () => {
+        const event = eventWith({flags: [flag], nested_guests: [guest]});
+        const once = transformToCtfEvent(event);
+        expect(once.spec.nested_guests).toEqual([guest]);
+        expect(once.spec.flags).toEqual([flag]);
+        expect(transformToCtfEvent(once)).toEqual(once);
+    });
+
+    it("defaults a missing nested_guests to [] and a missing flag guest to null", () => {
+        const unguested: Partial<CtfFlagSpec> = {...flag};
+        delete unguested.guest;
+        const spec = transformToCtfEvent(eventWith({flags: [unguested]})).spec;
+        expect(spec.nested_guests).toEqual([]);
+        expect(spec.flags[0].guest).toBeNull();
+    });
+
+    it("defaults a guest with no driver to qemu-agent", () => {
+        const driverless: Partial<CtfNestedGuestSpec> = {...guest};
+        delete driverless.driver;
+        const spec = transformToCtfEvent(eventWith({nested_guests: [driverless]})).spec;
+        expect(spec.nested_guests?.[0].driver).toBe("qemu-agent");
+    });
+
+    it("drops extra keys on a guest", () => {
+        const spec = transformToCtfEvent(eventWith({nested_guests: [{...guest, junk: 1}]})).spec;
+        expect(spec.nested_guests?.[0]).toEqual(guest);
     });
 });

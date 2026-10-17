@@ -1,4 +1,5 @@
 import FlagIcon from "@mui/icons-material/Flag";
+import LanIcon from "@mui/icons-material/Lan";
 import {LoadingButton} from "@mui/lab";
 import {
     Alert,
@@ -19,7 +20,16 @@ import {
 } from "@mui/material";
 import {GridColDef} from "@mui/x-data-grid";
 import React, {useEffect, useId, useState} from "react";
-import {CtfFlagSpec, CtfSpec, CtfStates, LocationType, OperatingSystem, WindowsAccess} from "../../../services/Ctf/ctf.model";
+import {
+    CtfFlagSpec,
+    CtfNestedGuestSpec,
+    CtfSpec,
+    CtfStates,
+    LocationType,
+    NestedGuestDriver,
+    OperatingSystem,
+    WindowsAccess,
+} from "../../../services/Ctf/ctf.model";
 import {ctfService} from "../../../services/Ctf/ctf.service";
 import StyledDataGrid from "../../Common/DataGrid/StyledDataGrid";
 import HttpError from "../../Common/Errors/HttpError";
@@ -58,6 +68,20 @@ export const STANDARD_CATEGORIES: readonly string[] = [
 
 // CtfFlagSpecModel.id in common/models/agoge.py.
 const FLAG_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,31}$/;
+// NESTED_GUEST_NAME_PATTERN and CtfNestedGuestSpecModel.domain in common/models/agoge.py.
+const GUEST_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,31}$/;
+const GUEST_DOMAIN_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
+// CtfValidator.MAX_GUESTS_PER_SERVER and OFFLINE_WINDOWS_LOCATIONS in object_validators/ctf.py.
+const MAX_GUESTS_PER_SERVER = 8;
+const OFFLINE_WINDOWS_LOCATIONS: readonly LocationType[] = ['file', 'registry', 'env'];
+// Case-sensitive, like the API's startswith(OFFLINE_REGISTRY_PREFIXES).
+const OFFLINE_REGISTRY_PATTERN = /^HKLM\\(SOFTWARE|SYSTEM)\\/;
+
+const GUEST_DRIVERS: {value: NestedGuestDriver; label: string}[] = [
+    {value: 'qemu-agent', label: "qemu-guest-agent (guest running)"},
+    {value: 'offline', label: "Offline disk edit (libguestfs)"},
+];
+
 // CtfFlagSpecModel.windows_user in common/models/agoge.py.
 const WINDOWS_USER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$/;
 
@@ -91,10 +115,21 @@ export const blankFlag = (server: string): CtfFlagSpec => ({
     windows_access: null,
     windows_user: null,
     hidden: false,
+    guest: null,
 });
 
+const flagGuest = (flag: CtfFlagSpec): string | null => flag.guest ?? null;
+
+/** True when both flags are on the same machine: the same server and the same guest (null = the server). */
+const sameMachine = (a: CtfFlagSpec, b: CtfFlagSpec): boolean =>
+    a.server === b.server && flagGuest(a) === flagGuest(b);
+
+/** The flag's machine as shown in messages, e.g. `hv-host` or `win-dc on hv-host`. */
+export const machineLabel = (flag: CtfFlagSpec): string =>
+    flag.guest ? `${flag.guest} on ${flag.server}` : flag.server;
+
 /** Client-side checks that catch the common mistakes; the API re-validates every field and path. */
-export const flagProblems = (flag: CtfFlagSpec, others: CtfFlagSpec[]): string[] => {
+export const flagProblems = (flag: CtfFlagSpec, others: CtfFlagSpec[], guests: CtfNestedGuestSpec[] = []): string[] => {
     const problems: string[] = [];
     if (!FLAG_ID_PATTERN.test(flag.id)) {
         problems.push("Id: 2-32 lowercase letters, digits or '-', not starting with '-'.");
@@ -102,8 +137,15 @@ export const flagProblems = (flag: CtfFlagSpec, others: CtfFlagSpec[]): string[]
         problems.push("Id is already used by another flag.");
     }
     if (!flag.server) problems.push("Choose a server.");
-    if (others.some((other) => other.server === flag.server && other.slot === flag.slot)) {
-        problems.push(`Slot ${flag.slot} is already used on ${flag.server}.`);
+    const guest = flag.guest ? guests.find((g) => g.server === flag.server && g.name === flag.guest) : undefined;
+    if (flag.guest && !guest) {
+        problems.push(`Guest ${flag.guest} is not declared on ${flag.server}.`);
+    } else if (guest && guest.operating_system !== flag.operating_system) {
+        problems.push(`Operating system must match guest ${guest.name} (${guest.operating_system}).`);
+    }
+    // A guest is its own machine, so slots and the single-OS rule are per (server, guest).
+    if (others.some((other) => sameMachine(other, flag) && other.slot === flag.slot)) {
+        problems.push(`Slot ${flag.slot} is already used on ${machineLabel(flag)}.`);
     }
     if (!flag.path.trim()) problems.push("Path is required.");
     if (!flag.decoy && flag.points <= 0) problems.push("Points must be greater than 0 (only a decoy may be 0 or negative).");
@@ -113,8 +155,20 @@ export const flagProblems = (flag: CtfFlagSpec, others: CtfFlagSpec[]): string[]
     if (isWindowsFile(flag) && flag.windows_access === 'user' && !WINDOWS_USER_PATTERN.test(flag.windows_user?.trim() ?? '')) {
         problems.push("Windows user: 1-20 letters, digits, '.', '_' or '-' (the local account name).");
     }
-    if (others.some((other) => other.server === flag.server && other.operating_system !== flag.operating_system)) {
-        problems.push(`Every flag on ${flag.server} must use the same operating system.`);
+    if (others.some((other) => sameMachine(other, flag) && other.operating_system !== flag.operating_system)) {
+        problems.push(`Every flag on ${machineLabel(flag)} must use the same operating system.`);
+    }
+    // The offline driver edits a Windows guest's disk, so it supports fewer placements.
+    if (guest?.driver === 'offline' && flag.operating_system === 'windows') {
+        if (!OFFLINE_WINDOWS_LOCATIONS.includes(flag.location_type)) {
+            problems.push("An offline Windows guest supports only file, registry and env flags.");
+        }
+        if (flag.windows_access || flag.hidden) {
+            problems.push("Windows access and Hidden are not supported on an offline Windows guest.");
+        }
+        if (flag.location_type === 'registry' && !OFFLINE_REGISTRY_PATTERN.test(flag.path.trim())) {
+            problems.push("An offline Windows guest's registry path must start with HKLM\\SOFTWARE\\ or HKLM\\SYSTEM\\.");
+        }
     }
     return problems;
 };
@@ -123,15 +177,32 @@ interface FlagDialogProps {
     initial: CtfFlagSpec;
     others: CtfFlagSpec[];
     serverNames: string[];
+    guests: CtfNestedGuestSpec[];
     onSave: (flag: CtfFlagSpec) => void;
     onClose: () => void;
 }
 
-const FlagDialog: React.FC<FlagDialogProps> = ({initial, others, serverNames, onSave, onClose}) => {
+const FlagDialog: React.FC<FlagDialogProps> = ({initial, others, serverNames, guests, onSave, onClose}) => {
     const titleId = useId();
     const [flag, setFlag] = useState<CtfFlagSpec>(initial);
     const set = <K extends keyof CtfFlagSpec>(key: K, value: CtfFlagSpec[K]) => setFlag((prev) => ({...prev, [key]: value}));
-    const problems = flagProblems(flag, others);
+    const problems = flagProblems(flag, others, guests);
+    const serverGuests = guests.filter((guest) => guest.server === flag.server);
+    const selectedGuest = serverGuests.find((guest) => guest.name === flag.guest);
+    // A guest that is no longer declared stays selectable, so the problem list can name it.
+    const staleGuest = flag.guest && !selectedGuest ? flag.guest : null;
+
+    const setServer = (server: string) => setFlag((prev) => ({
+        ...prev,
+        server,
+        // Guests belong to one server; a guest of the old server would be undeclared on the new one.
+        guest: guests.some((guest) => guest.server === server && guest.name === prev.guest) ? prev.guest : null,
+    }));
+    const setGuest = (name: string) => {
+        const guest = serverGuests.find((g) => g.name === name);
+        // A flag's operating system is its guest's, so picking a guest sets it.
+        setFlag((prev) => ({...prev, guest: guest ? guest.name : null, operating_system: guest?.operating_system ?? prev.operating_system}));
+    };
     const linuxFile = flag.location_type === 'file' && flag.operating_system === 'linux';
     const windowsFile = isWindowsFile(flag);
     const example = LOCATION_TYPES.find((type) => type.value === flag.location_type)?.example;
@@ -147,6 +218,7 @@ const FlagDialog: React.FC<FlagDialogProps> = ({initial, others, serverNames, on
             category: flag.category?.trim() || null,
             hint: flag.hint?.trim() || null,
             path: flag.path.trim(),
+            guest: flag.guest || null,
             unlocks_after: flag.unlocks_after?.length ? flag.unlocks_after : null,
             // Only Linux file placements take a mode and owner.
             file_mode: linuxFile ? flag.file_mode?.trim() || null : null,
@@ -176,14 +248,25 @@ const FlagDialog: React.FC<FlagDialogProps> = ({initial, others, serverNames, on
                                        helperText="Pick one or type your own" />
                         )}
                     />
-                    <RequiredTextField required select label="Server" value={flag.server} onChange={(e) => set('server', e.target.value)}>
+                    <RequiredTextField required select label="Server" value={flag.server} onChange={(e) => setServer(e.target.value)}>
                         {serverNames.map((name) => <MenuItem key={name} value={name}>{name}</MenuItem>)}
                     </RequiredTextField>
+                    {(serverGuests.length > 0 || staleGuest) && (
+                        <TextField select label="Nested guest" value={flag.guest ?? ''}
+                                   onChange={(e) => setGuest(e.target.value)}
+                                   helperText="Plant inside a VM running on this server">
+                            <MenuItem value="">None (the server itself)</MenuItem>
+                            {serverGuests.map((guest) => <MenuItem key={guest.name} value={guest.name}>{guest.name}</MenuItem>)}
+                            {staleGuest && <MenuItem value={staleGuest}>{staleGuest} (not declared)</MenuItem>}
+                        </TextField>
+                    )}
                     <RequiredTextField required label="Slot" type="number" value={flag.slot}
                                onChange={(e) => set('slot', Number(e.target.value))}
                                inputProps={{min: 1, max: 9}} helperText="1-9, unique per server; slot 1 is the foothold" />
                     <RequiredTextField required select label="Operating system" value={flag.operating_system}
-                               onChange={(e) => set('operating_system', e.target.value as OperatingSystem)}>
+                               onChange={(e) => set('operating_system', e.target.value as OperatingSystem)}
+                               disabled={!!selectedGuest}
+                               helperText={selectedGuest ? `Set by guest ${selectedGuest.name}` : undefined}>
                         <MenuItem value="linux">Linux</MenuItem>
                         <MenuItem value="windows">Windows</MenuItem>
                     </RequiredTextField>
@@ -270,6 +353,89 @@ const FlagDialog: React.FC<FlagDialogProps> = ({initial, others, serverNames, on
     );
 };
 
+export const blankGuest = (server: string): CtfNestedGuestSpec => ({
+    name: '',
+    server,
+    domain: '',
+    operating_system: 'linux',
+    driver: 'qemu-agent',
+});
+
+/**
+ * Client-side checks mirroring CtfNestedGuestSpecModel and CtfValidator. The parent's OS and
+ * ip_aliases are not known here, so the API alone checks that the server can run guests.
+ */
+export const guestProblems = (guest: CtfNestedGuestSpec, others: CtfNestedGuestSpec[]): string[] => {
+    const problems: string[] = [];
+    if (!GUEST_NAME_PATTERN.test(guest.name)) {
+        problems.push("Name: 2-32 lowercase letters, digits or '-', not starting with '-'.");
+    } else if (others.some((other) => other.server === guest.server && other.name === guest.name)) {
+        problems.push(`Name is already used by another guest on ${guest.server}.`);
+    }
+    if (!guest.server) problems.push("Choose a server.");
+    if (!GUEST_DOMAIN_PATTERN.test(guest.domain)) {
+        problems.push("Domain: 1-64 letters, digits, '_', '.' or '-' (the libvirt domain name).");
+    }
+    if (others.filter((other) => other.server === guest.server).length >= MAX_GUESTS_PER_SERVER) {
+        problems.push(`A server can run at most ${MAX_GUESTS_PER_SERVER} nested guests.`);
+    }
+    return problems;
+};
+
+interface GuestDialogProps {
+    initial: CtfNestedGuestSpec;
+    others: CtfNestedGuestSpec[];
+    serverNames: string[];
+    onSave: (guest: CtfNestedGuestSpec) => void;
+    onClose: () => void;
+}
+
+const GuestDialog: React.FC<GuestDialogProps> = ({initial, others, serverNames, onSave, onClose}) => {
+    const titleId = useId();
+    const [guest, setGuest] = useState<CtfNestedGuestSpec>(initial);
+    const set = <K extends keyof CtfNestedGuestSpec>(key: K, value: CtfNestedGuestSpec[K]) =>
+        setGuest((prev) => ({...prev, [key]: value}));
+    const problems = guestProblems(guest, others);
+
+    return (
+        <Dialog open onClose={onClose} aria-labelledby={titleId} fullWidth maxWidth="sm">
+            <DialogTitle id={titleId}>{initial.name ? `Edit guest ${initial.name}` : "Add nested guest"}</DialogTitle>
+            <DialogContent>
+                <Box sx={{display: 'grid', gridTemplateColumns: {xs: '1fr', sm: '1fr 1fr'}, gap: 2, mt: 1}}>
+                    <RequiredTextField required label="Name" value={guest.name}
+                               onChange={(e) => set('name', e.target.value.toLowerCase())}
+                               helperText="Flags pick the guest by this name" />
+                    <RequiredTextField required select label="Server" value={guest.server}
+                               onChange={(e) => set('server', e.target.value)}
+                               helperText="The Linux server that runs this VM">
+                        {serverNames.map((name) => <MenuItem key={name} value={name}>{name}</MenuItem>)}
+                    </RequiredTextField>
+                    <RequiredTextField required label="libvirt domain" value={guest.domain}
+                               onChange={(e) => set('domain', e.target.value.trim())}
+                               helperText="As listed by virsh list --all" />
+                    <RequiredTextField required select label="Operating system" value={guest.operating_system}
+                               onChange={(e) => set('operating_system', e.target.value as OperatingSystem)}>
+                        <MenuItem value="linux">Linux</MenuItem>
+                        <MenuItem value="windows">Windows</MenuItem>
+                    </RequiredTextField>
+                    <RequiredTextField required select label="Driver" value={guest.driver}
+                               onChange={(e) => set('driver', e.target.value as NestedGuestDriver)}
+                               helperText="How the server writes flags into the guest" sx={{gridColumn: {sm: '1 / -1'}}}>
+                        {GUEST_DRIVERS.map((driver) => <MenuItem key={driver.value} value={driver.value}>{driver.label}</MenuItem>)}
+                    </RequiredTextField>
+                </Box>
+                {problems.length > 0 && (
+                    <Alert severity="warning" sx={{mt: 2}}>{problems.map((p) => <div key={p}>{p}</div>)}</Alert>
+                )}
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={onClose}>Cancel</Button>
+                <Button variant="contained" onClick={() => onSave(guest)} disabled={problems.length > 0}>Done</Button>
+            </DialogActions>
+        </Dialog>
+    );
+};
+
 // CtfScoringSpecModel.flag_prefix in common/models/agoge.py.
 const FLAG_PREFIX_PATTERN = /^[a-z][a-z0-9]{1,15}$/;
 
@@ -279,6 +445,7 @@ export const blankCtfSpec = (name = ''): CtfSpec => ({
     rules_url: null,
     flags: [],
     scoring: {flag_prefix: 'agoge', submission_rate_limit: 10, reveal_decoy_penalty: false},
+    nested_guests: [],
 });
 
 /** Whole-spec checks mirroring CtfSpecModel and CtfValidator; the API re-validates on save. */
@@ -292,13 +459,22 @@ export const ctfSpecProblems = (spec: CtfSpec, serverNames: string[]): string[] 
     if (!Number.isInteger(rate) || rate < 1 || rate > 100) {
         problems.push("Submissions per flag per minute must be between 1 and 100.");
     }
+    const guests = spec.nested_guests ?? [];
+    guests.forEach((guest, index) => {
+        const label = guest.name || `#${index + 1}`;
+        if (!serverNames.includes(guest.server)) {
+            problems.push(`Guest ${label}: server "${guest.server}" is not in this lab.`);
+        }
+        guestProblems(guest, guests.filter((_other, i) => i !== index))
+            .forEach((problem) => problems.push(`Guest ${label}: ${problem}`));
+    });
     if (spec.flags.length === 0) problems.push("Add at least one flag.");
     spec.flags.forEach((flag, index) => {
         const label = flag.id || `#${index + 1}`;
         if (!serverNames.includes(flag.server)) {
             problems.push(`Flag ${label}: server "${flag.server}" is not in this lab.`);
         }
-        flagProblems(flag, spec.flags.filter((_other, i) => i !== index))
+        flagProblems(flag, spec.flags.filter((_other, i) => i !== index), guests)
             .forEach((problem) => problems.push(`Flag ${label}: ${problem}`));
     });
     return problems;
@@ -314,6 +490,8 @@ interface CtfSpecFieldsProps {
 /** The ctf block's settings and flag table, shared by the event Setup tab and the lab template editor. */
 export const CtfSpecFields: React.FC<CtfSpecFieldsProps> = ({value, onChange, serverNames, editable = true}) => {
     const [editingIndex, setEditingIndex] = useState<number | null>(null);
+    const [editingGuestIndex, setEditingGuestIndex] = useState<number | null>(null);
+    const guests = value.nested_guests ?? [];
 
     const setField = <K extends keyof CtfSpec>(key: K, fieldValue: CtfSpec[K]) =>
         onChange({...value, [key]: fieldValue});
@@ -351,9 +529,63 @@ export const CtfSpecFields: React.FC<CtfSpecFieldsProps> = ({value, onChange, se
             }));
     };
 
+    const guestFlagCount = (guest: CtfNestedGuestSpec): number =>
+        value.flags.filter((flag) => flag.server === guest.server && flag.guest === guest.name).length;
+
+    const saveGuest = (guest: CtfNestedGuestSpec) => {
+        const nextGuests = [...guests];
+        let flags = value.flags;
+        if (editingGuestIndex === null || editingGuestIndex >= nextGuests.length) {
+            nextGuests.push(guest);
+        } else {
+            const previous = nextGuests[editingGuestIndex];
+            nextGuests[editingGuestIndex] = guest;
+            // The guest's flags follow a rename or a move, and take its operating system (the flag's OS is the guest's).
+            flags = flags.map((flag) => flag.server === previous.server && flag.guest === previous.name
+                ? {...flag, server: guest.server, guest: guest.name, operating_system: guest.operating_system}
+                : flag);
+        }
+        onChange({...value, nested_guests: nextGuests, flags});
+        setEditingGuestIndex(null);
+    };
+
+    const deleteGuest = (index: number) =>
+        setField('nested_guests', guests.filter((_guest, i) => i !== index));
+
+    const guestColumns: GridColDef<CtfNestedGuestSpec & {index: number}>[] = [
+        {field: 'name', headerName: 'Guest', flex: 1, minWidth: 130},
+        {field: 'server', headerName: 'Server', flex: 1, minWidth: 120},
+        {field: 'domain', headerName: 'Domain', flex: 1, minWidth: 120},
+        {field: 'operating_system', headerName: 'OS', width: 90, minWidth: 80},
+        {field: 'driver', headerName: 'Driver', width: 110, minWidth: 100},
+        {
+            field: 'actions',
+            headerName: '',
+            width: 170,
+            minWidth: 160,
+            sortable: false,
+            renderCell: (params) => (
+                <Box sx={{display: 'flex', alignItems: 'center', gap: 1, height: '100%'}}>
+                    <Button size="small" variant="outlined" disabled={!editable}
+                            onClick={() => setEditingGuestIndex(params.row.index)}
+                            aria-label={`Edit guest ${params.row.name}`}>
+                        Edit
+                    </Button>
+                    {/* Deleting a guest with flags would silently move them onto its server. */}
+                    <Button size="small" color="error" disabled={!editable || guestFlagCount(params.row) > 0}
+                            onClick={() => deleteGuest(params.row.index)}
+                            aria-label={`Delete guest ${params.row.name}`}>
+                        Delete
+                    </Button>
+                </Box>
+            ),
+        },
+    ];
+
     const columns: GridColDef<CtfFlagSpec & {index: number}>[] = [
         {field: 'id', headerName: 'Flag', flex: 1, minWidth: 130},
         {field: 'server', headerName: 'Server', flex: 1, minWidth: 120},
+        {field: 'guest', headerName: 'Guest', flex: 1, minWidth: 110, valueGetter: (_value, row) => row.guest ?? ''},
         {field: 'slot', headerName: 'Slot', type: 'number', width: 70, minWidth: 60},
         {field: 'location_type', headerName: 'Location', width: 100, minWidth: 90},
         {field: 'points', headerName: 'Points', type: 'number', width: 90, minWidth: 80},
@@ -389,6 +621,8 @@ export const CtfSpecFields: React.FC<CtfSpecFieldsProps> = ({value, onChange, se
 
     const editingFlag = editingIndex === null ? null
         : editingIndex >= value.flags.length ? blankFlag(serverNames[0] ?? '') : value.flags[editingIndex];
+    const editingGuest = editingGuestIndex === null ? null
+        : editingGuestIndex >= guests.length ? blankGuest(serverNames[0] ?? '') : guests[editingGuestIndex];
 
     return (
         <Box sx={{width: '100%', minWidth: 0}}>
@@ -413,6 +647,23 @@ export const CtfSpecFields: React.FC<CtfSpecFieldsProps> = ({value, onChange, se
                 />
             </Box>
             <StyledDataGrid
+                data={guests.map((guest, index) => ({...guest, index}))}
+                columns={guestColumns}
+                getRowId={(row: CtfNestedGuestSpec & {index: number}) => `${row.index}-${row.server}-${row.name}`}
+                disableCheckBoxes={true}
+                disableRowSelectionOnClick={true}
+                localeText={{noRowsLabel: "No nested guests"}}
+                labelProps={{text: "Nested guests", icon: <LanIcon fontSize={"large"} />}}
+                density={"comfortable"}
+            />
+            <Typography variant="body2" color="text.secondary" sx={{mt: 1}}>
+                Only for VMs running inside a Linux lab server with nested virtualization (a NIC with IP aliases).
+            </Typography>
+            <Button variant="outlined" sx={{mt: 1, mb: 3}} disabled={!editable || serverNames.length === 0}
+                    onClick={() => setEditingGuestIndex(guests.length)}>
+                Add nested guest
+            </Button>
+            <StyledDataGrid
                 data={value.flags.map((flag, index) => ({...flag, index}))}
                 columns={columns}
                 getRowId={(row: CtfFlagSpec & {index: number}) => `${row.index}-${row.id}`}
@@ -431,8 +682,18 @@ export const CtfSpecFields: React.FC<CtfSpecFieldsProps> = ({value, onChange, se
                     initial={editingFlag}
                     others={value.flags.filter((_flag, index) => index !== editingIndex)}
                     serverNames={serverNames}
+                    guests={guests}
                     onSave={saveFlag}
                     onClose={() => setEditingIndex(null)}
+                />
+            )}
+            {editingGuest && (
+                <GuestDialog
+                    initial={editingGuest}
+                    others={guests.filter((_guest, index) => index !== editingGuestIndex)}
+                    serverNames={serverNames}
+                    onSave={saveGuest}
+                    onClose={() => setEditingGuestIndex(null)}
                 />
             )}
         </Box>

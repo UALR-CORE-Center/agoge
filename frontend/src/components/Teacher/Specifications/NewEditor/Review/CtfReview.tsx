@@ -53,7 +53,7 @@ const CtfReview: React.FC<Props> = ({specification, loading, elevation, onNaviga
                         <ReviewItemValue>
                             <NestedReviewListItem>
                                 <ReviewItemKeyWrapper>Server</ReviewItemKeyWrapper>
-                                <ReviewItemValueOrSkeleton value={`${flag.server} (slot ${flag.slot})`} loading={loading}/>
+                                <ReviewItemValueOrSkeleton value={`${flag.guest ? `${flag.guest} on ` : ''}${flag.server} (slot ${flag.slot})`} loading={loading}/>
                             </NestedReviewListItem>
                             <NestedReviewListItem>
                                 <ReviewItemKeyWrapper>Location</ReviewItemKeyWrapper>
