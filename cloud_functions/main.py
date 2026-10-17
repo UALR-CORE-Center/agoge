@@ -10,6 +10,13 @@ from handlers.ctf_handler import CtfHandler
 logger = Logger(LoggerNames.CLOUD_FN, class_name="main")
 
 
+def _loggable(attributes: dict) -> dict:
+    """Attributes safe to log: a nested CHECK_OUT carries Windows product keys."""
+    if attributes and PubSub.EventAttributes.PRODUCT_KEYS in attributes:
+        return {**attributes, PubSub.EventAttributes.PRODUCT_KEYS: '[redacted]'}
+    return attributes
+
+
 def agoge_cloud_function(event, context, debug_mode: bool = False):
     """
     Responds to a Pub/Sub event from other cloud functions to build servers.
@@ -31,14 +38,14 @@ def agoge_cloud_function(event, context, debug_mode: bool = False):
     logger.info("Cloud Function invoked.", extra={
         "event_id": context.event_id,
         "timestamp": context.timestamp,
-        "attributes": attributes
+        "attributes": _loggable(attributes)
     })
 
     bm = BudgetManager()
     if not bm.check_budget():
         logger.error(
             "BUDGET ALERT: Budget exceeded. Cloud Function execution halted.",
-            extra={"event_id": context.event_id, "attributes": attributes}
+            extra={"event_id": context.event_id, "attributes": _loggable(attributes)}
         )
         return
 
@@ -52,13 +59,13 @@ def agoge_cloud_function(event, context, debug_mode: bool = False):
     if not handler:
         logger.error("No handler provided in attributes.", extra={
             "event_id": context.event_id,
-            "attributes": attributes
+            "attributes": _loggable(attributes)
         })
         raise ValueError("Handler missing in attributes.")
 
     logger.info(f"Processing handler: {handler}", extra={
         "event_id": context.event_id,
-        "attributes": attributes
+        "attributes": _loggable(attributes)
     })
 
     try:
@@ -75,18 +82,18 @@ def agoge_cloud_function(event, context, debug_mode: bool = False):
         else:
             logger.warning(f"Unknown handler: {handler}", extra={
                 "event_id": context.event_id,
-                "attributes": attributes
+                "attributes": _loggable(attributes)
             })
             raise ValueError(f"Unknown handler: {handler}")
 
     except Exception as e:
         logger.error("Error occurred while processing the event.", extra={
             "event_id": context.event_id,
-            "attributes": attributes
+            "attributes": _loggable(attributes)
         })
         raise
 
     logger.info("Cloud Function execution completed successfully.", extra={
         "event_id": context.event_id,
-        "attributes": attributes
+        "attributes": _loggable(attributes)
     })

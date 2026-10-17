@@ -10,7 +10,7 @@ from fastapi import (
 )
 
 from common.exceptions import NotFound, BadRequest, Conflict, Forbidden, OperationTimeout, ServiceUnavailable, AgogeValidationError, NotReady
-from common.models.agoge import AgogeImageModel
+from common.models.agoge import AgogeImageModel, NestedImageCreateRequest
 from common.models.users import AgogeUser
 from common.models.response import (
     AgogeResponse,
@@ -18,12 +18,14 @@ from common.models.response import (
     ImageListResponse,
     ComputeImageListResponse,
     GoogleImageListResponse,
-    MachineTypeListResponse
+    MachineTypeListResponse,
+    NestedOsCatalogListResponse,
 )
 from common.constants.enumerators import ImageScopes
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 
 from core.compute.image import ComputeImage
+from core.compute.nested.nested_image import NestedImage
 from dependencies import teacher_required, admin_required, get_cloud_env
 
 
@@ -151,6 +153,36 @@ async def list_machine_types(
     except NotFound as e:
         logger.error(e.message, **log_args)
         raise HTTPException(status_code=404)
+
+
+@compute_image_router.post('/nested/')
+def create_nested_image(
+    body: NestedImageCreateRequest,
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[AgogeIDResponse]:
+    # Sync: validation reads machine types from Compute, so it runs in the worker thread pool.
+    log_args = {
+        'user': current_user.uid,
+        'image': body.server_name,
+    }
+    try:
+        logger.info(f'POST request to create nested image from user {current_user.uid}', **log_args)
+        image = NestedImage(env_dict).create(current_user, body)
+        return AgogeResponse(data={'build_id': image.name})
+    except Conflict as e:
+        raise HTTPException(status_code=409, detail=e.message)
+    except (BadRequest, AgogeValidationError) as e:
+        logger.error(f'create_nested_image - {e.message}', **log_args)
+        raise HTTPException(status_code=400, detail=e.message)
+
+
+@compute_image_router.get('/nested/catalog/')
+async def list_nested_catalog(
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[NestedOsCatalogListResponse]:
+    return AgogeResponse(data={'items': NestedImage(env_dict).list_catalog()})
 
 
 @compute_image_router.get("/{image_name}/")

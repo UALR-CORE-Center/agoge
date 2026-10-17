@@ -12,7 +12,7 @@ from .agoge import (
     AgogeInstructionsModel,
     AgogeInstructionMinimal,
     CatalogEditModel, SnapshotModel,
-    ArmStatus, LocationType, NESTED_GUEST_NAME_PATTERN, PlantStatus,
+    ArmStatus, LocationType, NESTED_GUEST_NAME_PATTERN, NestedOsCatalogModel, PlantStatus,
 )
 from .google import ComputeImageModel, MachineTypeModel
 T = TypeVar('T')
@@ -81,6 +81,10 @@ class ImageListResponse(BaseModel):
 
 class MachineTypeListResponse(BaseModel):
     items: List[MachineTypeModel]
+
+
+class NestedOsCatalogListResponse(BaseModel):
+    items: List[NestedOsCatalogModel]
 
 
 class CatalogEditListResponse(BaseModel):

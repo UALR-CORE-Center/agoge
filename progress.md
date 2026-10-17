@@ -165,7 +165,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V9** Builder script — spec + done-when at PRD.md:1677 (must install the V10 runtime from `nested_scripts.render_runtime()`/`render_runtime_unit()` and write `/etc/agoge-nested/host.json` in the shape `runtime.sh` documents; see iteration 97)
 - [x] **V10** Runtime service — spec + done-when at PRD.md:1679 (done before V9, which installs it: `render_runtime()`/`render_runtime_unit()` in `cloud_fn_utilities/server_specific/nested_scripts.py`)
 - [x] **V11** Nested template server provisioning — spec + done-when at PRD.md:1681
-- [ ] **V12** Create route — spec + done-when at PRD.md:1683 (`ImageTemplateManager.check_out(product_keys=...)` takes the never-persisted keys; V12 must carry them in the CHECK_OUT message and `ControlHandler._check_out` must pass them through)
+- [x] **V12** Create route — spec + done-when at PRD.md:1683 (`ImageTemplateManager.check_out(product_keys=...)` takes the never-persisted keys; V12 must carry them in the CHECK_OUT message and `ControlHandler._check_out` must pass them through)
 - [ ] **V13** Build monitor — spec + done-when at PRD.md:1685
 - [ ] **V14** Finalize handshake — spec + done-when at PRD.md:1687 (also merge the finalize-watcher bootstrap into `startup-script` on both check-out paths in `ImageTemplateManager._prepare_nested_check_out`; V11 left the re-check-out path with only `enable-guest-attributes`)
 - [ ] **V15** Media uploads — spec + done-when at PRD.md:1689
@@ -179,6 +179,8 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [ ] **V23** Spec editor and CTF integration — spec + done-when at PRD.md:1705 (needs N3, N5, N13; the browser check is carried by HUMAN)
 - [ ] **V24** Nested image guide — spec + done-when at PRD.md:1707
 - [ ] **V25** Live acceptance — spec + done-when at PRD.md:1708 — **HUMAN ONLY.** Builds real VMs on the development project; the loop must not attempt it. Carried by HUMAN.
+
+- [ ] **V12b** (found in iteration 100) `ComputeImage.create_image_server` and `NestedImage.create` write the CHECKED_OUT record before publishing CHECK_OUT, so a failed publish leaves a record no build will ever pick up, and a retry with the same name gets 409. Delete the record (or mark nested phase `failed`) when the publish raises.
 
 ### Human checks
 - [ ] **HUMAN** Browser and live checks the loop cannot do: N13, N14, V17–V21 and V23 "verified in browser" done-whens, and V25 live acceptance (SC-35–SC-38) on the development project. Leave this for a person; do not mark it done.
@@ -1643,3 +1645,27 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V12 (create route). It must carry `product_keys` to `check_out`.
+
+### Iteration 100 — 2026-10-17
+- **Completed:** V12.
+  - `api/core/compute/nested/nested_image.py` defines `NestedImage(ComputeImage)`:
+    - `create(user, request)` runs `NestedHostValidator.validate` and checks that the name is free (409). It then runs `derive`, which fills exposures, console ports, and VNC passwords.
+    - It writes `image/<name>` through `_create_record` with status CHECKED_OUT, `self_link`/`image` = `projects/debian-cloud/global/images/family/<parent_os>`, `base_family=parent_os`, `os='linux'`, and `add_disk` = `disk_size` or `min_disk_size`. The parent's `human_interaction` is SSH, built from `username`/`ssh_key`. `nested_build.phase` is `queued`.
+    - Last, it publishes CONTROL / CHECK_OUT / TEMPLATE_SERVER.
+    - `list_catalog()` returns the enabled entries, skips malformed ones, and sorts by group, then display name.
+  - Routes: `POST /compute/images/nested/` (teacher, sync def) returns `{build_id}`. `GET /compute/images/nested/catalog/` (teacher) returns `{items}` through the new `NestedOsCatalogListResponse`. Both are registered before `/{image_name}/`.
+  - Product keys travel as the JSON attribute `PubSub.EventAttributes.PRODUCT_KEYS`, and only when non-empty. `ControlHandler._check_out` parses them and calls `check_out(product_keys=...)`. A malformed value is dropped and logged without its value.
+  - `main.py` logs every attributes dict through `_loggable()`, which redacts `product_keys`. The handler still receives the real dict.
+- **Learned:**
+  - `main.py` logs every Pub/Sub attribute at info level. Any future secret-bearing attribute must be added to `_loggable`.
+  - Pub/Sub attribute values are capped at 1024 bytes. Eight guests' keys fit.
+- **Tests:**
+  - `api/unit_tests/test_nested_image_create_route.py` (13): 200 with the stored record and a single message, no product key in the record, 400 from the validator and from a bad username, 409 both before create and on a create race, 403 for a student on both routes, 422 on client-supplied derived fields, and the catalog route not captured by `/{image_name}/`. The fixtures are imported from `test_nested_host_validator`.
+  - `cloud_functions/tests/test_control_handler_nested_check_out.py` (7): the pass-through, a missing attribute, malformed values, and log redaction on both the success and the failure path.
+- **Gate results:**
+  - api/unit_tests: 1567 passed (97.75%).
+  - cloud_functions/tests: 759 passed (94.28%).
+  - build_files: 319 passed.
+  - No frontend files changed.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V13 (build monitor).
