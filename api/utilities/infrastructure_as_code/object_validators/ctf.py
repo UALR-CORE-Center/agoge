@@ -1,7 +1,9 @@
 import re
+from typing import Callable, Optional
 
 from common.exceptions import AgogeValidationError
 from common.utilities.ctf_plant_contract import LOCATION_PATH_PATTERNS
+from .nested_servers import NestedServersValidator
 
 
 class CtfValidator:
@@ -15,9 +17,16 @@ class CtfValidator:
 
     def __init__(
         self,
-        config: dict
+        config: dict,
+        image_loader: Optional[Callable[[str], Optional[dict]]] = None
     ) -> None:
+        """
+        @param config: The specification
+        @param image_loader: Returns the image document for an image doc id; lets a nested-guest parent
+            built from a nested lab host image pass without ip_aliases. Without it only ip_aliases count.
+        """
         self.config = config
+        self.image_loader = image_loader
 
     def load(self) -> dict:
         self._validate()
@@ -132,11 +141,13 @@ class CtfValidator:
                     f"Invalid CTF nested guest {name}: server '{server_name}' must be a Linux server, not "
                     f"{server_os!r}"
                 )
-            # ip_aliases is what turns on nested virtualization at build (base_compute_manager)
-            if not any(nic.get('ip_aliases') for nic in server.get('nics') or []):
+            # ip_aliases, or an image with `nested`, is what turns on nested virtualization at build
+            # (base_compute_manager)
+            if not any(nic.get('ip_aliases') for nic in server.get('nics') or []) \
+                    and not self._has_nested_image(server):
                 raise AgogeValidationError(
-                    f"Invalid CTF nested guest {name}: server '{server_name}' needs a NIC with ip_aliases to "
-                    f"run nested guests"
+                    f"Invalid CTF nested guest {name}: server '{server_name}' needs a NIC with ip_aliases or "
+                    f"a nested lab host image to run nested guests"
                 )
             if (server_name, name) in guests:
                 raise AgogeValidationError(
@@ -150,6 +161,14 @@ class CtfValidator:
                     f"{self.MAX_GUESTS_PER_SERVER} nested guests"
                 )
         return guests
+
+    def _has_nested_image(self, server: dict) -> bool:
+        image_id = NestedServersValidator.image_doc_id(server.get('image'))
+        if self.image_loader is None or not image_id:
+            return False
+        image = self.image_loader(image_id)
+        # Only a dict counts: callers' mocked dbs return MagicMocks whose .get('nested') is truthy
+        return isinstance(image, dict) and isinstance(image.get('nested'), dict)
 
     OFFLINE_WINDOWS_LOCATIONS = ('file', 'registry', 'env')
     # The offline driver edits the guest's registry hives on its disk; only SOFTWARE and SYSTEM are supported

@@ -67,7 +67,7 @@ class SpecFileManager(LabSpecBase):
         # Outside the build_type branch so no spec carrying a ctf block skips the flag path checks
         if ctf := self.spec.get('ctf'):
             CtfSpecModel(**ctf)
-            CtfValidator(self.spec).load()
+            CtfValidator(self.spec, image_loader=self._get_image_record).load()
 
         # Spec is now validated
         self.validated = True

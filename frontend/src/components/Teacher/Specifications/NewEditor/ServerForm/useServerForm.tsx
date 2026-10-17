@@ -111,6 +111,16 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
             [ServerFormKeys.serverRoutes]: {
                 ...createDefaultFormFieldMeta(server?.routes || [], [])
             },
+            // Saved connections are kept only when they include nested guest ones; otherwise render() keeps
+            // following the image's connections, as it always has
+            [ServerFormKeys.serverHumanInteraction]: {
+                ...createDefaultFormFieldMeta(
+                    server?.human_interaction?.some(connection => connection.nested_guest || connection.alias_index != null || connection.port != null)
+                        ? server.human_interaction
+                        : null,
+                    []
+                )
+            },
             [ServerFormKeys.serverNetworks]: []
         }
 
@@ -207,6 +217,15 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
                 copy[ServerFormKeys.serverSettingCanIpForward] = {
                     ...copy[ServerFormKeys.serverSettingCanIpForward],
                     value: true,
+                };
+            }
+
+            // Nested guest connections belong to the image they were generated from; a different image
+            // falls back to its own connections. Same-value selects (the table re-matching on load) keep them.
+            if (key === ServerFormKeys.serverBaseImage && value !== copyOfForms[idx][key].value) {
+                copy[ServerFormKeys.serverHumanInteraction] = {
+                    ...copy[ServerFormKeys.serverHumanInteraction],
+                    value: null,
                 };
             }
 
@@ -513,7 +532,8 @@ export const useServerForm = ({rawData, initialize}: { rawData?: Server[], initi
                 startup_script: form[ServerFormKeys.serverStartupScript].value || undefined,
                 routes: form[ServerFormKeys.serverRoutes].value || undefined,
                 machine_type: form[ServerFormKeys.serverSettingsMachineType].value || image?.machine_type,
-                human_interaction: image?.human_interaction ? image.human_interaction : [],
+                human_interaction: form[ServerFormKeys.serverHumanInteraction]?.value
+                    ?? (image?.human_interaction ? image.human_interaction : []),
                 nics: [],
             };
 

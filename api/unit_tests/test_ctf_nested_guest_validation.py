@@ -99,6 +99,37 @@ def test_ip_aliases_on_any_nic_is_enough():
     CtfValidator(_spec([_flag()], [_guest()], servers)).load()
 
 
+# V23: a parent built from a nested lab host image has nested virtualization without ip_aliases
+@pytest.mark.parametrize('image', ['image-hv-host', 'hv-host', {'value': 'image-hv-host'}])
+def test_nested_image_parent_without_ip_aliases_passes(image):
+    servers = [_hv_server(image=image, nics=[{'network': 'lan'}])]
+    loaded = []
+
+    def loader(image_id):
+        loaded.append(image_id)
+        return {'id': 'hv-host', 'nested': {'guests': [], 'exposures': []}}
+
+    CtfValidator(_spec([_flag()], [_guest()], servers), image_loader=loader).load()
+    assert loaded == ['hv-host']
+
+
+@pytest.mark.parametrize('image_doc', [None, {'id': 'plain'}, {'id': 'plain', 'nested': None}])
+def test_non_nested_image_parent_without_ip_aliases_rejected(image_doc):
+    servers = [_hv_server(image='image-plain', nics=[{'network': 'lan'}])]
+    with pytest.raises(AgogeValidationError) as exc:
+        CtfValidator(_spec([], [_guest()], servers), image_loader=lambda _: image_doc).load()
+    assert 'win-dc' in str(exc.value)
+    assert 'nested lab host image' in str(exc.value)
+
+
+def test_public_image_parent_is_not_looked_up():
+    servers = [_hv_server(image='projects/debian-cloud/global/images/family/debian-12', nics=[])]
+    loader_calls = []
+    with pytest.raises(AgogeValidationError):
+        CtfValidator(_spec([], [_guest()], servers), image_loader=loader_calls.append).load()
+    assert loader_calls == []
+
+
 # Row 2: (server, name) unique; at most 8 guests per server
 
 def test_duplicate_guest_name_on_one_server_rejected():

@@ -105,6 +105,10 @@ class CtfSetup:
             ))
         return sorted(rows, key=lambda row: row.name.lower())
 
+    def _get_image_record(self, image_id: str):
+        """CtfValidator's image loader: a parent built from a nested lab host image needs no ip_aliases."""
+        return self.db.get(collection_name=DbCollections.IMAGE, doc_id=image_id)
+
     def create(self, request: CtfCreateRequest, user: AgogeUser, ctf_id: str) -> str:
         """Create the event's own lab from a catalog template, then the event in DRAFT with no teams.
 
@@ -123,7 +127,9 @@ class CtfSetup:
         except ValidationError as e:
             raise BadRequest(message=f"Template ctf specification is invalid: {e.error_count()} error(s)")
         # The checks a catalog save runs, so a stale template fails here rather than at Arm.
-        CtfValidator({'servers': spec_doc.get('servers') or [], 'ctf': spec.model_dump()}).load()
+        CtfValidator(
+            {'servers': spec_doc.get('servers') or [], 'ctf': spec.model_dump()}, image_loader=self._get_image_record,
+        ).load()
         if request.name:
             spec.name = request.name
         if request.expires <= time.time():
@@ -272,7 +278,9 @@ class CtfSetup:
         event = self._event_in(ctf_id, user, self.SETUP_STATES, "edit the flags of")
         unit = self.db.get(collection_name=DbCollections.UNIT, doc_id=event.unit_id) or {}
         # The same pair edit_manager runs on a catalog save: path patterns, servers, slots, unlocks.
-        CtfValidator({'servers': unit.get('servers') or [], 'ctf': ctf.model_dump()}).load()
+        CtfValidator(
+            {'servers': unit.get('servers') or [], 'ctf': ctf.model_dump()}, image_loader=self._get_image_record,
+        ).load()
         seed = self.events.env.ctf_flag_seed
         if not seed:
             raise ServiceUnavailable(message=NOT_PROVISIONED_MESSAGE)

@@ -20,6 +20,7 @@ export enum ServerFormKeys {
     serverNicEnableExternalNat,
     serverNicExternalIpName,
     serverEnableDirectConnections,
+    serverHumanInteraction,
 }
 
 
@@ -49,6 +50,8 @@ export interface IServerForm {
     [ServerFormKeys.serverSettingsDiskSizeGb]: IServerFormField;
     [ServerFormKeys.serverSettingsMachineType]: IServerFormField;
     [ServerFormKeys.serverSettingDeny]: IServerFormField;
+    // HumanInteraction[] once nested guest connections are added; null means "use the image's connections"
+    [ServerFormKeys.serverHumanInteraction]: IServerFormField;
     [ServerFormKeys.serverNetworks]: IServerFormNetworks[];
 }
 
