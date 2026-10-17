@@ -1,5 +1,6 @@
 import json
 import re
+from concurrent.futures import Future
 
 from google.api_core.exceptions import AlreadyExists
 from markupsafe import escape
@@ -33,7 +34,9 @@ from common.utilities.gcp.compute.image_ownership import image_source, image_sou
 from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.utilities.nested_build_monitor import is_stale_finalize
 from common.document_database.factory import DocumentDatabaseFactory
-from common.exceptions import BadRequest, Conflict, Forbidden, NotFound, AgogeValidationError, NotReady, OperationTimeout
+from common.exceptions import (
+    BadRequest, Conflict, Forbidden, NotFound, AgogeValidationError, NotReady, OperationTimeout, ServiceUnavailable
+)
 
 from utilities.gcp.compute.compute_resources import ComputeResources
 from utilities.global_objects.words import Words
@@ -41,6 +44,7 @@ from utilities.global_objects.words import Words
 
 class ComputeImage:
     NAME_RESERVATIONS = ["agoge", "google"]
+    CHECK_OUT_PUBLISH_TIMEOUT_SECONDS = 30
 
     def __init__(
         self,
@@ -277,7 +281,7 @@ class ComputeImage:
             except (ValidationError, AgogeValidationError) as e:
                 self.logger.error(f"Image failed validation with errors {e}", user=user.uid, action=action)
                 raise BadRequest(message=f"Image failed validation with errors {e}")
-            self._check_out(server_name)
+            self._check_out_new_record(server_name)
             return
         else:
             self.logger.error(f"Invalid or missing data", action=action, server_name=server_name)
@@ -401,7 +405,7 @@ class ComputeImage:
                 server_name = self._create_database_object(data)
             except (ValidationError, AgogeValidationError) as e:
                 raise BadRequest(message=f"Image create failed validation with errors {e}")
-            return self._check_out(server_name)
+            return self._check_out_new_record(server_name)
         elif str(action) == str(PubSub.Actions.SYNC.value) and requester.is_admin:
             self.logger.info(
                 f"Global image sync action called by user {requester.uid}",
@@ -489,15 +493,52 @@ class ComputeImage:
     def _check_out(
         self,
         server_name: str,
-    ) -> None:
+        extra_attrs: dict = None,
+    ) -> Future:
         msg_args = {
             self.pubsub_keys.HANDLER: str(PubSub.Handlers.CONTROL.value),
             self.pubsub_keys.ACTION: str(PubSub.Actions.CHECK_OUT.value),
             self.pubsub_keys.IMAGE_NAME: str(server_name),
             self.pubsub_keys.USER: str(self.user),
-            self.pubsub_keys.COURSE_OBJECT: str(PubSub.CourseObjects.TEMPLATE_SERVER.value)
+            self.pubsub_keys.COURSE_OBJECT: str(PubSub.CourseObjects.TEMPLATE_SERVER.value),
+            **(extra_attrs or {}),
         }
-        self.pubsub_manager.msg(**msg_args)
+        return self.pubsub_manager.msg(**msg_args)
+
+    def _check_out_new_record(
+        self,
+        server_name: str,
+        extra_attrs: dict = None,
+    ) -> None:
+        """Publish CHECK_OUT for a record this request just created, deleting the record if the publish fails.
+
+        Only this message will ever build the new record, so a lost one would strand it as CHECKED_OUT
+        with no server, and every retry with the same name would get 409.
+
+        Raises:
+            ServiceUnavailable: Pub/Sub did not accept the message within the timeout
+        """
+        try:
+            # publish() is asynchronous: most failures surface only on the future.
+            self._check_out(server_name, extra_attrs).result(timeout=self.CHECK_OUT_PUBLISH_TIMEOUT_SECONDS)
+            return
+        except Exception as exc:
+            # Never log extra_attrs: a nested create carries Windows product keys there.
+            self.logger.error(f"{self.class_name}:{server_name} - CHECK_OUT publish failed; removing the new record",
+                              image=server_name, error=str(exc))
+            publish_error = exc
+        try:
+            self.db.delete(collection_name=self.collection, doc_id=server_name)
+        except Exception as exc:
+            self.logger.error(f"{self.class_name}:{server_name} - Could not remove the unbuilt record",
+                              image=server_name, error=str(exc))
+            raise ServiceUnavailable(
+                f'Could not queue the build for {server_name}, and its record could not be removed. '
+                f'Delete the template before trying again.'
+            ) from publish_error
+        raise ServiceUnavailable(
+            f'Could not queue the build for {server_name}. No template was created; try again.'
+        ) from publish_error
 
     def _create_database_object(
         self,

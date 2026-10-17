@@ -181,7 +181,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [ ] **V25** Live acceptance — spec + done-when at PRD.md:1708 — **HUMAN ONLY.** Builds real VMs on the development project; the loop must not attempt it. Carried by HUMAN.
 
 - [x] **V14b** (found in iteration 102) If the Cloud Function dies hard after `finalize_nested` writes phase `finalizing` (or the CHECK_IN delivery fails before `create_production_image`, e.g. in `load()`), the phase stays `finalizing`: a redelivered NESTED_FINALIZE hits `Conflict`, and the API refuses Check In with 409 forever. Treat a `finalizing` phase whose `updated_at` is older than `NESTED_FINALIZE_TIMEOUT_SECONDS` plus a margin as finalizable, in both `ImageTemplateManager.finalize_nested` and `ComputeImage._check_in_action`, with tests.
-- [ ] **V12b** (found in iteration 100) `ComputeImage.create_image_server` and `NestedImage.create` write the CHECKED_OUT record before publishing CHECK_OUT, so a failed publish leaves a record no build will ever pick up, and a retry with the same name gets 409. Delete the record (or mark nested phase `failed`) when the publish raises.
+- [x] **V12b** (found in iteration 100) `ComputeImage.create_image_server` and `NestedImage.create` write the CHECKED_OUT record before publishing CHECK_OUT, so a failed publish leaves a record no build will ever pick up, and a retry with the same name gets 409. Delete the record (or mark nested phase `failed`) when the publish raises.
 
 ### Human checks
 - [ ] **HUMAN** Browser and live checks the loop cannot do: N13, N14, V17–V21 and V23 "verified in browser" done-whens, and V25 live acceptance (SC-35–SC-38) on the development project. Leave this for a person; do not mark it done.
@@ -1774,3 +1774,20 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V12b (clean up the CHECKED_OUT record when the CHECK_OUT publish fails), then V15 (media uploads).
+
+### Iteration 104 — 2026-10-17
+- **Completed:** V12b.
+  - `ComputeImage._check_out_new_record(server_name, extra_attrs=None)` publishes CHECK_OUT and waits on the future for `CHECK_OUT_PUBLISH_TIMEOUT_SECONDS` (30). If the publish or the future fails, it deletes `image/<name>` and raises `ServiceUnavailable` ("No template was created; try again"). If the delete also fails, the message says to delete the template first.
+  - It covers all three record-creating paths: `create_image_server`, the `process_action_on_image` BUILD branch, and `NestedImage.create`. The nested create passes `product_keys` as `extra_attrs`, which are never logged. `NestedImage._publish_check_out` is gone.
+  - The three routes map `ServiceUnavailable` → 503. The two `async def` routes (`POST /create/`, `PUT /{image_name}/`) now run the core call via `run_in_threadpool`, so the 30 s wait cannot block the event loop.
+- **Learned:** `PubSubManager.msg` returns the publish future without waiting, so a delivery failure never raised in the API before this. Waiting on `.result(timeout=…)` is the only way to detect it (the CTF code already does this).
+- **Tests:**
+  - `api/unit_tests/test_check_out_publish_failure.py` (6): success waits on the future and keeps the record; a sync raise and a future failure each delete the record and raise; a failed cleanup gives the delete-the-template message; 503 through both the create route and the PUT BUILD route.
+  - `test_nested_image_create_route.py` (+4): 503 removes the record; a future timeout → 503, then a retry with the same name succeeds; no product key in the response; failed cleanup message.
+- **Gate results:**
+  - api/unit_tests: 1594 passed (97.75%).
+  - cloud_functions/tests: 819 passed (94.28%).
+  - build_files: 319 passed.
+  - No frontend files changed.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V15 (media uploads).

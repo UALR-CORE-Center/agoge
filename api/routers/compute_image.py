@@ -9,6 +9,8 @@ from fastapi import (
     Response
 )
 
+from starlette.concurrency import run_in_threadpool
+
 from common.exceptions import NotFound, BadRequest, Conflict, Forbidden, OperationTimeout, ServiceUnavailable, AgogeValidationError, NotReady
 from common.models.agoge import AgogeImageModel, NestedBuildStatusModel, NestedImageCreateRequest
 from common.models.users import AgogeUser
@@ -174,6 +176,9 @@ def create_nested_image(
         return AgogeResponse(data={'build_id': image.name})
     except Conflict as e:
         raise HTTPException(status_code=409, detail=e.message)
+    except ServiceUnavailable as e:
+        logger.error(f'create_nested_image - {e.message}', **log_args)
+        raise HTTPException(status_code=503, detail=e.message)
     except (BadRequest, AgogeValidationError) as e:
         logger.error(f'create_nested_image - {e.message}', **log_args)
         raise HTTPException(status_code=400, detail=e.message)
@@ -269,13 +274,14 @@ async def create_image_server(
     json_data = await request.json()
     try:
         logger.info(f'POST request to create image server from user, {current_user.uid}', **log_args)
-        ComputeImage(env_dict=env_dict).create_image_server(
-            current_user,
-            json_data
-        )
+        # Worker thread: create waits up to CHECK_OUT_PUBLISH_TIMEOUT_SECONDS on the publish future.
+        await run_in_threadpool(ComputeImage(env_dict=env_dict).create_image_server, current_user, json_data)
         return Response(status_code=200)
     except Conflict as e:
         raise HTTPException(status_code=409, detail=e.message)
+    except ServiceUnavailable as e:
+        logger.error(e.message, **log_args)
+        raise HTTPException(status_code=503, detail=e.message)
     except NotFound as e:
         logger.error(e.message, **log_args)
         raise HTTPException(status_code=404, detail=e.message)
@@ -325,7 +331,9 @@ async def process_image_action(
     if json_data:
         try:
             logger.info(f"PUT request for image action from user {current_user.uid}", **log_args)
-            ComputeImage(env_dict=env_dict).process_action_on_image(
+            # Worker thread: a BUILD waits up to CHECK_OUT_PUBLISH_TIMEOUT_SECONDS on the publish future.
+            await run_in_threadpool(
+                ComputeImage(env_dict=env_dict).process_action_on_image,
                 requester=current_user,
                 data=json_data,
                 server_name=image_name,
@@ -333,6 +341,9 @@ async def process_image_action(
             return Response(status_code=200)
         except Conflict as e:
             raise HTTPException(status_code=409, detail=e.message)
+        except ServiceUnavailable as e:
+            logger.error(e.message, **log_args)
+            raise HTTPException(status_code=503, detail=e.message)
         except NotFound as e:
             logger.error(e.message, **log_args)
             raise HTTPException(status_code=404)

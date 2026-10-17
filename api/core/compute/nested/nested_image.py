@@ -6,7 +6,6 @@ from markupsafe import escape
 
 from common.constants.database import DbCollections
 from common.constants.google import ImageProjects
-from common.constants.pub_sub import PubSub
 from common.constants.states import ImageStatus
 from common.exceptions import BadRequest, Conflict, NotFound
 from common.models.agoge import AgogeImageModel, NestedBuildStatusModel, NestedImageCreateRequest, NestedOsCatalogModel
@@ -64,6 +63,7 @@ class NestedImage(ComputeImage):
             BadRequest: The spec breaks a validation rule
             AgogeValidationError: username or ssh_key fails the parent access rules
             Conflict: A template with this name already exists
+            ServiceUnavailable: CHECK_OUT was not published; the record has been removed
         """
         server_name = request.server_name
         self.user = user.email
@@ -100,18 +100,9 @@ class NestedImage(ComputeImage):
         self._create_record(image.model_dump())
         self.logger.info(f"{self.class_name}:{server_name} - Created nested image record",
                          image=server_name, user=user.uid, guests=len(spec.guests))
-        self._publish_check_out(server_name, request.product_keys)
-        return image
-
-    def _publish_check_out(self, server_name: str, product_keys: dict) -> None:
-        msg_args = {
-            self.pubsub_keys.HANDLER: str(PubSub.Handlers.CONTROL.value),
-            self.pubsub_keys.ACTION: str(PubSub.Actions.CHECK_OUT.value),
-            self.pubsub_keys.IMAGE_NAME: str(server_name),
-            self.pubsub_keys.USER: str(self.user),
-            self.pubsub_keys.COURSE_OBJECT: str(PubSub.CourseObjects.TEMPLATE_SERVER.value),
-        }
-        if product_keys:
+        extra = None
+        if request.product_keys:
             # Eight guests' keys stay well under Pub/Sub's 1024-byte attribute value limit.
-            msg_args[self.pubsub_keys.PRODUCT_KEYS] = json.dumps(product_keys, separators=(',', ':'))
-        self.pubsub_manager.msg(**msg_args)
+            extra = {self.pubsub_keys.PRODUCT_KEYS: json.dumps(request.product_keys, separators=(',', ':'))}
+        self._check_out_new_record(server_name, extra)
+        return image
