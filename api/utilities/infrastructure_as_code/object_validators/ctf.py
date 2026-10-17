@@ -26,6 +26,7 @@ class CtfValidator:
     def _validate(self) -> None:
         flags = (self.config.get('ctf') or {}).get('flags') or []
         server_names = {server.get('name') for server in self.config.get('servers') or []}
+        guests = self._validate_nested_guests()
         flag_ids = set()
         slots = {}
         server_os = {}
@@ -45,19 +46,37 @@ class CtfValidator:
                     f"Invalid CTF flag {flag_id}: server '{server}' does not exist in the specification"
                 )
 
-            slot = flag.get('slot')
-            if (server, slot) in slots:
-                raise AgogeValidationError(
-                    f"Invalid CTF flag {flag_id}: slot {slot} on server '{server}' is already used by "
-                    f"flag {slots[(server, slot)]}"
-                )
-            slots[(server, slot)] = flag_id
+            guest_name = flag.get('guest')
+            target = f"server '{server}'" if guest_name is None else f"guest '{guest_name}' on server '{server}'"
+            guest = None
+            if guest_name is not None:
+                guest = guests.get((server, guest_name))
+                if guest is None:
+                    raise AgogeValidationError(
+                        f"Invalid CTF flag {flag_id}: guest '{guest_name}' is not declared in nested_guests "
+                        f"on server '{server}'"
+                    )
+                if operating_system != guest.get('operating_system'):
+                    raise AgogeValidationError(
+                        f"Invalid CTF flag {flag_id}: operating_system '{operating_system}' does not match "
+                        f"'{guest.get('operating_system')}' on guest '{guest_name}'"
+                    )
 
-            first_os = server_os.setdefault(server, (operating_system, flag_id))
+            # A guest is its own machine, so slots and the single-OS rule are per (server, guest);
+            # guest None is the parent itself
+            slot = flag.get('slot')
+            if (server, guest_name, slot) in slots:
+                raise AgogeValidationError(
+                    f"Invalid CTF flag {flag_id}: slot {slot} on {target} is already used by "
+                    f"flag {slots[(server, guest_name, slot)]}"
+                )
+            slots[(server, guest_name, slot)] = flag_id
+
+            first_os = server_os.setdefault((server, guest_name), (operating_system, flag_id))
             if first_os[0] != operating_system:
                 raise AgogeValidationError(
                     f"Invalid CTF flag {flag_id}: operating_system '{operating_system}' conflicts with "
-                    f"'{first_os[0]}' on flag {first_os[1]} for server '{server}'"
+                    f"'{first_os[0]}' on flag {first_os[1]} for {target}"
                 )
 
             if location_type in self.WINDOWS_ONLY_LOCATIONS and operating_system != 'windows':
@@ -74,6 +93,8 @@ class CtfValidator:
                 )
 
             self._validate_windows_file_options(flag)
+            if guest is not None and guest.get('driver') == 'offline' and operating_system == 'windows':
+                self._validate_offline_windows(flag)
 
             if not flag.get('decoy', False) and not (isinstance(flag.get('points'), int) and flag['points'] > 0):
                 raise AgogeValidationError(
@@ -88,6 +109,70 @@ class CtfValidator:
                         f"Invalid CTF flag {flag_id}: unlocks_after names unknown flag '{prerequisite}'"
                     )
         self._validate_no_cycles(unlocks)
+
+    MAX_GUESTS_PER_SERVER = 8
+
+    def _validate_nested_guests(self) -> dict:
+        """Check `ctf.nested_guests` against the spec servers; returns {(server, name): guest}."""
+        servers = {server.get('name'): server for server in self.config.get('servers') or []}
+        guests = {}
+        per_server = {}
+        for guest in (self.config.get('ctf') or {}).get('nested_guests') or []:
+            name = guest.get('name')
+            server_name = guest.get('server')
+            server = servers.get(server_name)
+            if server is None:
+                raise AgogeValidationError(
+                    f"Invalid CTF nested guest {name}: server '{server_name}' does not exist in the specification"
+                )
+            # Spec servers carry their OS under details (ServerModel); the top-level key is the compute form
+            server_os = (server.get('details') or {}).get('os') or server.get('os')
+            if server_os != 'linux':
+                raise AgogeValidationError(
+                    f"Invalid CTF nested guest {name}: server '{server_name}' must be a Linux server, not "
+                    f"{server_os!r}"
+                )
+            # ip_aliases is what turns on nested virtualization at build (base_compute_manager)
+            if not any(nic.get('ip_aliases') for nic in server.get('nics') or []):
+                raise AgogeValidationError(
+                    f"Invalid CTF nested guest {name}: server '{server_name}' needs a NIC with ip_aliases to "
+                    f"run nested guests"
+                )
+            if (server_name, name) in guests:
+                raise AgogeValidationError(
+                    f"Invalid CTF nested guest {name}: guest names must be unique on server '{server_name}'"
+                )
+            guests[(server_name, name)] = guest
+            per_server[server_name] = per_server.get(server_name, 0) + 1
+            if per_server[server_name] > self.MAX_GUESTS_PER_SERVER:
+                raise AgogeValidationError(
+                    f"Invalid CTF nested guest {name}: server '{server_name}' has more than "
+                    f"{self.MAX_GUESTS_PER_SERVER} nested guests"
+                )
+        return guests
+
+    OFFLINE_WINDOWS_LOCATIONS = ('file', 'registry', 'env')
+    # The offline driver edits the guest's registry hives on its disk; only SOFTWARE and SYSTEM are supported
+    OFFLINE_REGISTRY_PREFIXES = ('HKLM\\SOFTWARE\\', 'HKLM\\SYSTEM\\')
+
+    @classmethod
+    def _validate_offline_windows(cls, flag: dict) -> None:
+        flag_id = flag.get('id')
+        location_type = flag.get('location_type')
+        if location_type not in cls.OFFLINE_WINDOWS_LOCATIONS:
+            raise AgogeValidationError(
+                f"Invalid CTF flag {flag_id}: location_type '{location_type}' is not supported on an offline "
+                f"Windows guest (use {', '.join(cls.OFFLINE_WINDOWS_LOCATIONS)})"
+            )
+        if flag.get('windows_access') or flag.get('hidden'):
+            raise AgogeValidationError(
+                f"Invalid CTF flag {flag_id}: windows_access and hidden are not supported on an offline Windows guest"
+            )
+        if location_type == 'registry' and not str(flag.get('path')).startswith(cls.OFFLINE_REGISTRY_PREFIXES):
+            raise AgogeValidationError(
+                f"Invalid CTF flag {flag_id}: an offline Windows guest's registry path must start with "
+                f"{' or '.join(cls.OFFLINE_REGISTRY_PREFIXES)}"
+            )
 
     WINDOWS_FILE_LOCATIONS = ('file', 'ads')
 
