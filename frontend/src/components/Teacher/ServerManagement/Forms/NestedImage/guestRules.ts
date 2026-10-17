@@ -36,7 +36,7 @@ const PACKAGE_PATTERN = /^[a-z0-9][a-z0-9+.-]{0,63}$/;
 const MEDIA_FILENAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._ ()+-]{0,199}$/;
 // api/core/compute/nested/media.py media_format: longest first, so "disk.img.xz" is img.xz.
 const MEDIA_FORMATS: NestedMediaFormat[] = (
-    ['qcow2', 'raw', 'img.xz', 'img.bz2', 'tar.xz', 'iso', 'vmdk', 'vhd', 'vhdx', 'ova', 'zip', '7z'] as NestedMediaFormat[]
+    ['qcow2', 'raw', 'img.xz', 'img.bz2', 'tar.xz', 'iso', 'iso.gz', 'vmdk', 'vhd', 'vhdx', 'ova', 'zip', '7z'] as NestedMediaFormat[]
 ).sort((a, b) => b.length - a.length);
 
 export interface GuestRuleContext {

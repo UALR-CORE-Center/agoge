@@ -180,6 +180,7 @@ describe("guestRules", () => {
     it("pre-checks media files and filters the library", () => {
         expect(mediaFormat("disk.img.xz")).toBe("img.xz");
         expect(mediaFormat("OPNsense-26.7-nano-amd64.img.bz2")).toBe("img.bz2");
+        expect(mediaFormat("pfSense-CE-2.7.2-RELEASE-amd64.iso.gz")).toBe("iso.gz");
         expect(mediaFormat("README")).toBeNull();
         expect(validateMediaFile({name: "ws2019.iso", size: 5e9}, server2019)).toBe("");
         expect(validateMediaFile({name: "ws2019.qcow2", size: 5e9}, server2019)).toMatch(/accepts iso/);
