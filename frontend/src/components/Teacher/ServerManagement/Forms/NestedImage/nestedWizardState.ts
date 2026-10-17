@@ -1,5 +1,6 @@
 import {NestedGuest, NestedNetwork, NestedParentOs} from "../../../../../services/Server/nested.model";
 import {ServerMachineTypes} from "../../../../../services/Specification/specificationEdit.model";
+import {GuestRuleContext, validateGuests} from "./guestRules";
 import {validateNetworks} from "./networkRules";
 
 // Mirrors common/constants/nested.py; the API applies the same disk rule (NestedHostValidator.min_disk_size).
@@ -148,15 +149,21 @@ export const validateHostStep = (state: NestedWizardState, machineTypes: ServerM
 
 export const validateNetworksStep = (state: NestedWizardState): StepErrors => validateNetworks(state.networks);
 
-// The Guests and Access rules beyond these minimums arrive with V19–V20.
+export const EMPTY_GUEST_CONTEXT: GuestRuleContext = {catalog: [], media: []};
 
-export const validateGuestsStep = (state: NestedWizardState): StepErrors =>
-    state.guests.length === 0 ? {guests: "Add at least one guest."} : {};
+// Guest rules need the OS catalog and the media library; with them still loading, every guest reads as
+// "not in the catalog", which keeps Next from passing a step it cannot check yet.
+export const validateGuestsStep = (
+    state: NestedWizardState,
+    machineTypes: ServerMachineTypes[],
+    context: GuestRuleContext,
+): StepErrors => validateGuests(state, context, machineTypes);
 
 export const validateStep = (
     step: NestedWizardSteps,
     state: NestedWizardState,
     machineTypes: ServerMachineTypes[],
+    context: GuestRuleContext = EMPTY_GUEST_CONTEXT,
 ): StepErrors => {
     switch (step) {
         case NestedWizardSteps.Host:
@@ -164,11 +171,11 @@ export const validateStep = (
         case NestedWizardSteps.Networks:
             return validateNetworksStep(state);
         case NestedWizardSteps.Guests:
-            return validateGuestsStep(state);
+            return validateGuestsStep(state, machineTypes, context);
         case NestedWizardSteps.Access:
             return {};
         case NestedWizardSteps.Review: {
-            const invalid = firstInvalidStep(NESTED_WIZARD_STEPS.length - 1, state, machineTypes);
+            const invalid = firstInvalidStep(NESTED_WIZARD_STEPS.length - 1, state, machineTypes, context);
             return invalid === null ? {} : {review: `Fix the ${NESTED_WIZARD_STEPS[invalid]} step first.`};
         }
     }
@@ -181,9 +188,10 @@ export const firstInvalidStep = (
     before: number,
     state: NestedWizardState,
     machineTypes: ServerMachineTypes[],
+    context: GuestRuleContext = EMPTY_GUEST_CONTEXT,
 ): number | null => {
     for (let index = 0; index < before; index++) {
-        if (hasErrors(validateStep(NESTED_WIZARD_STEPS[index], state, machineTypes))) {
+        if (hasErrors(validateStep(NESTED_WIZARD_STEPS[index], state, machineTypes, context))) {
             return index;
         }
     }
@@ -198,9 +206,10 @@ export const resolveNavigation = (
     to: number,
     state: NestedWizardState,
     machineTypes: ServerMachineTypes[],
+    context: GuestRuleContext = EMPTY_GUEST_CONTEXT,
 ): number => {
     if (to <= from) {
         return to;
     }
-    return firstInvalidStep(to, state, machineTypes) ?? to;
+    return firstInvalidStep(to, state, machineTypes, context) ?? to;
 };

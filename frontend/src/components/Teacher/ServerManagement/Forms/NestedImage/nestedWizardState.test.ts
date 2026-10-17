@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {NestedGuest} from "../../../../../services/Server/nested.model";
+import {NestedGuest, NestedOsCatalogEntry} from "../../../../../services/Server/nested.model";
 import {ServerMachineTypes} from "../../../../../services/Specification/specificationEdit.model";
 import {
     effectiveDiskSize,
@@ -35,6 +35,12 @@ const guest = (name: string, disk_gb: number): NestedGuest => ({
     start_order: 0,
     start_delay_seconds: 0,
 });
+
+const debian = {
+    id: "debian-12", display_name: "Debian 12", family: "linux", group: "linux", install_method: "cloud_image",
+    requires_upload: false, media_formats: ["qcow2"], eval_days: null, agent: true, is_enabled: true,
+    min_memory_mb: 512, min_disk_gb: 4,
+} as NestedOsCatalogEntry;
 
 const validHost = (overrides: Partial<NestedWizardState> = {}): NestedWizardState => ({
     ...initialNestedWizardState(),
@@ -132,7 +138,10 @@ describe("nestedWizardState", () => {
         expect(validateStep(NestedWizardSteps.Review, validHost(), machineTypes).review).toMatch(/Guests/);
         expect(validateStep(NestedWizardSteps.Review, validHost({server_name: ""}), machineTypes).review)
             .toMatch(/Host/);
-        expect(validateStep(NestedWizardSteps.Review, validHost({guests: [guest("kali", 40)]}), machineTypes))
+        // Guest rules need the catalog: without it every guest reads as an unknown OS.
+        const guests = [guest("kali", 40)];
+        expect(validateStep(NestedWizardSteps.Review, validHost({guests}), machineTypes).review).toMatch(/Guests/);
+        expect(validateStep(NestedWizardSteps.Review, validHost({guests}), machineTypes, {catalog: [debian], media: []}))
             .toEqual({});
     });
 

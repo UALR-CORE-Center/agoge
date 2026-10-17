@@ -8,7 +8,7 @@ import {nestedService} from "../../../../../services/Server/nested.service";
 import NestedImageWizard from "./NestedImageWizard";
 
 vi.mock("../../../../../services/Server/nested.service", () => ({
-    nestedService: {list_machine_types: vi.fn()},
+    nestedService: {list_machine_types: vi.fn(), list_catalog: vi.fn(), list_media: vi.fn(), upload_media: vi.fn()},
 }));
 
 const machineTypes = [
@@ -39,6 +39,8 @@ describe("NestedImageWizard", () => {
     beforeEach(() => {
         vi.resetAllMocks();
         vi.mocked(nestedService.list_machine_types).mockResolvedValue(machineTypes);
+        vi.mocked(nestedService.list_catalog).mockResolvedValue([]);
+        vi.mocked(nestedService.list_media).mockResolvedValue([]);
     });
     afterEach(cleanup);
 
@@ -171,5 +173,107 @@ describe("NestedImageWizard", () => {
         fireEvent.click(screen.getByRole("button", {name: "Back"}));
         fireEvent.click(screen.getByRole("button", {name: "Remove network 2"}));
         expect(screen.queryByRole("region", {name: "Network 2"})).not.toBeInTheDocument();
+    });
+
+    it("adds a guest through the OS picker and blocks Next until required media is uploaded", async () => {
+        const server2019 = {
+            id: "windows-server-2019", display_name: "Windows Server 2019", family: "windows", group: "windows_server",
+            version: "2019", install_method: "unattended_iso", media_url: null, media_sha256: null, media_formats: ["iso"],
+            requires_upload: true, license_note: "Bring your own volume license.", eval_days: null, osinfo: "win2k19",
+            firmware: "uefi", disk_bus: "sata", nic_model: "e1000e", video: "qxl", virtio_win_version: null, agent: true,
+            net_config: "windows", unattend_template: "autounattend", windows_image_index: 2,
+            default_username: "Administrator", min_memory_mb: 2048, default_memory_mb: 4096, min_disk_gb: 32,
+            default_disk_gb: 40, default_vcpus: 2, is_enabled: true,
+        } as const;
+        const kali = {...server2019, id: "kali-rolling", display_name: "Kali Rolling", version: "2026.3", family: "linux", group: "kali",
+            install_method: "cloud_image", requires_upload: false, license_note: "Free software.", agent: true} as const;
+        vi.mocked(nestedService.list_catalog).mockResolvedValue([kali, server2019].map(entry => ({...entry, media_formats: [...entry.media_formats]})));
+        const uploaded = {
+            id: "m1", filename: "ws2019.iso", format: "iso" as const, size_bytes: 4, gcs_path: "gs://b/media/m1/ws2019.iso",
+            sha256: null, os_id: "windows-server-2019", uploaded_by: "gm", uploaded_at: "2026-10-17T00:00:00Z", complete: true,
+        };
+        let finishUpload: (value: typeof uploaded) => void = () => undefined;
+        vi.mocked(nestedService.upload_media).mockImplementation((_file, options) => {
+            options?.onProgress?.(2, 4);
+            return new Promise(resolve => {
+                finishUpload = resolve;
+            });
+        });
+        renderWizard();
+        await screen.findByText(/n2-standard-8/);
+        fillHost();
+        fireEvent.click(screen.getByRole("button", {name: "Next"}));
+        fireEvent.click(screen.getByRole("button", {name: "Next"}));
+        expect(heading()).toHaveTextContent("Guests");
+
+        fireEvent.click(screen.getByRole("button", {name: /Add guest/}));
+        const dialog = within(await screen.findByRole("dialog"));
+        expect(dialog.getByText("Windows Server")).toBeInTheDocument();
+        expect(dialog.getByText("Kali")).toBeInTheDocument();
+        fireEvent.change(dialog.getByRole("textbox", {name: /Search/}), {target: {value: "2019"}});
+        expect(dialog.queryByText("Kali Rolling")).not.toBeInTheDocument();
+        expect(dialog.getByRole("button", {name: "Add guest"})).toBeDisabled();
+        fireEvent.click(dialog.getByText("Windows Server 2019"));
+        // The license note is on screen before the choice is confirmed.
+        expect(dialog.getByLabelText("License note")).toHaveTextContent("Bring your own volume license.");
+        expect(dialog.getByText("Upload required")).toBeInTheDocument();
+        fireEvent.click(dialog.getByRole("button", {name: "Add guest"}));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+        const section = within(screen.getByRole("region", {name: "Guest 1"}));
+        expect(section.getByRole("textbox", {name: /^Name/})).toHaveValue("winsrv");
+        expect(section.getByRole("spinbutton", {name: /Disk \(GB\)/})).toHaveValue(40);
+        expect(section.getByRole("textbox", {name: /Admin username/})).toHaveValue("Administrator");
+        fireEvent.change(section.getByRole("textbox", {name: /Product key/}), {target: {value: "abcde-12345-fghij-67890-klmno"}});
+
+        // No media yet: Next stays on Guests and names the missing upload.
+        fireEvent.click(screen.getByRole("button", {name: "Next"}));
+        expect(heading()).toHaveTextContent("Guests");
+        expect(section.getByText(/needs uploaded media/)).toBeInTheDocument();
+
+        const file = new File(["abcd"], "ws2019.iso");
+        fireEvent.change(screen.getByTestId("nested-guest-winsrv-media-file"), {target: {files: [file]}});
+        expect(await section.findByLabelText("Upload progress")).toHaveAttribute("aria-valuenow", "50");
+        // An edit made while the upload runs survives its completion.
+        fireEvent.change(section.getByRole("spinbutton", {name: /Disk \(GB\)/}), {target: {value: "60"}});
+        finishUpload(uploaded);
+        await waitFor(() => expect(section.queryByText(/needs uploaded media/)).not.toBeInTheDocument());
+        expect(nestedService.upload_media).toHaveBeenCalledWith(file, expect.objectContaining({osId: "windows-server-2019"}));
+        expect(section.getByRole("combobox", {name: /Media/})).toHaveTextContent("ws2019.iso");
+        expect(section.getByRole("spinbutton", {name: /Disk \(GB\)/})).toHaveValue(60);
+
+        fireEvent.click(screen.getByRole("button", {name: "Next"}));
+        expect(heading()).toHaveTextContent("Access");
+    });
+
+    it("rejects a media file in the wrong format before uploading", async () => {
+        const appliance = {
+            id: "pfsense", display_name: "pfSense", family: "appliance", group: "appliance", version: "2.7",
+            install_method: "manual_iso", media_url: null, media_sha256: null, media_formats: ["iso"],
+            requires_upload: true, license_note: "", eval_days: null, osinfo: "freebsd14.0", firmware: "bios",
+            disk_bus: "virtio", nic_model: "virtio", video: "vga", virtio_win_version: null, agent: false,
+            net_config: "none", unattend_template: null, windows_image_index: null, default_username: null,
+            min_memory_mb: 1024, default_memory_mb: 1024, min_disk_gb: 8, default_disk_gb: 8, default_vcpus: 1,
+            is_enabled: true,
+        } as const;
+        vi.mocked(nestedService.list_catalog).mockResolvedValue([{...appliance, media_formats: ["iso"]}]);
+        renderWizard();
+        await screen.findByText(/n2-standard-8/);
+        fillHost();
+        fireEvent.click(screen.getByRole("button", {name: "Next"}));
+        fireEvent.click(screen.getByRole("button", {name: "Next"}));
+        fireEvent.click(screen.getByRole("button", {name: /Add guest/}));
+        const dialog = within(await screen.findByRole("dialog"));
+        fireEvent.click(dialog.getByText("pfSense"));
+        expect(dialog.getByText("No agent")).toBeInTheDocument();
+        expect(dialog.getByText("Manual install")).toBeInTheDocument();
+        fireEvent.click(dialog.getByRole("button", {name: "Add guest"}));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+        fireEvent.change(screen.getByTestId("nested-guest-appliance-media-file"), {
+            target: {files: [new File(["abcd"], "pfsense.img")]},
+        });
+        expect(await screen.findByText("pfSense accepts iso media.")).toBeInTheDocument();
+        expect(nestedService.upload_media).not.toHaveBeenCalled();
     });
 });

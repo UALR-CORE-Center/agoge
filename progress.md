@@ -172,7 +172,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V16** Frontend service layer — spec + done-when at PRD.md:1691
 - [x] **V17** Wizard shell and Host step — spec + done-when at PRD.md:1693 (code and vitest here; the browser check is carried by HUMAN)
 - [x] **V18** Networks step — spec + done-when at PRD.md:1695 (code and vitest here; the browser check is carried by HUMAN)
-- [ ] **V19** Guests step — spec + done-when at PRD.md:1697 (code and vitest here; the browser check is carried by HUMAN)
+- [x] **V19** Guests step — spec + done-when at PRD.md:1697 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **V20** Access and Review steps — spec + done-when at PRD.md:1699 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **V21** Image list and details for nested images — spec + done-when at PRD.md:1701 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **V22** Guacamole targets for guests — spec + done-when at PRD.md:1703
@@ -1914,3 +1914,22 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No Python files changed.
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V19, the Guests step. Validate each NIC's network against `state.networks` and each static IP with `parseIpv4`/`parseCidr` from `networkRules.ts`: inside the CIDR, not the parent address, not inside the DHCP range. `resolveNavigation` already sends the instructor back to Guests when a network edit breaks a NIC.
+
+### Iteration 109 — 2026-10-17
+- **Completed:** V19 (code and vitest; the browser check, including the ≥1 GB upload, is still carried by HUMAN).
+  - `Forms/NestedImage/guestRules.ts` mirrors `NestedHostValidator._validate_guests/_validate_nics/_validate_credentials/_validate_capacity` and the `NestedGuestModel` limits: SLUG15 unique names, an enabled catalog entry, vCPU/RAM/disk ranges with the catalog minimums, admin username pattern, password length plus Windows complexity, a product key for retail Windows (`unattended_iso` with no `eval_days`), completed media in an accepted format for `requires_upload`, packages only on Linux `cloud_image`, NIC network/static-IP/DHCP-range/parent/duplicate rules, at most 8 exposures, and memory/vCPU capacity against both machine types. Errors are keyed `guests.<i>.<field>` and `guests.<i>.nics.<n>.<field>`, with `guests` for the list.
+  - `validateStep`/`firstInvalidStep`/`resolveNavigation` take an optional `GuestRuleContext` (`{catalog, media}`). Without it, every guest reads as an unknown OS, so Guests never passes unchecked.
+  - `OsPickerDialog.tsx` groups the catalog by `group`, with search, chips (`osChipLabels`), and the license note shown before **Add guest** is enabled. `GuestsStep.tsx` has the guest form: password show/hide/generate, product key, NICs, packages (freeSolo Autocomplete), script, console, autostart, start order and delay. `MediaUpload.tsx` picks from the library (`usableMedia`) or uploads with progress and cancel, pre-checking the filename pattern, format and the 20 GiB limit.
+  - The wizard loads `list_catalog` and `list_media` on mount. The `StepSummary` Guests branch is gone.
+- **Learned:**
+  - `MediaUpload` calls `onUploaded` through a latest-ref. The closure from when the upload started would write back a stale guest list and drop edits made during a long upload.
+  - Leaving the Guests step unmounts `MediaUpload`, which aborts an upload in flight; the service then deletes the unfinished record.
+  - This MUI is v6: `Autocomplete` uses `renderTags`, not `renderValue`.
+- **Tests:** `guestRules.test.ts` (13). `NestedImageWizard.test.tsx` adds 2 flow tests: picker → license note → `requires_upload` blocks Next → upload, where an edit made mid-upload survives → Access; and a wrong-format file refused before any upload. The wizard mock now includes `list_catalog`, `list_media` and `upload_media`. One `nestedWizardState.test.ts` case now passes a catalog.
+- **Gate results:**
+  - frontend `npm test`: 42 files and 530 tests passed (rerun of the NestedImage files after the ref fix: 59 passed).
+  - Group V ESLint gate: exit 0.
+  - Group V tsc gate: 0 matches.
+  - No Python files changed.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V20, the Access and Review steps. The Review meters can reuse `NESTED_PARENT_OVERHEAD_MB` and the capacity logic in `guestRules.ts`. The submit sends `toNestedImageCreateRequest` with `state.product_keys`.
