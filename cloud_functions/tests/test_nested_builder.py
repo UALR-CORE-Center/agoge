@@ -506,6 +506,30 @@ def test_arch_initializes_pacman_and_installs_its_own_ssh_and_sudo_packages(buil
 
 
 @needs_tools
+def test_opensuse_relabels_and_lets_wheel_sudo_with_its_own_password(builder):
+    leap = _entry('opensuse-leap-16.0', family='linux', group='linux', install_method='cloud_image',
+                  media_url='https://cloud.debian.example/debian-12.qcow2', media_sha256=_sha(DEB_IMAGE),
+                  media_formats=['qcow2'], osinfo='opensuse16.0', agent=True, net_config='nm-keyfile')
+    CATALOG['opensuse-leap-16.0'] = leap
+    try:
+        result, log = builder(spec=_spec(deb={'os_id': 'opensuse-leap-16.0'}))
+    finally:
+        del CATALOG['opensuse-leap-16.0']
+
+    customize = _commands(log, 'virt-customize')[0]
+    assert result.returncode == 0, result.stderr
+    # Leap 16 enforces SELinux; an unlabelled keyfile is ignored by NetworkManager.
+    assert '--selinux-relabel' in customize
+    assert '--install qemu-guest-agent,openssh-server,nmap' in customize
+    # Stock SUSE sudoers is "Defaults targetpw" with root locked, so wheel needs both drop-ins to sudo at all.
+    assert '/etc/sudoers.d/10-agoge-wheel:%wheel ALL=(ALL:ALL) ALL' in customize
+    assert '/etc/sudoers.d/10-agoge-wheel-auth-self:Defaults:%wheel !targetpw' in customize
+    assert '0440:/etc/sudoers.d/10-agoge-wheel-auth-self' in customize
+    assert '/etc/NetworkManager/system-connections/agoge-0.nmconnection' in customize
+    assert 'pacman' not in customize
+
+
+@needs_tools
 def test_non_arch_guests_skip_the_pacman_setup(builder):
     result, log = builder()
 

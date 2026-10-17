@@ -45,10 +45,13 @@ AGENT_WAIT_MINUTES=20
 WINDOWS_INSTALL_MINUTES=150
 POST_INSTALL_MINUTES=60
 AGENTLESS_SETTLE_SECONDS=120
-# virt-customize --selinux-relabel and the qemu-ga guest-exec block apply to these osinfo ids.
-RHEL_FAMILY='^(rhel|centos|rocky|almalinux|alma|fedora|ol|oraclelinux)'
+# virt-customize --selinux-relabel and the qemu-ga guest-exec block apply to these osinfo ids. openSUSE is
+# here because Leap 16 enforces SELinux; the relabel is a no-op on AppArmor Leap 15, and the qemu-ga edit is guarded.
+RHEL_FAMILY='^(rhel|centos|rocky|almalinux|alma|fedora|ol|oraclelinux|opensuse)'
 # Arch ships an uninitialized pacman keyring, names its ssh package openssh, and has no sudo.
 ARCH_FAMILY='^archlinux'
+# openSUSE's sudoers asks for root's password (Defaults targetpw), and the cloud image's root is locked.
+SUSE_FAMILY='^opensuse'
 
 HEARTBEAT_PID=
 
@@ -473,6 +476,14 @@ customize_linux() {
     args+=(--run-command 'pacman-key --init && pacman-key --populate archlinux && pacman -Syu --noconfirm'
       --write '/etc/sudoers.d/10-agoge-wheel:%wheel ALL=(ALL:ALL) ALL'
       --chmod '0440:/etc/sudoers.d/10-agoge-wheel')
+  fi
+  if echo "$osinfo" | grep -Eq "$SUSE_FAMILY"; then
+    # The same rules as SUSE's sudo-policy-wheel-auth-self, which the image does not ship. /usr/etc/sudoers
+    # includes /etc/sudoers.d last, and a per-group Defaults beats the global targetpw. One line per file:
+    # --write content with a newline would be one argument spanning lines.
+    args+=(--write '/etc/sudoers.d/10-agoge-wheel:%wheel ALL=(ALL:ALL) ALL'
+      --write '/etc/sudoers.d/10-agoge-wheel-auth-self:Defaults:%wheel !targetpw'
+      --chmod '0440:/etc/sudoers.d/10-agoge-wheel' --chmod '0440:/etc/sudoers.d/10-agoge-wheel-auth-self')
   fi
   if [ "$method" = "cloud_image" ]; then
     packages=$(jq -r --arg g "$guest" '.guests[] | select(.name == $g) | .packages | join(",")' "$MANIFEST")
