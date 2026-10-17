@@ -322,6 +322,32 @@ def test_unexpected_error_still_removes_the_plant_key(clock, nonces):
     assert {f['plant_error'] for f in web} == {'Plant aborted by an internal error'}
 
 
+def test_error_mid_results_keeps_flags_already_recorded(clock, nonces):
+    # BUG5: _await_results rebinds its own board, so the abort must read stored statuses, not plant()'s board
+    compute = _compute({WEB: ['ok:nonce-1'], DB: ['ok:nonce-2']})
+    db = FakeDb(_board_doc())
+    planter = _planter(compute, db)
+    real_record = planter._record
+    results = []
+
+    def record(board, updates):
+        if any(u.get('plant_status') in ('planted', 'failed') for u in updates.values()):
+            results.append(updates)
+            if len(results) == 2:
+                raise RuntimeError('firestore down')
+        return real_record(board, updates)
+
+    planter._record = record
+    with pytest.raises(RuntimeError):
+        planter.plant(_board_doc(), ['web', 'db'])
+    stored = {f['flag_id']: f for f in db.doc['flags']}
+    assert {stored[fid]['plant_status'] for fid in ('web-user', 'web-root')} == {'planted'}
+    assert stored['web-user']['plant_error'] is None
+    assert stored['db-root']['plant_status'] == 'failed'
+    assert stored['db-root']['plant_error'] == 'Plant aborted by an internal error'
+    assert sorted(_removals(compute)) == sorted([WEB, DB])
+
+
 def test_missing_seed_fails_flags_without_touching_compute(clock, nonces):
     compute = _compute({WEB: ['ok:nonce-1']})
     board = _planter(compute, FakeDb(_board_doc()), seed=None).plant(_board_doc(), ['web'])

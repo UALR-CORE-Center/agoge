@@ -144,7 +144,7 @@ See `### Nested Guest Contract` in PRD.md.
 - [x] **N7** qemu-agent relay section — spec + done-when at PRD.md:1636
 - [x] **N8** Plant watcher installer — spec + done-when at PRD.md:1638
 - [x] **N9** Nested plant procedure — spec + done-when at PRD.md:1640
-- [ ] **BUG5** `FlagPlanter.plant`'s `except` calls `_fail_unfinished(board, targets)` with the board as it was before `_await_acks`/`_await_results` were called. Those helpers rebind `board` locally, so if one raises mid-loop (e.g. a Firestore error in `_record`), flags they already recorded `planted`/`failed` still read `planting` on the stale model and get overwritten with `MSG_ABORTED`. This predates N9 for `_await_results`. Fix by re-reading stored flag statuses in `_fail_unfinished` (inside the transaction), with a test that raises on the second `_record`.
+- [x] **BUG5** `FlagPlanter.plant`'s `except` calls `_fail_unfinished(board, targets)` with the board as it was before `_await_acks`/`_await_results` were called. Those helpers rebind `board` locally, so if one raises mid-loop (e.g. a Firestore error in `_record`), flags they already recorded `planted`/`failed` still read `planting` on the stale model and get overwritten with `MSG_ABORTED`. This predates N9 for `_await_results`. Fix by re-reading stored flag statuses in `_fail_unfinished` (inside the transaction), with a test that raises on the second `_record`.
 - [ ] **N10** Guest host reset publish — spec + done-when at PRD.md:1642
 - [ ] **N11** Guest host reset modes — spec + done-when at PRD.md:1644
 - [ ] **N12** Offline driver — spec + done-when at PRD.md:1646
@@ -1282,4 +1282,11 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** api/unit_tests 1440 passed; cloud_functions/tests 584 passed; build_files/cloud_deployment/tests 319 passed; ruff clean on changed files. No frontend files changed.
 - **Blockers:** none.
 - **Reviewer:** no house-rule violations. Its finding of a stale board in `_fail_unfinished` was queued as BUG5. Not changed: when `plant-result` is an error and a guest key is missing, the guest flags get the generic message, because the parent's error text describes parent flags, not the guest.
+- **Next:** N10 (`CtfHosts.reset` accepts `guest`, publishes `GUEST`; guest rows in `CtfHosts.hosts`).
+
+### Iteration 85 — 2026-10-17
+- **Completed:** BUG5. `_fail_unfinished` no longer trusts the board it is given. It now calls a new `_write_flags(board, apply)` helper (the transaction body pulled out of `_record`), and `apply` marks failed only target flags whose **stored** `plant_status` is still `planting`. New test `test_error_mid_results_keeps_flags_already_recorded` in `test_flag_plant_procedure.py`: it raises on the second result `_record` across web and db, then checks that web stays `planted` and db is aborted. The test fails without the fix.
+- **Learned:** `test_unexpected_error_still_removes_the_plant_key` monkeypatches `planter._record` with a two-argument function. That is why the abort path writes through `_write_flags` and does not add a kwarg to `_record`.
+- **Gate results:** api/unit_tests 1440 passed; cloud_functions/tests 585 passed; build_files/cloud_deployment/tests 319 passed; ruff clean on changed files. No frontend files changed.
+- **Blockers:** none.
 - **Next:** N10 (`CtfHosts.reset` accepts `guest`, publishes `GUEST`; guest rows in `CtfHosts.hosts`).
