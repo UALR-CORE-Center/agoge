@@ -1,13 +1,14 @@
 from pydantic import (
     AnyUrl,
     BaseModel,
+    ConfigDict,
     Field,
     HttpUrl,
     StrictBool,
     field_validator,
     model_validator,
 )
-from typing import List, Optional, Union, Any, Dict, Literal
+from typing import List, Optional, Union, Any, Dict, Literal, Tuple
 from datetime import datetime
 from ipaddress import ip_network
 import re
@@ -204,6 +205,9 @@ class HumanInteractionModel(BaseModel):
     domain: Optional[str] = Field(default=None)
     security_mode: Optional[str] = Field(default=BuildConstants.Guacamole.SecurityModes.NLA,
                                          description="Security mode of the human interaction")
+    nested_guest: Optional[str] = Field(default=None, description="Nested guest this connection reaches; a label only")
+    alias_index: Optional[int] = Field(default=None, ge=0, description="Connect to server.nics[0].ip_aliases[alias_index]")
+    port: Optional[int] = Field(default=None, ge=1, le=65535, description="Guacamole port override, e.g. a nested VNC console")
 
 
 class ServerDetailsModel(BaseModel):
@@ -721,6 +725,157 @@ class DiskModel(BaseModel):
     initializeParams: DiskInitializeParamsModel
 
 
+# Nested lab host value sets and models (see the Nested Image Builder Contract).
+NestedOsFamily = Literal['linux', 'windows', 'appliance']
+NestedOsGroup = Literal['kali', 'linux', 'windows_client', 'windows_server', 'appliance']
+NestedInstallMethod = Literal['cloud_image', 'unattended_iso', 'disk_image', 'manual_iso']
+NestedMediaFormat = Literal['qcow2', 'raw', 'img.xz', 'tar.xz', 'iso', 'vmdk', 'vhd', 'vhdx', 'ova', 'zip', '7z']
+NestedNetConfig = Literal['networkd', 'netplan', 'nm-keyfile', 'ifupdown', 'windows', 'none']
+NestedGuestStatus = Literal['pending', 'downloading', 'installing', 'post_install', 'manual', 'ready', 'failed']
+NestedBuildPhase = Literal['queued', 'provisioning', 'building', 'ready', 'finalizing', 'finalized', 'failed']
+# 15 characters fits a libvirt domain, a hostname, and a NetBIOS name at once.
+SLUG15 = r'^[a-z][a-z0-9-]{0,13}[a-z0-9]$'
+
+
+class NestedOsCatalogModel(BaseModel):
+    """Collection `nested-os-catalog`, doc id = id."""
+    id: str = Field(..., pattern=r'^[a-z0-9][a-z0-9.-]{1,47}$')
+    display_name: str
+    family: NestedOsFamily
+    group: NestedOsGroup
+    version: str
+    install_method: NestedInstallMethod
+    media_url: Optional[str] = Field(default=None, description="https only; None means the instructor uploads the media")
+    media_sha256: Optional[str] = Field(default=None, pattern=r'^[a-f0-9]{64}$')
+    media_formats: List[NestedMediaFormat] = Field(..., min_length=1, description="Accepted formats; the first is the media_url's")
+    requires_upload: bool = False
+    license_note: str = Field(..., description="Shown in the wizard before selection")
+    eval_days: Optional[int] = None
+    osinfo: str = Field(..., description="virt-install --osinfo value, e.g. win2k22")
+    firmware: Literal['bios', 'uefi'] = 'bios'
+    disk_bus: Literal['virtio', 'sata', 'ide'] = 'virtio'
+    nic_model: Literal['virtio', 'e1000e', 'e1000', 'rtl8139'] = 'virtio'
+    video: Literal['virtio', 'qxl', 'vga', 'cirrus'] = 'vga'
+    virtio_win_version: Optional[str] = Field(default=None, description="Pinned virtio-win ISO release; None = no virtio media")
+    agent: bool = Field(..., description="qemu-guest-agent available: CTF driver qemu-agent, else offline")
+    net_config: NestedNetConfig
+    unattend_template: Optional[Literal['autounattend']] = None
+    windows_image_index: Optional[int] = None
+    default_username: Optional[str] = None
+    min_memory_mb: int
+    default_memory_mb: int
+    min_disk_gb: int
+    default_disk_gb: int
+    default_vcpus: int = 1
+    is_enabled: bool = True
+
+    @field_validator('media_url')
+    @classmethod
+    def _https_only(cls, value):
+        # The builder fetches media as root on the parent; plain http would let anyone on path swap it.
+        if value is not None and not value.startswith('https://'):
+            raise ValueError("media_url must be an https URL")
+        return value
+
+    @model_validator(mode='after')
+    def _media_source(self):
+        if self.media_url is None and not self.requires_upload:
+            raise ValueError("an entry without media_url must set requires_upload")
+        if self.family == 'windows' and not self.license_note.strip():
+            raise ValueError("a windows entry needs a license_note")
+        return self
+
+
+class NestedMediaModel(BaseModel):
+    """Collection `nested-media`, doc id = IdGenerator.uuid(). Instructor uploads."""
+    id: str
+    filename: str
+    format: NestedMediaFormat
+    size_bytes: int = Field(..., ge=0)
+    gcs_path: str = Field(..., description="gs://<project>_nested-media/media/<id>/<filename>")
+    sha256: Optional[str] = Field(default=None, pattern=r'^[a-f0-9]{64}$', description="Filled by the builder on first use")
+    os_id: Optional[str] = Field(default=None, description="Catalog entry it was uploaded for")
+    uploaded_by: str
+    uploaded_at: str
+    complete: bool = False
+
+
+class NestedNetworkModel(BaseModel):
+    name: str = Field(..., pattern=SLUG15)
+    cidr: str = Field(..., description="RFC 1918, /16 to /29")
+    mode: Literal['nat', 'isolated'] = Field(..., description="nat: internet through the parent")
+    parent_address: Optional[str] = Field(default=None, description="The parent's address on this network; None = pure L2 segment")
+    dhcp: bool = True
+    dhcp_start: Optional[str] = None
+    dhcp_end: Optional[str] = None
+
+
+class NestedGuestNicModel(BaseModel):
+    network: str
+    ip: Optional[str] = Field(default=None, description="Static; None = DHCP or unconfigured")
+    expose: bool = Field(default=False, description="1:1 NAT to the next alias slot on the lab server")
+
+
+class NestedGuestModel(BaseModel):
+    name: str = Field(..., pattern=SLUG15)
+    os_id: str
+    media_id: Optional[str] = Field(default=None, description="Required when the catalog entry requires_upload")
+    vcpus: int = Field(default=1, ge=1, le=8)
+    memory_mb: int = Field(default=2048, ge=256, le=32768)
+    disk_gb: int = Field(default=20, ge=2, le=500)
+    nics: List[NestedGuestNicModel] = Field(..., min_length=1, max_length=4)
+    admin_username: str = Field(..., pattern=r'^[a-zA-Z][a-zA-Z0-9_.-]{0,19}$')
+    admin_password: str = Field(..., description="Stored; teachers see it, as with human_interaction")
+    packages: List[str] = Field(default_factory=list, max_length=50, description="cloud_image Linux only")
+    post_install_script: Optional[str] = Field(default=None, max_length=65536, description="bash or PowerShell")
+    console: bool = Field(default=True, description="VNC console on the parent")
+    autostart: bool = True
+    start_order: int = Field(default=0, ge=0, le=99)
+    start_delay_seconds: int = Field(default=0, ge=0, le=600)
+
+
+class NestedHostSpecModel(BaseModel):
+    parent_os: Literal['debian-12', 'debian-13'] = 'debian-12'
+    build_machine_type: str = 'n2-standard-8'
+    networks: List[NestedNetworkModel] = Field(..., min_length=1, max_length=8)
+    guests: List[NestedGuestModel] = Field(..., min_length=1, max_length=8)
+    # Derived by the API on create, never sent by the client:
+    exposures: List[Tuple[str, int]] = Field(default_factory=list, description="(guest, nic index); list index = alias slot")
+    console_ports: Dict[str, int] = Field(default_factory=dict, description="guest -> 5901..5908")
+    vnc_passwords: Dict[str, str] = Field(default_factory=dict, description="guest -> 8 chars (VNC limit)")
+
+
+class NestedBuildStatusModel(BaseModel):
+    phase: NestedBuildPhase = 'queued'
+    guests: Dict[str, NestedGuestStatus] = Field(default_factory=dict)
+    message: Optional[str] = Field(default=None, max_length=200)
+    heartbeat_at: Optional[str] = None
+    started_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    finalize_nonce: Optional[str] = None
+
+
+class NestedImageCreateRequest(BaseModel):
+    """Request body for POST /compute/images/nested/."""
+    model_config = ConfigDict(extra='forbid')
+    server_name: str
+    description: str = Field(..., max_length=200)
+    labels: List[str] = Field(default_factory=list)
+    machine_type: str = Field(..., description="What lab servers built from the image default to")
+    disk_size: Optional[int] = Field(default=None, description="None = computed minimum")
+    username: str
+    ssh_key: str = Field(..., description="Parent access, as for standard Linux images")
+    nested: NestedHostSpecModel
+    product_keys: Dict[str, str] = Field(default_factory=dict, description="guest -> key; never persisted")
+
+    @model_validator(mode='after')
+    def _no_derived_fields(self):
+        # The API derives these; accepting them would let a client pick alias slots, ports, or VNC passwords.
+        if self.nested.exposures or self.nested.console_ports or self.nested.vnc_passwords:
+            raise ValueError("nested.exposures, console_ports and vnc_passwords are derived by the server")
+        return self
+
+
 class AgogeImageModel(BaseModel):
     """
     Agoge generated compute images ready to be used by CatalogModel instances
@@ -746,9 +901,11 @@ class AgogeImageModel(BaseModel):
         description="State of image server"
     )
     state_timestamp: Optional[str] = Field(default=None, description="Timestamp of image state")
-    base_family: Optional[str] = None,
+    base_family: Optional[str] = None
     image_exists: Optional[bool] = False
     architecture: Optional[str] = None
+    nested: Optional[NestedHostSpecModel] = None
+    nested_build: Optional[NestedBuildStatusModel] = None
     # Response metadata is derived from the stored source and active project.
     is_shared: bool = False
     source_project: Optional[str] = None
