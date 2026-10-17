@@ -111,6 +111,13 @@ do not add configuration hooks for them.
 - **No refactor of existing routers' error handling.** The shared error helper
   is used by the CTF routers only.
 - **No modification of `api/tests/`** (the live, billable integration suite).
+- **No network delivery to nested guests.** No SSH, WinRM, or HTTP endpoint on
+  the parent that guests pull from. Guest networks are instructor-defined and
+  student-modifiable; only the hypervisor channel is relied on.
+- **No nested hypervisor other than libvirt/QEMU-KVM on a Linux parent** (Group N).
+  Hyper-V, VirtualBox, VMware, GNS3, and EVE-NG are Phase 2.
+- **No automatic guest snapshots.** The relay never creates `agoge-pristine`;
+  the instructor makes it during image prep.
 
 ---
 
@@ -141,6 +148,11 @@ do not add configuration hooks for them.
 | SC-21 | Leaves the student workout route unchanged | The `URL_STUDENT_WORKOUT` line in `frontend/src/router/urls.ts` and the `StudentWorkout` `<Route>` in `AppRouter.tsx` are unchanged by the CTF work | 0 diff on those lines |
 | SC-22 | Passes every quality gate | The commands in **Quality Gates** all exit 0 | 0 failures |
 | SC-23 | Covers new Python modules with tests | The coverage commands in **Quality Gates** | ≥ 85% line coverage |
+| SC-24 | Blocks nested guests from the parent's metadata server | Every Linux payload and `LINUX_LOADER` contain the FORWARD reject for `169.254.169.254` (unit tests); manual: from a NAT'd guest on a live nested host, `curl -m 5 -H 'Metadata-Flavor: Google' http://169.254.169.254/` fails after the parent boots | 100% of payloads; 0 successful guest requests |
+| SC-25 | Never puts a guest flag value in a process argument list | Unit tests: in every nested payload, no `virsh` invocation has arguments and no command line outside a heredoc or `printf` builtin contains a derived value | 0 occurrences |
+| SC-26 | Replants one guest without resetting the parent | A guest-scoped plant or host reset calls compute `reset`, `stop`, `start`, and `nuke` 0 times (mocked), whether or not the watcher acks | 0 calls |
+| SC-27 | Reports guest results per guest | With mocked guest attributes where `plant-result-a` is `ok` and `plant-result-b` is `error`, guest a's flags end `planted` and guest b's `failed` with b's message | 100% |
+| SC-28 | Completes a guest replant inside the deadline | Manual: wall-clock from the Hosts-panel guest replant to `planted` on a live nested host with a running Linux guest | ≤ 90 seconds |
 
 ---
 
@@ -212,7 +224,9 @@ Three properties of this shape are contracts, not style:
 - **Nothing in Cloud Run or the Cloud Function opens a session to a range host,
   and no range host calls the API.** There is no SSH key, no WinRM password, no
   exec service, and no credential on the VM. Every write to a VM is a metadata
-  write followed by a boot; every answer from a VM is a guest attribute.
+  write followed by a boot (or, on a nested host, picked up by the plant
+  watcher); every answer from a VM is a guest attribute. A nested guest is
+  reached only by its parent, over the hypervisor (Nested Guest Contract).
 - **Every flag value is derived per workout and never stored.** Firestore holds
   the SHA-256 digest; the value is re-derived from the Secret Manager seed at
   plant time and by the admin reveal route only.
@@ -378,6 +392,19 @@ class CtfFlagSpecModel(BaseModel):
     unlocks_after: Optional[List[str]] = Field(default=None, description="Flag ids that must be solved before this one is listed to the team")
     file_mode: Optional[str] = Field(default=None, pattern=r'^0[0-7]{3}$', description="Linux file placements only")
     file_owner: Optional[str] = Field(default=None, pattern=r'^[a-z_][a-z0-9_-]*:[a-z_][a-z0-9_-]*$', description="Linux file placements only")
+    guest: Optional[str] = Field(default=None, pattern=r'^[a-z0-9][a-z0-9-]{1,31}$', description="CtfNestedGuestSpecModel.name on `server`; None = the server itself (Group N)")
+
+
+NestedGuestDriver = Literal['qemu-agent', 'offline']
+
+
+class CtfNestedGuestSpecModel(BaseModel):
+    """A VM running inside a lab server under libvirt/QEMU-KVM (Group N, Nested Guest Contract)."""
+    name: str = Field(..., pattern=r'^[a-z0-9][a-z0-9-]{1,31}$', description="Stable slug, unique per server; used by flags and in result keys")
+    server: str = Field(..., description="ServerModel.name of the Linux parent that runs this guest")
+    domain: str = Field(..., pattern=r'^[A-Za-z0-9_.-]{1,64}$', description="libvirt domain name on the parent")
+    operating_system: OperatingSystem = Field(...)
+    driver: NestedGuestDriver = Field(default='qemu-agent', description="How the parent writes into the guest")
 
 
 class CtfScoringSpecModel(BaseModel):
@@ -393,6 +420,7 @@ class CtfSpecModel(BaseModel):
     rules_url: Optional[str] = Field(default=None, description="Link to rules of engagement shown on the student banner")
     flags: List[CtfFlagSpecModel] = Field(..., min_length=1, max_length=200)
     scoring: CtfScoringSpecModel = Field(default_factory=CtfScoringSpecModel)
+    nested_guests: List[CtfNestedGuestSpecModel] = Field(default_factory=list, max_length=32, description="Group N; empty for labs without nested VMs")
 
 # CatalogModel, CatalogEditModel, UnitModel each gain:
 #     ctf: Optional[CtfSpecModel] = Field(default=None)
@@ -822,7 +850,9 @@ file. The loader never prints the payload.
   the serial console and Cloud Logging).
 - On Linux, first installs (best effort, idempotent) an iptables rule rejecting
   traffic to `169.254.169.254` from non-root UIDs, to close the window before
-  the key is removed. Failure to install it is not a plant failure.
+  the key is removed, and (N1) a FORWARD rule rejecting forwarded traffic to it,
+  so a nested guest NAT'd through the host cannot read the host's metadata.
+  Failure to install either is not a plant failure.
 - Finishes by writing `ok:<nonce>` or `error:<nonce>:<message>` to the guest
   attribute.
 
@@ -879,7 +909,7 @@ Event-scoped routes also require the caller's email in the event's
 | GET | `/ctf/{ctf_id}/flags/{flag_id}/reveal/?workout_id=` | `CtfFlagRevealResponse`; writes `FLAG_REVEAL` | `admin_required` | admin |
 | GET | `/ctf/{ctf_id}/boards/` | `{'items': [CtfBoardStatus]}` | `teacher_required` | instructor |
 | GET | `/ctf/{ctf_id}/hosts/` | `{'items': [CtfHostRow]}` | `teacher_required` | instructor |
-| PUT | `/ctf/{ctf_id}/boards/{workout_id}/hosts/{server}/reset/` | `CtfHostResetRequest`; one `CTF_HOST_RESET` | `teacher_required` | instructor |
+| PUT | `/ctf/{ctf_id}/boards/{workout_id}/hosts/{server}/reset/` | `CtfHostResetRequest` (optional `guest`, Group N); one `CTF_HOST_RESET` | `teacher_required` | instructor |
 | PUT | `/ctf/{ctf_id}/boards/{workout_id}/score/` | `CtfScoreAdjustRequest`; writes `SCORE_ADJUST` | `teacher_required` | instructor |
 | GET | `/ctf/{ctf_id}/scoreboard/` | `{'items': [CtfScoreboardRow]}`, ignores the freeze | `teacher_required` | instructor |
 | GET | `/ctf/{ctf_id}/submissions/?verdict=` | `{'items': [CtfSubmissionModel]}`, newest first, max 500 | `teacher_required` | instructor |
@@ -934,6 +964,133 @@ single objects use `data = <object>`.
 
 `rebuild` is refused with 400 for a server with a `wireguard_endpoint_id`,
 because `LabServerManager.nuke()` leaves those servers deleted.
+
+### Nested Guest Contract
+
+Instructors build some lab servers as hypervisors: a Linux parent with nested
+virtualization (enabled today by `ip_aliases`, see `base_compute_manager.py`)
+running child VMs under libvirt/QEMU-KVM. Children may be Linux or Windows and
+may sit on subnets and routes the parent has no address on. A child is not a GCE
+instance: it has no metadata server, no guest attributes, and no
+`{workout_id}-{server}` instance name. Group N delivers its flags by **relaying
+through the parent over the hypervisor**, never over the network.
+
+**Spec shape.** A guest is declared once in `ctf.nested_guests` and referenced by
+a flag's `guest`. The flag's `server` stays the parent, so instance naming,
+`mark_stale` on a parent rebuild, and board isolation (SC-9) are unchanged. A
+flag's `operating_system` is the guest's, not the parent's.
+
+```json
+"nested_guests": [
+  {"name": "win-dc", "server": "hv-host", "domain": "win2019-dc", "operating_system": "windows", "driver": "qemu-agent"},
+  {"name": "web", "server": "hv-host", "domain": "ubuntu-web", "operating_system": "linux", "driver": "offline"}
+],
+"flags": [
+  {"id": "dc-admin", "server": "hv-host", "guest": "win-dc", "slot": 3, "location_type": "registry",
+   "path": "HKLM\\SOFTWARE\\Corp:Secret", "operating_system": "windows", "points": 300}
+]
+```
+
+**Validation** (in `object_validators/ctf.py`, both save paths):
+
+| Rule | Rejection message names |
+|------|-------------------------|
+| `nested_guests[].server` names a spec server whose `os` is Linux and that has at least one NIC with `ip_aliases` | the guest name |
+| `(server, name)` is unique; at most 8 guests per server | the guest name |
+| `flag.guest` names a guest declared on `flag.server` | the flag id |
+| `flag.operating_system` equals the guest's `operating_system` | the flag id |
+| The same-OS rule and the `(server, slot)` uniqueness rule apply per `(server, guest)`, with `guest = None` for the parent itself | the flag id |
+| `driver: offline` with `windows`: only `file`, `registry`, `env`; `windows_access` and `hidden` must be unset; a registry path must start `HKLM\SOFTWARE\` or `HKLM\SYSTEM\` | the flag id |
+
+**Contract names** (added to `common/utilities/ctf_plant_contract.py`):
+
+| Name | Value |
+|------|-------|
+| Per-guest result key | `agoge-ctf/plant-result-<guest name>`; same `ok:<nonce>` / `error:<nonce>:<message>` grammar |
+| Ack key | `agoge-ctf/plant-ack` = `<nonce>`, written by every payload as its first action |
+| Watcher unit | `agoge-ctf-watcher.service`, script `/usr/local/sbin/agoge-ctf-watcher` |
+| Run lock / dedupe | `/run/agoge-ctf/plant.lock` (`flock`), `/run/agoge-ctf/last` = SHA-256 of the last payload run; directory mode `0700` |
+| Pristine snapshot | libvirt snapshot named `agoge-pristine` on each guest domain (made by the instructor) |
+| Timeouts | `WATCHER_ACK_SECONDS = 30`, `NESTED_CONFIRM_TIMEOUT_SECONDS = 420`, relay budget `RELAY_BUDGET_SECONDS = 360` |
+
+The Cloud Function timeout is 540 s (`agoge_app.py`), so
+`WATCHER_ACK_SECONDS + NESTED_CONFIRM_TIMEOUT_SECONDS` plus API overhead must stay
+below it. These constants are chosen to satisfy that; do not raise them alone.
+
+**Plant watcher.** Installed at build on every Linux lab server with
+`ip_aliases`, by an installer `LabServerManager` merges into `startup-script`
+(idempotent at every boot). It long-polls
+`.../instance/attributes/agoge-ctf-plant?wait_for_change=true` using the response
+`ETag`, and on a non-empty value whose SHA-256 differs from `/run/agoge-ctf/last`
+runs it under the run lock, exactly as the loader would. The loader stub takes the
+same lock and writes the same `last` file, so a payload is never run twice on one
+boot. With the watcher, a nested host is planted **without a reset**, so its
+guests keep running.
+
+**Parent payload** for a nested host is the existing Linux payload plus one
+relay section per targeted guest:
+
+1. The prologue writes the ack key, then installs the metadata blocks (see N1).
+2. The parent's own flags are planted as today.
+3. Guest sections run **in parallel** (background jobs + `wait`), each bounded by
+   `RELAY_BUDGET_SECONDS`. Each writes its own per-guest result key.
+4. The epilogue writes `plant-result` last. It reports only the parent's own
+   flags, and its presence means every guest section has finished.
+
+**Driver `qemu-agent`** (guest needs `qemu-guest-agent` with `guest-exec` and
+`guest-exec-status` permitted, and the `org.qemu.guest_agent.0` channel):
+
+1. Domain not running (`virsh domstate`) → `error:<nonce>:<guest>: guest is not running`. The relay never starts a guest.
+2. `guest-ping` every 5 s until it answers or the budget ends → `<guest>: guest agent did not respond`.
+3. `guest-exec` with `capture-output: true` and the guest payload as base64
+   `input-data` (stdin). Linux: `/bin/bash -s`. Windows: `powershell.exe` with a
+   fixed bootstrap that reads stdin to the end, writes it to
+   `%ProgramData%\agoge-ctf\plant-<guid>.ps1` under the SYSTEM-only ACL the
+   Windows loader already uses, runs it with `-File`, and deletes it.
+4. Poll `guest-exec-status` until `exited`. The decoded `out-data` is the result line.
+
+**Driver `offline`** (parent needs `libguestfs-tools`):
+
+1. `virsh shutdown`, wait up to 120 s for `shut off` → `<guest>: guest did not shut down`. The relay never `virsh destroy`s a guest.
+2. Write each placement with libguestfs opened by domain name. Linux: `virt-customize --upload`, `--chmod`, and `--run-command 'chown …'`. Windows: file upload via `guestfish` with case-insensitive path resolution, and registry and env through `virt-win-reg --merge`, with `HKLM\SYSTEM\CurrentControlSet` mapped to the hive's current `ControlSet00N`.
+3. Read every value back and compare SHA-256; a mismatch is `<flag id>: verification failed`.
+4. `virsh start` in a `trap`, whatever the outcome.
+
+**Guest payload** (`FlagPlanter.build_guest_payload`) is the existing bash or
+PowerShell body for that guest's flags. Its epilogue does not touch guest
+attributes. It prints exactly one line, the result, to the stdout it saved before
+the prologue's redirect, and nothing else.
+
+**No flag value in any process argument list, on the parent or the guest.**
+`virsh` is run in shell mode with its commands on stdin (`printf … | virsh`),
+never with the agent JSON as an argument. Guest payloads travel as `guest-exec`
+`input-data`. Offline values go through root-only temp files under
+`/run/agoge-ctf/`, removed in a `trap`.
+
+**Nested plant procedure.** These changes apply to `FlagPlanter.plant` for any
+server that has `nested_guests`. Servers without them are unchanged.
+
+| Scope | After `set_metadata` | No ack within `WATCHER_ACK_SECONDS` |
+|-------|----------------------|-------------------------------------|
+| Whole server (arm, Flags-panel replant) | Wait for `plant-ack` = nonce; no reset | `reset()` the parent, as today |
+| One guest (host reset on a guest) | Wait for `plant-ack` = nonce; no reset | Every targeted flag → `failed`, `"Plant watcher did not respond"`; **never** reset |
+
+Each flag then takes its status from its own key: `plant-result-<guest>` for a
+guest flag and `plant-result` for a parent flag. The server's confirmation window
+is `NESTED_CONFIRM_TIMEOUT_SECONDS`. A payload longer than 256 KB (the metadata
+value limit) → `BadRequest`, `"Plant payload exceeds the metadata size limit"`.
+
+**Host reset modes on a guest** (`CtfHostResetRequest.guest` set). Each runs as a
+one-guest payload through the watcher and touches no GCE instance:
+
+| Mode | Guest action | Flags afterwards |
+|------|--------------|------------------|
+| `replant` | Plant that guest's flags only | Re-planted, same values, confirmed |
+| `restart` | `virsh reboot <domain>` | Unchanged |
+| `rebuild` | `virsh snapshot-revert <domain> agoge-pristine --running`, then plant that guest's flags in the same payload | Re-planted; missing snapshot → `failed`, `"<guest>: no agoge-pristine snapshot"` |
+
+A `rebuild` of the **parent** recreates every guest's disk from the image, so the
+existing `mark_stale` already covers guest flags.
 
 ---
 
@@ -1102,6 +1259,40 @@ Replaces create-from-unit. The game master creates an event from **Teachers → 
 - [ ] **L7 Setup UI** — **New CTF** dialog on the events list; a **Setup** tab (default in DRAFT) with Teams (add, CSV import, members, remove, join code), Flags (editor), and Servers (build/start/stop all) sections; Arm disabled until there is a team. The lab-page **Create CTF Event** button is removed.
   - Done when: verified in browser on the development project.
 
+**Group N — Nested lab hosts**
+
+Plants and replants flags on VMs nested inside a lab server. See the Nested Guest Contract. N1 is a standalone security fix: ship it first.
+
+- [ ] **N1 Metadata forward block** — Add an idempotent, best-effort `iptables -C FORWARD -d 169.254.169.254 -j REJECT || iptables -I FORWARD -d 169.254.169.254 -j REJECT` to the Linux payload prologue in `flag_planter.py`.
+  - Done when: a test shows every Linux payload contains the `-C`/`-I FORWARD` pair before the first placement, and that the payload still reports `ok` when `iptables` is absent.
+- [ ] **N2 Loader forward block** — Add the same FORWARD rule to `LINUX_LOADER` in `ctf_plant_contract.py`, before the metadata fetch.
+  - Done when: a test shows the rule precedes the `curl` line, and the D4 merge tests still pass.
+- [ ] **N3 Nested guest models** — Add `NestedGuestDriver`, `CtfNestedGuestSpecModel`, `CtfFlagSpecModel.guest`, `CtfSpecModel.nested_guests` per Data Models, plus `guest: Optional[str]` (same slug pattern) on `CtfHostResetRequest` and `CtfHostRow`.
+  - Done when: tests reject a bad guest slug, a bad `domain`, and an unknown `driver`, and a spec without `nested_guests` still loads.
+- [ ] **N4 Nested contract constants** — Add the Nested Guest Contract names and timeouts to `ctf_plant_contract.py`, and `PubSub.EventAttributes.GUEST = 'guest'`.
+  - Done when: a test asserts `WATCHER_ACK_SECONDS + NESTED_CONFIRM_TIMEOUT_SECONDS < 540` and that `GUEST` collides with no existing attribute value.
+- [ ] **N5 Nested guest validator** — Enforce the Nested Guest Contract validation table in `object_validators/ctf.py`.
+  - Done when: one test per table row rejects a bad spec with a message naming the guest or flag id, and an existing non-nested spec still validates.
+- [ ] **N6 Guest payload builder** — Write `FlagPlanter.build_guest_payload(board, server, guest, nonce, seed)` returning the per-OS body whose epilogue prints exactly one result line to the saved stdout.
+  - Done when: tests show it holds only that guest's flags, writes no guest attribute, and has no command that prints a value; `bash -n` accepts the Linux output.
+- [ ] **N7 qemu-agent relay section** — Extend `build_payload` for a server with `nested_guests`: ack first, parent flags, one parallel relay section per targeted `qemu-agent` guest, `plant-result` last; reject payloads over 256 KB.
+  - Done when: tests show `virsh` is only ever fed on stdin (no argument contains `input-data`), each section writes `plant-result-<guest>`, `plant-result` is the last write, and `bash -n` passes.
+- [ ] **N8 Plant watcher installer** — In `LabServerManager._add_metadata`, merge the watcher installer into `startup-script` for Linux servers with `ip_aliases`; make the loader stub take the run lock and write `/run/agoge-ctf/last`.
+  - Done when: tests show the installer is merged only for `ip_aliases` servers, existing `startup-script` content is kept, and the loader and watcher scripts reference the same lock and dedupe file.
+- [ ] **N9 Nested plant procedure** — Implement the Nested plant procedure table in `FlagPlanter.plant`, with an optional `guest` scope and per-key status mapping.
+  - Done when: mocked tests show an acked plant calls `reset` 0 times, an un-acked whole-server plant calls it once, an un-acked guest plant calls it 0 times and fails its flags with `"Plant watcher did not respond"`, and guest and parent flags take status from their own keys.
+- [ ] **N10 Guest host reset publish** — `CtfHosts.reset` accepts `guest`, rejects an undeclared guest with `NotFound`, and publishes `GUEST` on `CTF_HOST_RESET`; `CtfHosts.hosts` adds one row per board per guest with `rebuild_allowed: true`.
+  - Done when: router tests show the guest reaches the message, the audit row's detail names the guest, and an unknown guest returns 404.
+- [ ] **N11 Guest host reset modes** — `HostReset` with a guest runs the three guest modes from the Nested Guest Contract through `FlagPlanter`.
+  - Done when: SC-9 holds for guest resets, and mocked tests show a guest reset of any mode calls no compute `reset`, `stop`, `start`, or `nuke`.
+- [ ] **N12 Offline driver** — Add the `offline` relay section to `build_payload` per the Nested Guest Contract.
+  - Done when: tests show values reach libguestfs only through `/run/agoge-ctf/` temp files, `virsh start` sits in a `trap`, `virsh destroy` never appears, and `bash -n` passes.
+- [ ] **N13 Nested guests in the spec editor** — Add a nested-guests section to the CTF part of the spec editor and a guest select on each flag, filtered to guests on the flag's server.
+  - Done when: verified in browser; vitest covers the transformer round trip.
+- [ ] **N14 Guest rows on the Hosts panel** — Render guest rows indented under their parent with the same reset menu.
+  - Done when: verified in browser.
+- [ ] **N15 Nested host guide** — Add a "Nested lab hosts" section to `docs/guides/game-master-guide.md`: guest image prep (qemu-guest-agent with `guest-exec` allowed, which RHEL-family `/etc/sysconfig/qemu-ga` blocks by default; the agent channel; domain autostart; the `agoge-pristine` snapshot; `libguestfs-tools` for `offline`), a spec example, and the warning that root on the parent exposes every guest flag.
+
 ### Phase 2 (Post-MVP)
 
 - [ ] **NPC background activity** — Benign traffic generators controlled through a `agoge-ctf-npc` metadata key (the agent long-polls the metadata server with `?wait_for_change=true`) with heartbeats in guest attributes, keeping the no-network-path contract.
@@ -1117,6 +1308,9 @@ Replaces create-from-unit. The game master creates an event from **Teachers → 
 - [ ] **Attack/defense mode** — Round ticks, SLA checks, per-round flag rotation.
 - [ ] **Authenticated team boards** — Require a Firebase identity on the student routes.
 - [ ] **Event retention** — Automatic deletion of archived events after a configured age.
+- [ ] **Watcher on every lab server** — Install the plant watcher on all Linux servers, not only nested hosts, so every replant avoids a reset.
+- [ ] **Other nested hypervisors** — Windows Hyper-V parents (`Copy-VMFile` + PowerShell Direct), VirtualBox, VMware Workstation, GNS3, and EVE-NG nodes.
+- [ ] **Asynchronous plant confirmation** — Settle long plants from `MaintenanceHandler` instead of polling inside one invocation, lifting the 540 s ceiling on nested plants.
 
 ---
 
@@ -1191,6 +1385,14 @@ costs money, takes many minutes, and asserts the active project is in
   Formats pattern at spec-save time; the payload builder re-checks the pattern
   and raises `BadRequest` on a mismatch.
 - No credential of any kind is placed on a workout VM by this feature.
+- No guest flag value appears in a process argument list on the parent or the
+  guest (SC-25); `virsh` takes agent commands on stdin, guest payloads travel as
+  `guest-exec` `input-data`, offline values go through root-only temp files.
+- Linux lab servers reject forwarded traffic to `169.254.169.254` from boot
+  (loader) and during every plant (payload), so a nested guest cannot read its
+  parent's plant payload, startup scripts, SSH keys, or service-account token.
+- Root on a nested host is root on its guests: a game master who gives students
+  root on a parent exposes every guest flag on it. The guide says so (N15).
 - Student responses contain no `path`, `server`, `location_type`, `digest`, or
   `access_level`, and never list a decoy.
 - A decoy verdict's response names neither the host nor the penalty unless
@@ -1219,6 +1421,13 @@ costs money, takes many minutes, and asserts the active project is in
 - CTF events can only be created on units built after D4 ships, because only
   those servers carry the loader. Any unit with a `ctf` block satisfies this,
   since the `ctf` field ships in the same release.
+- The N2 loader change and the N8 watcher reach only servers built after they
+  ship; a unit built earlier must be rebuilt. Until then its nested hosts fall
+  back to reset on whole-server plants, and guest-scoped resets fail with
+  `"Plant watcher did not respond"`.
+- Guest-side software (`qemu-guest-agent`, `libguestfs-tools` on the parent) is
+  instructor image preparation, not an Agoge dependency; no requirements file
+  changes for Group N.
 
 ### Deployment
 
@@ -1288,6 +1497,19 @@ adds **no** process environment variable. `api/.env` and
 
 ---
 
+## Open Questions
+
+Group N only. Resolve each on a live nested host in the development project
+before N7 and N9 run in the loop; record the answer here.
+
+- [ ] Does a guest on libvirt's default NAT network reach `169.254.169.254` through the parent today, and does the N1 FORWARD rule stop it? (Bridged setups only hit iptables with `br_netfilter` loaded.)
+- [ ] Does a dual-stack instance also need an `ip6tables` FORWARD rule for the IPv6 metadata address?
+- [ ] Does the metadata server accept a guest-attribute key of the form `plant-result-<slug>` (hyphens, up to 32 characters)?
+- [ ] Does `virsh` in shell mode accept a `qemu-agent-command` line as long as a 256 KB payload's base64 needs, or must the relay chunk with `guest-file-write`?
+- [ ] Do guest attributes from a previous boot survive a parent `reset()`? (Affects whether a stale `plant-ack` could be read; the nonce check should make it harmless.)
+
+---
+
 ## Design Decisions
 
 Each row is a decision taken deliberately, with the alternative that was
@@ -1324,6 +1546,12 @@ change this table first.
 | No fuzzy flag matching | Reusing `PuzzleControl._similarity` | Fuzzy matching on a 20-hex digest cannot help. |
 | Hints cost points and are always available | Time-gated hints | Time gating needs a per-board clock the event does not otherwise need. |
 | Archived events are never deleted automatically | Retention in `DailyMaintenance` | Deletion is an explicit admin action. |
+| Nested guests reached over the hypervisor (qemu-agent, libguestfs) | SSH/WinRM from the parent, or guests pulling from the parent | Guest subnets and routes vary and the parent may have no address on them; students change passwords and firewalls; a pull endpoint on a shared bridge leaks other guests' flags. |
+| Guests declared once in `ctf.nested_guests`, flags keep `server` = parent | Making each guest a `ServerModel` | A guest is not a GCE instance; keeping `server` as the parent leaves instance naming, `mark_stale`, and SC-9 untouched. |
+| `qemu-agent` is the default driver | `offline` (libguestfs) as default | qemu-agent keeps the guest running and supports every Windows placement; offline reboots the guest and cannot set ADS, ACLs, or Hidden. |
+| A plant watcher on nested hosts | Resetting the parent, as for other servers | A reset hard-kills every guest (disk corruption risk) and a nested reboot does not fit the 540 s function timeout. |
+| A guest-scoped plant never resets the parent | Falling back to reset, as whole-server plants do | Resetting the parent to fix one guest disrupts every sibling guest and the teams working on them. |
+| One result key per guest | One `plant-result` for the whole server | Guests succeed and fail independently, and the 200-character message would be shared by every guest. |
 
 ---
 
