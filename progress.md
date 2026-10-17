@@ -147,7 +147,7 @@ See `### Nested Guest Contract` in PRD.md.
 - [x] **BUG5** `FlagPlanter.plant`'s `except` calls `_fail_unfinished(board, targets)` with the board as it was before `_await_acks`/`_await_results` were called. Those helpers rebind `board` locally, so if one raises mid-loop (e.g. a Firestore error in `_record`), flags they already recorded `planted`/`failed` still read `planting` on the stale model and get overwritten with `MSG_ABORTED`. This predates N9 for `_await_results`. Fix by re-reading stored flag statuses in `_fail_unfinished` (inside the transaction), with a test that raises on the second `_record`.
 - [x] **N10** Guest host reset publish — spec + done-when at PRD.md:1642
 - [x] **N11** Guest host reset modes — spec + done-when at PRD.md:1644 (**land before any deploy**: since N10 the API publishes `guest`, but `CtfHandler` ignores it, so a guest reset would act on the whole parent server)
-- [ ] **N12** Offline driver — spec + done-when at PRD.md:1646 (also: a guest rebuild/replant of an offline guest with board flags currently fails its flags with "Could not build the plant payload" and never reverts, because `_nested_host_payload` relays only qemu-agent guests; N12's offline section must honour `revert` the way `agoge_ctf_rebuild_qemu` does)
+- [x] **N12** Offline driver — spec + done-when at PRD.md:1646 (also: a guest rebuild/replant of an offline guest with board flags currently fails its flags with "Could not build the plant payload" and never reverts, because `_nested_host_payload` relays only qemu-agent guests; N12's offline section must honour `revert` the way `agoge_ctf_rebuild_qemu` does)
 - [ ] **N13** Nested guests in the spec editor — spec + done-when at PRD.md:1648 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **N14** Guest rows on the Hosts panel — spec + done-when at PRD.md:1650 (`transformToCtfHostRow` drops `guest` today, so guest rows render as duplicate parent rows whose menu resets the parent; hide replant on guest rows with `flag_count == 0`, which the API refuses) (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **N15** Nested host guide — spec + done-when at PRD.md:1652
@@ -1344,3 +1344,30 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - `snapshot-info` failing for any reason (including a timeout) reads "no agoge-pristine snapshot". This matches the spec string, so it is left as is.
   - The `RuntimeError` on a failed guest restart could re-run the reboot if Pub/Sub retry is on; same as other handler errors. Not changed.
 - **Next:** N12 (offline driver).
+
+### Iteration 88 — 2026-10-17
+- **Completed:** N12.
+  - `_nested_host_payload` now plants `offline` guests too. Each one gets its own `( … ) &` section from `_offline_section`, launched before the shared `wait`, so `plant-result` is still last.
+  - The `_LINUX_OFFLINE` template:
+    - `agoge_ctf_offline_begin` installs an EXIT trap first. The trap runs `virsh start` (always, once the tool checks pass, per contract step 4), removes the section's `mktemp -d` dir under `OFFLINE_TEMP_DIR` (`/run/agoge-ctf`), and writes `plant-result-<guest>`.
+    - It then checks for virsh, virt-customize, guestfish and (Windows only) virt-win-reg. With `revert` it runs snapshot-info and snapshot-revert, the same as `agoge_ctf_rebuild_qemu`. Then `virsh shutdown`, with up to 120 s to reach `shut off`.
+    - Linux: one `virt-customize` call (`--mkdir`, `--upload tmp:path`, `--chmod`, `--run-command 'chown …'`). `/etc/environment` is rewritten from a guestfish download, and is never replaced if it could not be read.
+    - Windows: guestfish `case-sensitive-path` (using `echo @i` markers), then `mkdir-p` and `upload`. Registry and env values go through one `virt-win-reg --merge` of a REGEDIT4 file. `HKLM\SYSTEM\CurrentControlSet` is mapped to `ControlSet00N` from `HKLM\SYSTEM\Select\Current`; env values go under `…\Session Manager\Environment`.
+    - Readback: every value is checked by SHA-256 through a `--ro` guestfish download (or a virt-win-reg query). A mismatch reports `<flag id>: verification failed`.
+  - `_offline_planted` re-checks the offline Windows rules (only file/registry/env, no `windows_access`, no `hidden`, and registry only under SOFTWARE or SYSTEM) and raises `BadRequest`.
+  - Fixed the note queued on N12: a guest rebuild of an offline guest with flags now reverts and replants. It no longer fails with "Could not build the plant payload".
+- **Tests:** new `test_flag_planter_offline.py` (19 tests).
+  - Shape: `bash -n`; no `destroy` anywhere; `virsh start` only inside the trap function; registry mapping.
+  - Runs against a Python fake for virsh, virt-customize, guestfish and virt-win-reg that simulates guest disks:
+    - No flag value appears in any argv or guestfish stdin line, every upload source is under the temp dir, and the dir is empty afterwards.
+    - Failure paths: no shutdown; a failed write; a missing control set; revert with and without a snapshot; a guest already shut off.
+  - `test_flag_planter_relay.py` updated: the offline guest is no longer skipped.
+- **Learned:**
+  - macOS `/bin/bash` is 3.2 and APFS is case-insensitive. The Windows path-resolution test therefore asserts on the path guestfish was given, not on the file on disk.
+  - The shutdown wait uses real `SECONDS`. With the instant fake `sleep`, a test must monkeypatch `_OFFLINE_SHUTDOWN_SECONDS`, otherwise it busy-loops for 120 s.
+- **Gate results:** api/unit_tests 1461 passed; cloud_functions/tests 635 passed; build_files/cloud_deployment/tests 319 passed; ruff clean. No frontend files changed.
+- **Reviewer:** no house-rule violations and no bash bugs.
+  - Its PRD point (already-off guests were left off) is fixed: the guest is now always started.
+  - Not changed: the exit codes of the env download and of `virt-win-reg --merge` are ignored, because the readback reports any failure. The REGEDIT4 writer does not escape `\` or `"`, which is safe while `_VALUE_PATTERN` and the path patterns hold.
+- **Blockers:** none.
+- **Next:** N13 (nested guests in the spec editor).

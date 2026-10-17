@@ -54,7 +54,7 @@ def _value(flag_id, workout_id=WORKOUT_ID):
 GUESTS = [
     _guest('web', 'hv-host', 'linux'),
     _guest('win-dc', 'hv-host', 'windows'),
-    # Not relayed by this builder: the offline driver is a separate section (N12)
+    # Not relayed over qemu-agent: the offline driver has its own section (N12, test_flag_planter_offline.py)
     _guest('vault', 'hv-host', 'linux', driver='offline'),
     _guest('web', 'hv-two', 'linux'),
 ]
@@ -104,8 +104,11 @@ def test_parent_body_holds_parent_flags_and_relays_each_qemu_agent_guest(planter
     payload = _payload(planter)
     assert _value('host-root') in payload
     # Guest values travel only inside their guest's base64 input-data, never as parent placements
-    for flag_id in ('web-user', 'web-env', 'dc-reg', 'vault-env', 'two-web', 'plain'):
+    for flag_id in ('web-user', 'web-env', 'dc-reg', 'two-web', 'plain'):
         assert _value(flag_id) not in payload, flag_id
+    # The offline guest's value is placed by its own section, not relayed
+    offline_call = next(line for line in payload.splitlines() if line.startswith('agoge_ctf_offline_linux_env '))
+    assert _value('vault-env') in offline_call
     relayed = _relayed(payload)
     assert set(relayed) == {'web-domain', 'win-dc-domain'}
     assert relayed['web-domain'] == planter.build_guest_payload(_board(ALL_IDS), 'hv-host', 'web', NONCE, SEED)
@@ -275,8 +278,12 @@ def test_relay_plants_every_guest_and_writes_plant_result_last(sandbox):
     assert result.stdout == '' and result.stderr == ''
     puts = _puts(log)
     assert puts[0] == ['agoge-ctf/plant-ack', NONCE]
-    assert sorted(puts[1:-1]) == [['agoge-ctf/plant-result-web', f"ok:{NONCE}"],
-                                  ['agoge-ctf/plant-result-win-dc', f"ok:{NONCE}"]]
+    # The sandbox has no libguestfs, so the offline guest's section reports that on its own key
+    assert sorted(puts[1:-1]) == [
+        ['agoge-ctf/plant-result-vault', f"error:{NONCE}:vault: virt-customize is not available"],
+        ['agoge-ctf/plant-result-web', f"ok:{NONCE}"],
+        ['agoge-ctf/plant-result-win-dc', f"ok:{NONCE}"],
+    ]
     assert puts[-1] == ['agoge-ctf/plant-result', f"ok:{NONCE}"]
     # The parent's own flag and the Linux guest's flags (run here by the fake guest agent) all landed
     root = sandbox['root']
