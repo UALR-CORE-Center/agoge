@@ -17,6 +17,7 @@ from utilities.infrastructure_as_code.object_validators import (
     AssessmentValidator,
     CtfValidator,
     FirewallRulesValidator,
+    NestedServersValidator,
     NetworksValidator,
     RoutesValidator,
     ServersValidator,
@@ -272,6 +273,9 @@ class SpecEditManager(LabSpecBase):
                 list(self._generate_schema(servers, ServerModel))
                 server_validator = ServersValidator(self.spec).load()
                 self.spec.update(server_validator)
+                # Every field it checks (image, machine type, NIC 0 aliases, connections) comes from the
+                # servers form itself, so unlike the WireGuard listener it can run on partial saves too
+                NestedServersValidator(self.spec, image_loader=self._get_image_record).load()
             if routes := self.spec.get('routes'):
                 list(self._generate_schema(routes, RouteModel))
                 routes_validator = RoutesValidator(self.spec).load()
