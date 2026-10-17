@@ -29,6 +29,7 @@ UnitTypeValue = Literal[
 # CTF value sets, shared by the specification, stored, and request models below.
 LocationType = Literal['file', 'registry', 'env', 'ads']
 OperatingSystem = Literal['linux', 'windows']
+NESTED_GUEST_NAME_PATTERN = r'^[a-z0-9][a-z0-9-]{1,31}$'
 PlantStatus = Literal['pending', 'planting', 'planted', 'failed', 'stale']
 ArmStatus = Literal['pending', 'arming', 'armed', 'failed']
 Verdict = Literal['correct', 'incorrect', 'duplicate', 'decoy',
@@ -504,6 +505,24 @@ class CtfFlagSpecModel(BaseModel):
         description="Local account given read access; required when windows_access is 'user'"
     )
     hidden: bool = Field(default=False, description="Windows file/ads placements only: set the file's Hidden attribute")
+    guest: Optional[str] = Field(
+        default=None, pattern=NESTED_GUEST_NAME_PATTERN,
+        description="CtfNestedGuestSpecModel.name on `server`; None = the server itself"
+    )
+
+
+NestedGuestDriver = Literal['qemu-agent', 'offline']
+
+
+# A guest is not a GCE instance: flags keep `server` = the parent, so instance naming, mark_stale on a
+# parent rebuild, and board isolation are unchanged. Cross-field rules live in the CTF validator.
+class CtfNestedGuestSpecModel(BaseModel):
+    """A VM running inside a lab server under libvirt/QEMU-KVM."""
+    name: str = Field(..., pattern=NESTED_GUEST_NAME_PATTERN, description="Stable slug, unique per server; used by flags and in result keys")
+    server: str = Field(..., description="ServerModel.name of the Linux parent that runs this guest")
+    domain: str = Field(..., pattern=r'^[A-Za-z0-9_.-]{1,64}$', description="libvirt domain name on the parent")
+    operating_system: OperatingSystem = Field(...)
+    driver: NestedGuestDriver = Field(default='qemu-agent', description="How the parent writes into the guest")
 
 
 class CtfScoringSpecModel(BaseModel):
@@ -519,6 +538,9 @@ class CtfSpecModel(BaseModel):
     rules_url: Optional[str] = Field(default=None, description="Link to rules of engagement shown on the student banner")
     flags: List[CtfFlagSpecModel] = Field(..., min_length=1, max_length=200)
     scoring: CtfScoringSpecModel = Field(default_factory=CtfScoringSpecModel)
+    nested_guests: List[CtfNestedGuestSpecModel] = Field(
+        default_factory=list, max_length=32, description="Empty for labs without nested VMs"
+    )
 
 
 class UnitModel(BaseModel):
@@ -985,6 +1007,9 @@ class CtfReplantRequest(BaseModel):
 
 class CtfHostResetRequest(BaseModel):
     mode: ResetMode
+    guest: Optional[str] = Field(
+        default=None, pattern=NESTED_GUEST_NAME_PATTERN, description="Reset this nested guest; None = the server itself"
+    )
 
 
 class CtfScoreAdjustRequest(BaseModel):

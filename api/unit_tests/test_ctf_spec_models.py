@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from common.models.agoge import CtfFlagSpecModel, CtfScoringSpecModel, CtfSpecModel
+from common.models.agoge import CtfFlagSpecModel, CtfNestedGuestSpecModel, CtfScoringSpecModel, CtfSpecModel
 
 
 def _flag(**overrides):
@@ -89,3 +89,67 @@ def test_spec_requires_between_one_and_two_hundred_flags():
     with pytest.raises(ValidationError):
         CtfSpecModel(name='Huge', flags=[_flag(id=f'flag-{i}') for i in range(201)])
     assert len(CtfSpecModel(name='Max', flags=[_flag(id=f'flag-{i}') for i in range(200)]).flags) == 200
+
+
+def _guest(**overrides):
+    guest = {
+        'name': 'win-dc',
+        'server': 'hv-host',
+        'domain': 'win2019-dc',
+        'operating_system': 'windows',
+    }
+    guest.update(overrides)
+    return guest
+
+
+def test_spec_without_nested_guests_loads():
+    # Specs authored before Group N carry no `nested_guests` key and must keep loading unchanged.
+    spec = CtfSpecModel(name='Spring CTF', flags=[_flag()])
+    assert spec.nested_guests == []
+    assert spec.flags[0].guest is None
+
+
+def test_nested_guest_defaults_to_qemu_agent_and_round_trips():
+    spec = CtfSpecModel(
+        name='Spring CTF',
+        flags=[_flag(server='hv-host', guest='win-dc', operating_system='windows', location_type='registry',
+                     path='HKLM\\SOFTWARE\\Corp:Secret')],
+        nested_guests=[_guest(), _guest(name='web', domain='ubuntu-web', operating_system='linux', driver='offline')],
+    )
+    assert spec.nested_guests[0].driver == 'qemu-agent'
+    assert spec.nested_guests[1].driver == 'offline'
+    assert spec.flags[0].guest == 'win-dc'
+    assert CtfSpecModel(**spec.model_dump()) == spec
+
+
+@pytest.mark.parametrize('bad_name', ['a', 'Win-dc', '-web', 'web_1', 'x' * 33, ''])
+def test_rejects_bad_guest_slug(bad_name):
+    with pytest.raises(ValidationError):
+        CtfNestedGuestSpecModel(**_guest(name=bad_name))
+    with pytest.raises(ValidationError):
+        CtfFlagSpecModel(**_flag(guest=bad_name))
+
+
+@pytest.mark.parametrize('bad_domain', ['', 'win dc', 'dc;reboot', 'dc/../x', '$(id)', 'x' * 65])
+def test_rejects_bad_domain(bad_domain):
+    # `domain` is interpolated into virsh commands on the parent, so shell metacharacters must never pass.
+    with pytest.raises(ValidationError):
+        CtfNestedGuestSpecModel(**_guest(domain=bad_domain))
+
+
+@pytest.mark.parametrize('bad_driver', ['ssh', 'QEMU-AGENT', '', None])
+def test_rejects_unknown_driver(bad_driver):
+    with pytest.raises(ValidationError):
+        CtfNestedGuestSpecModel(**_guest(driver=bad_driver))
+
+
+def test_rejects_unknown_guest_operating_system():
+    with pytest.raises(ValidationError):
+        CtfNestedGuestSpecModel(**_guest(operating_system='macos'))
+
+
+def test_spec_allows_at_most_thirty_two_nested_guests():
+    guests = [_guest(name=f'g{i:02d}', domain=f'd{i}') for i in range(33)]
+    CtfSpecModel(name='Spring CTF', flags=[_flag()], nested_guests=guests[:32])
+    with pytest.raises(ValidationError):
+        CtfSpecModel(name='Spring CTF', flags=[_flag()], nested_guests=guests)

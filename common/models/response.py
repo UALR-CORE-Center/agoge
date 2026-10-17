@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Extra
+from pydantic import BaseModel, Extra, Field
 from typing import Generic, List, Literal, Optional, TypeVar
 
 from .users import SafeAgogeUser
@@ -12,7 +12,7 @@ from .agoge import (
     AgogeInstructionsModel,
     AgogeInstructionMinimal,
     CatalogEditModel, SnapshotModel,
-    ArmStatus, LocationType, PlantStatus,
+    ArmStatus, LocationType, NESTED_GUEST_NAME_PATTERN, PlantStatus,
 )
 from .google import ComputeImageModel, MachineTypeModel
 T = TypeVar('T')
@@ -270,6 +270,7 @@ class CtfHostRow(BaseModel):               # GET /ctf/{id}/hosts/ items
     server_state_name: Optional[str]
     flag_count: int
     rebuild_allowed: bool                  # False when the server has a wireguard_endpoint_id
+    guest: Optional[str] = Field(default=None, pattern=NESTED_GUEST_NAME_PATTERN)  # None = the server itself
 
 
 class CtfScoreboardRow(BaseModel):         # instructor

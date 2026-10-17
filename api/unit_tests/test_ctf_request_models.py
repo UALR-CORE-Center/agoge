@@ -132,6 +132,17 @@ def test_host_reset_rejects_unknown_mode(mode):
         CtfHostResetRequest(mode=mode)
 
 
+def test_host_reset_guest_is_optional():
+    assert CtfHostResetRequest(mode='replant').guest is None
+    assert CtfHostResetRequest(mode='restart', guest='win-dc').guest == 'win-dc'
+
+
+@pytest.mark.parametrize('guest', ['a', 'Win-dc', 'web_1', '../x', 'x' * 33])
+def test_host_reset_rejects_bad_guest_slug(guest):
+    with pytest.raises(ValidationError):
+        CtfHostResetRequest(mode='replant', guest=guest)
+
+
 @pytest.mark.parametrize('delta', [-10000, -1, 0, 1, 10000])
 def test_score_adjust_accepts_delta_in_range(delta):
     assert CtfScoreAdjustRequest(delta=delta, reason='manual fix').delta == delta

@@ -137,7 +137,7 @@ Implemented outside the loop (commits `dbb2fec`, `83e5abc`); not yet loop-verifi
 See `### Nested Guest Contract` in PRD.md.
 - [x] **N1** Metadata forward block — spec + done-when at PRD.md:1624 (standalone security fix — ship first)
 - [x] **N2** Loader forward block — spec + done-when at PRD.md:1626
-- [ ] **N3** Nested guest models — spec + done-when at PRD.md:1628
+- [x] **N3** Nested guest models — spec + done-when at PRD.md:1628
 - [ ] **N4** Nested contract constants — spec + done-when at PRD.md:1630
 - [ ] **N5** Nested guest validator — spec + done-when at PRD.md:1632
 - [ ] **N6** Guest payload builder — spec + done-when at PRD.md:1634
@@ -1165,3 +1165,10 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** api/unit_tests 1372 passed; cloud_functions/tests 498 passed; build_files/cloud_deployment/tests 319 passed. No frontend files changed.
 - **Blockers:** none.
 - **Next:** N3 (nested guest models).
+
+### Iteration 78 — 2026-10-17
+- **Completed:** N3. `common/models/agoge.py` gains `NESTED_GUEST_NAME_PATTERN`, `NestedGuestDriver`, `CtfNestedGuestSpecModel` (name/server/domain/operating_system/driver, default `qemu-agent`), `CtfFlagSpecModel.guest`, `CtfSpecModel.nested_guests` (default `[]`, max 32) and `CtfHostResetRequest.guest`. `CtfHostRow.guest` (in `common/models/response.py`) defaults to None, so the existing `hosts.py` construction is unchanged. Tests in `test_ctf_spec_models.py` reject bad guest slugs (on the guest and on the flag), bad `domain` values (including shell metacharacters), an unknown `driver` and an unknown OS; enforce the 32 cap; and show that a spec without `nested_guests` still loads. Request and response tests cover the `guest` slug on the reset request and on the host row.
+- **Learned:** `CtfHostRow` is in `common/models/response.py`, not `agoge.py`. Import `NESTED_GUEST_NAME_PATTERN` instead of copying the regex.
+- **Gate results:** api/unit_tests 1399 passed; cloud_functions/tests 498 passed; build_files/cloud_deployment/tests 319 passed. No frontend files changed. ruff: only the pre-existing F401 (unused `HttpUrl` import, `common/models/agoge.py:5`), which is on HEAD too.
+- **Blockers:** none.
+- **Next:** N4 (nested contract constants in `ctf_plant_contract.py` and `PubSub.EventAttributes.GUEST`).
