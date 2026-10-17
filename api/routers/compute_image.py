@@ -110,6 +110,8 @@ async def process_image_list_action(
         raise HTTPException(status_code=503, detail=e.message)
     except NotFound as e:
         raise HTTPException(status_code=404, detail=e.message)
+    except Conflict as e:
+        raise HTTPException(status_code=409, detail=e.message)
 
 
 @compute_image_router.get("/project/")

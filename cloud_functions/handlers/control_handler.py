@@ -78,6 +78,7 @@ class ControlHandler:
             str(PubSub.Actions.CHECK_IN.value): self._check_in,
             str(PubSub.Actions.CHECK_OUT.value): self._check_out,
             str(PubSub.Actions.CANCEL.value): self._cancel_image_changes,
+            str(PubSub.Actions.NESTED_FINALIZE.value): self._nested_finalize,
         }
 
     def route(self) -> None:
@@ -278,6 +279,16 @@ class ControlHandler:
         )
         image_manager.load(server_name=self.image_name)
         image_manager.check_in()
+
+    def _nested_finalize(self) -> None:
+        image_manager = ComputeManagerFactory.create_manager_object(
+            manager_type=PubSub.CourseObjects.TEMPLATE_SERVER,
+            shared_edit_authorized=self.shared_edit_authorized,
+            env_dict=self.env_dict,
+            user=self.user
+        )
+        image_manager.load(server_name=self.image_name)
+        image_manager.finalize_nested()
 
     def _check_out(self) -> None:
         image_manager = ComputeManagerFactory.create_manager_object(

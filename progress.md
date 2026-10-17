@@ -167,7 +167,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V11** Nested template server provisioning — spec + done-when at PRD.md:1681
 - [x] **V12** Create route — spec + done-when at PRD.md:1683 (`ImageTemplateManager.check_out(product_keys=...)` takes the never-persisted keys; V12 must carry them in the CHECK_OUT message and `ControlHandler._check_out` must pass them through)
 - [x] **V13** Build monitor — spec + done-when at PRD.md:1685
-- [ ] **V14** Finalize handshake — spec + done-when at PRD.md:1687 (also merge the finalize-watcher bootstrap into `startup-script` on both check-out paths in `ImageTemplateManager._prepare_nested_check_out`; V11 left the re-check-out path with only `enable-guest-attributes`)
+- [x] **V14** Finalize handshake — spec + done-when at PRD.md:1687 (also merge the finalize-watcher bootstrap into `startup-script` on both check-out paths in `ImageTemplateManager._prepare_nested_check_out`; V11 left the re-check-out path with only `enable-guest-attributes`)
 - [ ] **V15** Media uploads — spec + done-when at PRD.md:1689
 - [ ] **V16** Frontend service layer — spec + done-when at PRD.md:1691
 - [ ] **V17** Wizard shell and Host step — spec + done-when at PRD.md:1693 (code and vitest here; the browser check is carried by HUMAN)
@@ -180,6 +180,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [ ] **V24** Nested image guide — spec + done-when at PRD.md:1707
 - [ ] **V25** Live acceptance — spec + done-when at PRD.md:1708 — **HUMAN ONLY.** Builds real VMs on the development project; the loop must not attempt it. Carried by HUMAN.
 
+- [ ] **V14b** (found in iteration 102) If the Cloud Function dies hard after `finalize_nested` writes phase `finalizing` (or the CHECK_IN delivery fails before `create_production_image`, e.g. in `load()`), the phase stays `finalizing`: a redelivered NESTED_FINALIZE hits `Conflict`, and the API refuses Check In with 409 forever. Treat a `finalizing` phase whose `updated_at` is older than `NESTED_FINALIZE_TIMEOUT_SECONDS` plus a margin as finalizable, in both `ImageTemplateManager.finalize_nested` and `ComputeImage._check_in_action`, with tests.
 - [ ] **V12b** (found in iteration 100) `ComputeImage.create_image_server` and `NestedImage.create` write the CHECKED_OUT record before publishing CHECK_OUT, so a failed publish leaves a record no build will ever pick up, and a retry with the same name gets 409. Delete the record (or mark nested phase `failed`) when the publish raises.
 
 ### Human checks
@@ -1731,3 +1732,28 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V14 (finalize handshake). The monitor leaves `ready`/`finalizing` alone, so V14 owns those transitions.
+
+### Iteration 102 — 2026-10-17
+- **Completed:** V14.
+  - API: `ComputeImage._check_in_action` turns a CHECK_IN on a nested record into NESTED_FINALIZE when the phase is `ready` or `finalized`, or `failed` with a `finalize_nonce`. It raises `Conflict` for `provisioning`, `building`, and `finalizing`, and the list route now maps `Conflict` → 409. Nothing is published unless every image in the list passes. Standard images and a failed *build* (no nonce) keep plain CHECK_IN.
+  - `ControlHandler` routes NESTED_FINALIZE → `ImageTemplateManager.finalize_nested()`. That method refuses anything not CHECKED_OUT and finalizable (`Conflict`; a duplicate delivery sees `finalizing`). It writes phase `finalizing` and the nonce, then sets `agoge-nested-finalize`. It polls `agoge-nested/finalize-result` every 10 s for up to `NESTED_FINALIZE_TIMEOUT_SECONDS`, ignoring answers to other nonces, and always removes the key afterwards.
+    - `ok` → publishes CHECK_IN once.
+    - `error` → phase `failed` with the message. The nonce is kept, so the next Check In finalizes again.
+    - Timeout → phase `ready` with `MSG_FINALIZE_TIMEOUT`, nonce cleared.
+    - A failed metadata write or a failed CHECK_IN publish → phase `ready`.
+  - `check_in()` records `finalized` (nonce cleared) only when the phase was `finalizing`. If creating the image fails, it returns `finalizing` to `ready`.
+  - The watcher is `server_specific/nested/finalize.sh`, rendered by `render_finalize_watcher()`. Its bootstrap, `render_finalize_bootstrap()`, starts it with `systemd-run` and `Restart=always`, never enabled, so it is not baked into lab images. Both check-out paths merge the bootstrap into `startup-script`; the first build appends it after the builder bootstrap. That closes the V11 gap.
+- **Learned:**
+  - In bash, `x=$(fn)` runs `fn` in a subshell, so a global it sets (the metadata `ETAG`) is lost. The watcher's `poll` sets `NONCE` directly for that reason.
+  - The answered nonce lives at `/var/lib/agoge-nested/finalize-answered`, outside the state and work directories the finalize deletes.
+- **Tests:**
+  - `cloud_functions/tests/test_nested_finalize.py` (26): ok → CHECK_IN once, a stale nonce ignored, error → message stored with no CHECK_IN, timeout → `ready` with a message inside the budget, unreadable attributes, retry after a failure, four refusal cases, publish and request failures, `finalized` on check-in and the image-failure reset, routing, both bootstrap paths with `bash -n`, no `destroy` in the watcher.
+  - The watcher is also executed against fake virsh/curl. Cases: shutdown → snapshot → cleanup → `ok`; a stubborn guest → `error:<nonce>:desk: guest did not shut down` with no force-stop and no cleanup; a nonce answered once; no nonce; a host never built; the etag sent back on the second poll.
+  - `api/unit_tests/test_nested_finalize_route.py` (9).
+- **Gate results:**
+  - api/unit_tests: 1580 passed (97.75%).
+  - cloud_functions/tests: 816 passed (94.28%).
+  - build_files: 319 passed.
+  - No frontend files changed.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V14b (stale `finalizing` recovery, found by the reviewer), then V15 (media uploads).
