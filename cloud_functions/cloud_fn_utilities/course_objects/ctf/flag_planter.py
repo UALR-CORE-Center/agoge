@@ -11,9 +11,10 @@ from common.models.agoge import CtfBoardModel, CtfEventModel, CtfFlagSpecModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.ctf_flags import derive_flag_value
 from common.utilities.ctf_plant_contract import (
-    GUEST_ATTRIBUTE_ACK_PATH, GUEST_ATTRIBUTE_NAMESPACE, GUEST_ATTRIBUTE_PATH, GUEST_ATTRIBUTE_RESULT_KEY,
-    GUEST_ATTRIBUTES_ENABLE_KEY, GUEST_ATTRIBUTES_ENABLE_VALUE, LOCATION_PATH_PATTERNS, MAX_RESULT_MESSAGE_LENGTH,
-    PLANT_METADATA_KEY, PLANT_PAYLOAD_MAX_BYTES, RELAY_BUDGET_SECONDS, RESULT_ERROR, RESULT_OK, guest_result_path,
+    GUEST_ATTRIBUTE_ACK_KEY, GUEST_ATTRIBUTE_ACK_PATH, GUEST_ATTRIBUTE_NAMESPACE, GUEST_ATTRIBUTE_PATH,
+    GUEST_ATTRIBUTE_RESULT_KEY, GUEST_ATTRIBUTES_ENABLE_KEY, GUEST_ATTRIBUTES_ENABLE_VALUE, LOCATION_PATH_PATTERNS,
+    MAX_RESULT_MESSAGE_LENGTH, NESTED_CONFIRM_TIMEOUT_SECONDS, PLANT_METADATA_KEY, PLANT_PAYLOAD_MAX_BYTES,
+    RELAY_BUDGET_SECONDS, RESULT_ERROR, RESULT_OK, WATCHER_ACK_SECONDS, guest_result_key, guest_result_path,
     parse_plant_result
 )
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
@@ -296,10 +297,14 @@ class FlagPlanter:
     payload, and never logged or persisted.
     """
     POLL_INTERVAL_SECONDS = 10
+    ACK_POLL_INTERVAL_SECONDS = 5
     CONFIRM_TIMEOUT_SECONDS = 240
     MSG_NOT_RUNNING = "Server is not running"
     MSG_NOT_FOUND = "Server instance not found"
     MSG_TIMEOUT = f"No plant confirmation within {CONFIRM_TIMEOUT_SECONDS} s"
+    MSG_NESTED_TIMEOUT = f"No plant confirmation within {NESTED_CONFIRM_TIMEOUT_SECONDS} s"
+    MSG_NO_WATCHER = "Plant watcher did not respond"
+    MSG_NO_GUEST_RESULT = "Guest relay reported no result"
     MSG_NO_SEED = "CTF flag seed is not configured"
     MSG_BAD_PAYLOAD = "Could not build the plant payload"
     MSG_DELIVERY = "Could not deliver the plant payload"
@@ -351,46 +356,58 @@ class FlagPlanter:
     def plant(
         self,
         board: Union[CtfBoardModel, dict],
-        servers: List[str]
+        servers: List[str],
+        guest: Optional[str] = None
     ) -> CtfBoardModel:
         """
-        Plants the board's flags on each named spec server (Plant procedure, PRD): payload + reset on every
-        server first, then one shared poll for each server's nonce. Every flag on those servers ends
-        `planted` or `failed`; the result is written to the board document and returned. The plant key is
-        removed in a `finally` from every server it was written to, whatever the outcome. Stopped servers
-        are never started.
+        Plants the board's flags on each named spec server (Plant procedure, PRD): payload on every server
+        first, then one shared poll for each server's nonce. Every targeted flag ends `planted` or `failed`;
+        the result is written to the board document and returned. The plant key is removed in a `finally`
+        from every server it was written to, whatever the outcome. Stopped servers are never started.
+
+        A plain server is reset right after its payload is written. A nested host (one with nested_guests)
+        is not: its plant watcher runs the payload, so its guests keep running (Nested plant procedure).
+        With no plant-ack within WATCHER_ACK_SECONDS a whole-server plant falls back to a reset; a `guest`
+        plant never resets and fails its flags instead. With `guest` set, only that guest's flags are
+        targeted, and servers that do not declare it are skipped. Each flag takes its status from its own
+        result key: plant-result-<guest> for a guest flag, plant-result for a parent or plain-server flag.
         """
         if not isinstance(board, CtfBoardModel):
             board = ModelValidator(model=CtfBoardModel, log_location=LoggerNames.CLOUD_FN).load(data=board)
-        board_flag_ids = {flag.flag_id for flag in board.flags}
-        # server -> board flag ids it carries; servers with none are skipped
-        targets: Dict[str, List[str]] = {}
+        # server -> {result key: board flag ids reported by that key}; servers with none are skipped
+        targets: Dict[str, Dict[str, List[str]]] = {}
         for server in dict.fromkeys(servers):
-            flag_ids = [f.id for f in self.event.spec.flags if f.server == server and f.id in board_flag_ids]
-            if flag_ids:
-                targets[server] = flag_ids
+            groups = self._result_groups(board, server, guest)
+            if groups:
+                targets[server] = groups
             else:
-                self.logger.warning(f"{self.class_name}:{board.id} - no board flags on server '{server}'; skipped")
+                scope = f"guest '{guest}' of server '{server}'" if guest else f"server '{server}'"
+                self.logger.warning(f"{self.class_name}:{board.id} - no board flags on {scope}; skipped")
         if not targets:
             return board
 
         seed = self.env.ctf_flag_seed
         if not seed:
             self.logger.error(f"{self.class_name}:{board.id} - {self.MSG_NO_SEED}")
-            return self._record(board, {fid: self._failed(self.MSG_NO_SEED) for ids in targets.values() for fid in ids})
+            return self._record(board, {fid: self._failed(self.MSG_NO_SEED) for fid in self._target_ids(targets)})
 
         nonces = {}       # server -> nonce, for servers whose payload was (or may have been) written
         written = []      # instance names that may hold the plant key; cleaned in the finally
         try:
-            for server, flag_ids in targets.items():
+            for server, groups in targets.items():
+                flag_ids = [fid for ids in groups.values() for fid in ids]
                 nonce = IdGenerator.uuid()
                 board = self._record(board, {fid: {'plant_status': 'planting'} for fid in flag_ids})
                 instance_name = self._instance_name(board, server)
-                failure = self._deliver(board, server, instance_name, nonce, seed, written)
+                failure = self._deliver(
+                    board, server, instance_name, nonce, seed, written,
+                    guest=guest, reset=not self._is_nested_host(server)
+                )
                 if failure:
                     board = self._record(board, {fid: self._failed(failure) for fid in flag_ids})
                 else:
                     nonces[server] = nonce
+            board, nonces = self._await_acks(board, targets, nonces, guest)
             board = self._await_results(board, targets, nonces)
         except Exception:
             self._fail_unfinished(board, targets)
@@ -422,9 +439,29 @@ class FlagPlanter:
         board_flag_ids = {flag.flag_id for flag in board.flags}
         return [flag for flag in self.event.spec.flags if flag.server == server and flag.id in board_flag_ids]
 
-    def _fail_unfinished(self, board: CtfBoardModel, targets: Dict[str, List[str]]) -> None:
+    def _is_nested_host(self, server: str) -> bool:
+        return any(guest.server == server for guest in self.event.spec.nested_guests)
+
+    def _result_groups(self, board: CtfBoardModel, server: str, guest: Optional[str]) -> Dict[str, List[str]]:
+        """{result key: board flag ids} for one server, limited to one declared guest when `guest` is set."""
+        flags = self._board_flags_on(board, server)
+        if guest is not None:
+            if not any(g.server == server and g.name == guest for g in self.event.spec.nested_guests):
+                return {}
+            flags = [flag for flag in flags if flag.guest == guest]
+        groups: Dict[str, List[str]] = {}
+        for flag in flags:
+            key = GUEST_ATTRIBUTE_RESULT_KEY if flag.guest is None else guest_result_key(flag.guest)
+            groups.setdefault(key, []).append(flag.id)
+        return groups
+
+    @staticmethod
+    def _target_ids(targets: Dict[str, Dict[str, List[str]]]) -> List[str]:
+        return [fid for groups in targets.values() for ids in groups.values() for fid in ids]
+
+    def _fail_unfinished(self, board: CtfBoardModel, targets: Dict[str, Dict[str, List[str]]]) -> None:
         """Best effort on an unexpected error: no flag is left `planting` with nothing to finish it."""
-        target_ids = {fid for ids in targets.values() for fid in ids}
+        target_ids = set(self._target_ids(targets))
         unfinished = [f.flag_id for f in board.flags if f.flag_id in target_ids and f.plant_status == 'planting']
         if not unfinished:
             return
@@ -433,8 +470,11 @@ class FlagPlanter:
         except Exception as e:
             self.logger.error(f"{self.class_name}:{board.id} - could not mark aborted flags failed", error=type(e).__name__)
 
-    def _deliver(self, board, server, instance_name, nonce, seed, written) -> Optional[str]:
-        """Steps 3-4: payload into metadata, then reset. Returns a failure message, or None on success."""
+    def _deliver(self, board, server, instance_name, nonce, seed, written, guest=None, reset=True) -> Optional[str]:
+        """
+        Steps 3-4: payload into metadata, then reset unless `reset` is False (a nested host's watcher runs
+        it instead). Returns a failure message, or None on success.
+        """
         try:
             instance = self.compute_api.get(instance_name)
         except NotFound:
@@ -442,7 +482,7 @@ class FlagPlanter:
         if str(getattr(instance, 'status', '')).upper() != 'RUNNING':
             return self.MSG_NOT_RUNNING
         try:
-            payload = self.build_payload(board, server, nonce, seed)
+            payload = self.build_payload(board, server, nonce, seed, guest=guest)
         except (BadRequest, ValueError) as e:
             # BadRequest messages carry flag ids only, never a value
             self.logger.error(f"{self.class_name}:{board.id} - {self.MSG_BAD_PAYLOAD} for '{server}'", error=str(e))
@@ -454,7 +494,8 @@ class FlagPlanter:
                 instance_name,
                 items={PLANT_METADATA_KEY: payload, GUEST_ATTRIBUTES_ENABLE_KEY: GUEST_ATTRIBUTES_ENABLE_VALUE}
             )
-            self.compute_api.reset(instance_name)
+            if reset:
+                self.compute_api.reset(instance_name)
         except Exception as e:
             # Type only: a set_metadata error could echo the request body, which holds flag values
             self.logger.error(
@@ -463,21 +504,85 @@ class FlagPlanter:
             return self.MSG_DELIVERY
         return None
 
-    def _await_results(self, board, targets, nonces) -> CtfBoardModel:
-        """Steps 5-6: poll every delivered server until its nonce answers or the shared deadline passes."""
-        pending = dict(nonces)
-        deadline = time.monotonic() + self.CONFIRM_TIMEOUT_SECONDS
-        while pending and time.monotonic() < deadline:
-            time.sleep(self.POLL_INTERVAL_SECONDS)
-            for server, nonce in list(pending.items()):
-                instance_name = self._instance_name(board, server)
+    def _await_acks(self, board, targets, nonces, guest):
+        """
+        Nested plant procedure: waits up to WATCHER_ACK_SECONDS for each delivered nested host to write
+        plant-ack = its nonce. An un-acked whole-server plant resets the host so its loader runs the payload
+        at boot; an un-acked guest plant fails its flags and never resets. Returns the board and the nonces
+        still awaiting results.
+        """
+        nonces = dict(nonces)
+        waiting = {server: nonce for server, nonce in nonces.items() if self._is_nested_host(server)}
+        deadline = time.monotonic() + WATCHER_ACK_SECONDS
+        while waiting and time.monotonic() < deadline:
+            time.sleep(self.ACK_POLL_INTERVAL_SECONDS)
+            for server, nonce in list(waiting.items()):
                 try:
                     attributes = self.compute_api.get_guest_attributes(
-                        instance_name, query_path=GUEST_ATTRIBUTE_NAMESPACE
+                        self._instance_name(board, server), query_path=GUEST_ATTRIBUTE_NAMESPACE
                     )
                 except NotFound:
-                    board = self._record(board, {fid: self._failed(self.MSG_NOT_FOUND) for fid in targets[server]})
-                    del pending[server]
+                    board = self._fail_server(board, targets, server, self.MSG_NOT_FOUND)
+                    del waiting[server], nonces[server]
+                    continue
+                except Exception as e:
+                    self.logger.warning(f"{self.class_name}:{board.id} - plant ack poll failed", error=type(e).__name__)
+                    continue
+                if attributes.get(GUEST_ATTRIBUTE_ACK_KEY) == nonce:
+                    del waiting[server]
+        for server in waiting:
+            instance_name = self._instance_name(board, server)
+            if guest is not None:
+                # A guest reset must leave the parent and its other guests running
+                self.logger.warning(f"{self.class_name}:{board.id} - no plant ack from {instance_name}")
+                board = self._fail_server(board, targets, server, self.MSG_NO_WATCHER)
+                del nonces[server]
+                continue
+            self.logger.warning(f"{self.class_name}:{board.id} - no plant ack from {instance_name}; resetting")
+            try:
+                self.compute_api.reset(instance_name)
+            except Exception as e:
+                self.logger.error(
+                    f"{self.class_name}:{board.id} - {self.MSG_DELIVERY} to {instance_name}", error=type(e).__name__
+                )
+                board = self._fail_server(board, targets, server, self.MSG_DELIVERY)
+                del nonces[server]
+        return board, nonces
+
+    def _await_results(self, board, targets, nonces) -> CtfBoardModel:
+        """
+        Steps 5-6: poll every delivered server until each of its result keys answers with its nonce or the
+        server's deadline passes (CONFIRM_TIMEOUT_SECONDS, or NESTED_CONFIRM_TIMEOUT_SECONDS for a nested host).
+        """
+        # (server, result key) -> nonce
+        pending = {(server, key): nonce for server, nonce in nonces.items() for key in targets[server]}
+        start = time.monotonic()
+        deadlines = {
+            server: start + (NESTED_CONFIRM_TIMEOUT_SECONDS if self._is_nested_host(server)
+                             else self.CONFIRM_TIMEOUT_SECONDS)
+            for server in nonces
+        }
+        while pending:
+            now = time.monotonic()
+            for server, key in [k for k in pending if deadlines[k[0]] <= now]:
+                message = self.MSG_NESTED_TIMEOUT if self._is_nested_host(server) else self.MSG_TIMEOUT
+                board = self._record(board, {fid: self._failed(message) for fid in targets[server][key]})
+                del pending[(server, key)]
+            if not pending:
+                break
+            time.sleep(self.POLL_INTERVAL_SECONDS)
+            for server in dict.fromkeys(server for server, _ in pending):
+                nonce = nonces[server]
+                keys = [key for s, key in pending if s == server]
+                try:
+                    attributes = self.compute_api.get_guest_attributes(
+                        self._instance_name(board, server), query_path=GUEST_ATTRIBUTE_NAMESPACE
+                    )
+                except NotFound:
+                    flag_ids = [fid for key in keys for fid in targets[server][key]]
+                    board = self._record(board, {fid: self._failed(self.MSG_NOT_FOUND) for fid in flag_ids})
+                    for key in keys:
+                        del pending[(server, key)]
                     continue
                 except Exception as e:
                     # Transient API errors keep polling until the deadline
@@ -485,19 +590,31 @@ class FlagPlanter:
                         f"{self.class_name}:{board.id} - guest attribute poll failed", error=type(e).__name__
                     )
                     continue
-                result = parse_plant_result(attributes.get(GUEST_ATTRIBUTE_RESULT_KEY), nonce)
-                if result is None:
-                    continue
-                status, message = result
-                if status == RESULT_OK:
-                    update = {'plant_status': 'planted', 'planted_at': time.time(), 'plant_error': None}
-                else:
-                    update = self._failed(message or "Plant reported an error")
-                board = self._record(board, {fid: dict(update) for fid in targets[server]})
-                del pending[server]
-        for server in pending:
-            board = self._record(board, {fid: self._failed(self.MSG_TIMEOUT) for fid in targets[server]})
+                for key in keys:
+                    result = parse_plant_result(attributes.get(key), nonce)
+                    if result is None:
+                        continue
+                    status, message = result
+                    if status == RESULT_OK:
+                        update = {'plant_status': 'planted', 'planted_at': time.time(), 'plant_error': None}
+                    else:
+                        update = self._failed(message or "Plant reported an error")
+                    board = self._record(board, {fid: dict(update) for fid in targets[server][key]})
+                    del pending[(server, key)]
+                # plant-result is written after every relay section has finished, so a guest key still
+                # missing once it is present will never arrive
+                if parse_plant_result(attributes.get(GUEST_ATTRIBUTE_RESULT_KEY), nonce) is not None:
+                    missing = [key for s, key in pending if s == server]
+                    flag_ids = [fid for key in missing for fid in targets[server][key]]
+                    if flag_ids:
+                        board = self._record(board, {fid: self._failed(self.MSG_NO_GUEST_RESULT) for fid in flag_ids})
+                    for key in missing:
+                        del pending[(server, key)]
         return board
+
+    def _fail_server(self, board, targets, server, message) -> CtfBoardModel:
+        flag_ids = [fid for ids in targets[server].values() for fid in ids]
+        return self._record(board, {fid: self._failed(message) for fid in flag_ids})
 
     @staticmethod
     def _instance_name(board: CtfBoardModel, server: str) -> str:
@@ -539,12 +656,14 @@ class FlagPlanter:
         board: Union[CtfBoardModel, dict],
         server: str,
         nonce: str,
-        seed: str
+        seed: str,
+        guest: Optional[str] = None
     ) -> str:
         """
         Returns the bash (Linux) or PowerShell (Windows) script that writes this board's flags for one
         server, idempotently, and reports ok:<nonce> or error:<nonce>:<message> to the guest attribute.
-        A server with nested_guests gets the nested host payload instead (_nested_host_payload).
+        A server with nested_guests gets the nested host payload instead (_nested_host_payload); `guest`
+        limits that payload to one guest's relay section, and is rejected for any other server.
         Raises BadRequest if the server has no flags on the board, any interpolated string fails its
         Flag Location Formats pattern, or the payload exceeds the metadata size limit.
         """
@@ -555,8 +674,10 @@ class FlagPlanter:
         if not re.fullmatch(_NONCE_PATTERN, str(nonce)):
             raise BadRequest(f"{self.class_name}:{self.event.id} - Invalid plant nonce")
 
-        if any(guest.server == server for guest in self.event.spec.nested_guests):
-            payload = self._nested_host_payload(board, server, nonce, seed)
+        if self._is_nested_host(server):
+            payload = self._nested_host_payload(board, server, nonce, seed, guest=guest)
+        elif guest is not None:
+            raise BadRequest(f"{self.class_name}:{self.event.id} - Server '{server}' has no nested guests")
         else:
             payload = self._server_payload(board, server, nonce, seed)
         if len(payload.encode('utf-8')) > PLANT_PAYLOAD_MAX_BYTES:
@@ -620,18 +741,21 @@ class FlagPlanter:
             return self._windows_payload(planted, nonce, guest=True)
         return self._linux_payload(planted, nonce, guest=True)
 
-    def _nested_host_payload(self, board: CtfBoardModel, server: str, nonce: str, seed: str) -> str:
+    def _nested_host_payload(
+        self, board: CtfBoardModel, server: str, nonce: str, seed: str, guest: Optional[str] = None
+    ) -> str:
         """
         Parent payload for a nested host (Nested Guest Contract): ack first, then the parent's own flags,
         then one relay section per qemu-agent guest with board flags, run in parallel, then plant-result
         last, reporting the parent's flags only. Guests with the offline driver are not relayed here.
+        With `guest` set (a guest host reset) the parent's flags and every other guest are left out.
         """
         board_flags = self._board_flags_on(board, server)
-        parent_flags = [flag for flag in board_flags if flag.guest is None]
+        parent_flags = [flag for flag in board_flags if flag.guest is None] if guest is None else []
         guests = [
-            guest for guest in self.event.spec.nested_guests
-            if guest.server == server and guest.driver == 'qemu-agent'
-            and any(flag.guest == guest.name for flag in board_flags)
+            g for g in self.event.spec.nested_guests
+            if g.server == server and g.driver == 'qemu-agent' and (guest is None or g.name == guest)
+            and any(flag.guest == g.name for flag in board_flags)
         ]
         if not parent_flags and not guests:
             raise BadRequest(
@@ -641,9 +765,7 @@ class FlagPlanter:
             raise BadRequest(
                 f"{self.class_name}:{self.event.id} - Flags on nested host '{server}' must be linux"
             )
-        relays = [
-            (guest, self.build_guest_payload(board, server, guest.name, nonce, seed)) for guest in guests
-        ]
+        relays = [(g, self.build_guest_payload(board, server, g.name, nonce, seed)) for g in guests]
         return self._linux_payload(self._planted(board, parent_flags, seed), nonce, relays=relays)
 
     def _planted(self, board: CtfBoardModel, flags: List[CtfFlagSpecModel], seed: str) -> list:
