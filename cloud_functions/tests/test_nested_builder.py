@@ -59,6 +59,17 @@ FAKE_CURL = textwrap.dedent("""\
       *) exit 22 ;;
     esac
 """)
+# gcloud storage cp gs://bucket/object dest, served from $FAKE_DIR/gcs.
+FAKE_GCLOUD = textwrap.dedent("""\
+    #!/bin/bash
+    echo "gcloud $*" >> "$FAKE_LOG"
+    [ "$1 $2" = "storage cp" ] || exit 2
+    shift 2
+    [ "$1" = "--no-user-output-enabled" ] && shift
+    src=${1#gs://}
+    [ -f "$FAKE_DIR/gcs/$src" ] || exit 1
+    cp "$FAKE_DIR/gcs/$src" "$2"
+""")
 # Domains live in $FAKE_DIR/domains: <name>.xml (as defined) and <name>.state.
 # Names in $FAKE_SELF_POWEROFF power themselves off after their first start (Windows Setup).
 FAKE_VIRSH = textwrap.dedent("""\
@@ -206,7 +217,7 @@ def _secret_strings(secrets):
 def builder(tmp_path):
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
-    fakes = {'curl': FAKE_CURL, 'virsh': FAKE_VIRSH, 'virt-install': FAKE_VIRT_INSTALL, 'qemu-img': FAKE_QEMU_IMG,
+    fakes = {'curl': FAKE_CURL, 'gcloud': FAKE_GCLOUD, 'virsh': FAKE_VIRSH, 'virt-install': FAKE_VIRT_INSTALL, 'qemu-img': FAKE_QEMU_IMG,
              'genisoimage': FAKE_GENISOIMAGE, 'sleep': FAKE_SLEEP, 'sha256sum': FAKE_SHA256SUM,
              'jq': f'#!/bin/bash\necho "jq $*" >> "$FAKE_LOG"\nexec {REAL_JQ} "$@"\n'}
     for name in ('virt-customize', 'apt-get', 'systemctl', 'chgrp'):
@@ -356,6 +367,8 @@ def test_media_is_verified_and_kept_under_the_libvirt_boot_directory(builder):
     assert (media_dir / f'{_sha(DEB_IMAGE)}.qcow2').read_bytes() == DEB_IMAGE
     assert (media_dir / f'{_sha(WIN_ISO)}.iso').read_bytes() == WIN_ISO
     assert (media_dir / 'upload-med-1.iso').read_bytes() == FW_ISO
+    # Uploaded media comes through gcloud storage cp (V15).
+    assert 'gcloud storage cp --no-user-output-enabled gs://test-project_nested-media/media/med-1/fw.iso ' in log
     assert (media_dir / 'virtio-win-0.1.262-2.iso').is_file()
     # The cache is tried first, and a verified URL download is copied into it.
     assert f"storage/v1/b/test-project_nested-media/o/cache%2F{_sha(DEB_IMAGE)}?alt=media" in log

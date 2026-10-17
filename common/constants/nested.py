@@ -26,3 +26,9 @@ NESTED_UPLOAD_URL_TTL_SECONDS = 3600
 NESTED_MEDIA_BUCKET_SUFFIX = 'nested-media'
 # Compute Engine caps one metadata value at 256 KB (and all of an instance's metadata at 512 KB).
 NESTED_METADATA_MAX_BYTES = 262144
+# A media object's Custom-Time is its upload start until the completion check moves it here (it can only increase).
+# The bucket's lifecycle rule deletes media/ objects two days past their Custom-Time, so only unfinished uploads age out.
+NESTED_MEDIA_KEEP_CUSTOM_TIME = '9999-12-31T00:00:00Z'
+# Headers the media upload URL signs. The bucket's CORS responseHeader list must name each one, or the browser's
+# preflight for the signed POST is refused.
+NESTED_MEDIA_SIGNED_HEADERS = ('x-goog-resumable', 'x-goog-content-length-range', 'x-goog-custom-time')
