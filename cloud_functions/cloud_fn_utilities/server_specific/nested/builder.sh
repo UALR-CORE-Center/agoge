@@ -330,8 +330,9 @@ prepare_disk() {
   mkdir -p "$work"
   case "$format" in
     qcow2|raw|vmdk|vhd|vhdx) input=$media; in_format=$format; [ "$format" = "vhd" ] && in_format=vpc ;;
-    img.xz) input="$work/disk.img"; in_format=raw; xz -dc "$media" > "$input" ;;
     # A truncated expansion (parent disk full) would still convert, into a guest that cannot boot.
+    img.xz) input="$work/disk.img"; in_format=raw
+      xz -dc "$media" > "$input" || { rm -rf "$work"; FAIL_MESSAGE="could not expand the img.xz media"; return 1; } ;;
     img.bz2) input="$work/disk.img"; in_format=raw
       bzip2 -dc "$media" > "$input" || { rm -rf "$work"; FAIL_MESSAGE="could not expand the img.bz2 media"; return 1; } ;;
     tar.xz) tar -xJf "$media" -C "$work" && input=$(largest_disk_file "$work") ;;
