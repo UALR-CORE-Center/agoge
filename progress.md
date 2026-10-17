@@ -1948,3 +1948,37 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No Python files changed.
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V21, nested rows in `ImageListTable`: poll `get_build_status` while the phase is active, disable Check In while building, and add guest details and SSH tunnel hints to `ImageDetailsDialog`/Connect. `transformToNestedHostSpec` already reads the stored `exposures`/`console_ports`.
+
+### Verification — 2026-10-17 — PASS
+- **Checked:** V16, V17, V18, V19 and V20, which are every task ticked since the last verification (`0b81a25`). HEAD is `e61bc29` and the tree is clean. Two read-only agents checked the five commits against PRD.md:1691-1699, `api/core/compute/nested/validator.py` and the Nested* models. I also checked these myself:
+  - I scanned the lines added in `0b81a25..HEAD` for TODO/FIXME/NotImplemented/placeholder. The only hits are the `placeholder="ad-lab-host"` input hint and the product-key format text in an error message. Neither is a stub.
+  - V16: the URL constants (`router/urls.ts:81-86`) match the routes in `api/routers/compute_image.py`: `machine-types/?nested`, `nested/`, `nested/catalog/`, `nested/media/` (POST, GET), `nested/media/{id}/` (PUT, DELETE) and `{name}/nested-build/`. The tests call all 9 service functions, and the round trip is tested.
+  - V17:
+    - The API reads `form_data.get('display')` (`api/core/compute/image.py:630`), so the `display` key fix is real, and the heading is "Create Server".
+    - The Stepper is `nonLinear` with the five steps and per-step validation.
+    - Machine types come from `?nested=true`.
+    - The disk-size minimum and the defaults match the API's.
+  - V18:
+    - The default `lab` NAT network is 192.168.100.0/24, parent .1, DHCP .100–.199.
+    - `networkRules.ts` follows `_validate_networks` rule for rule.
+    - The topology preview is inline SVG.
+  - V19: `guestRules.ts` matches the validator and the `NestedGuestModel` limits: patterns, vCPU/RAM/disk ranges, the catalog minimums, the upload, product-key and Windows-password rules, the NIC rules, and capacity with the 2048 MB parent overhead. A `requires_upload` guest with no media blocks Next (`NestedImageWizard.test.tsx:186-253`).
+  - V20:
+    - `deriveExposures`/`deriveConsoles` match `derive()`: guest order, then NIC order, consoles from port 5901.
+    - Reordering uses up/down buttons with no drag (MUI X Community).
+    - The submit body matches `NestedImageCreateRequest` and leaves out the fields the server derives.
+    - All four warnings are present.
+    - After Create, the wizard returns to `URL_TEACHER_SERVERS`.
+  - Notes, not reopened:
+    - `parseCidr` trims but the transformer sends `cidr` as stored. This can't cause a failure, because the CIDR input trims on every keystroke (`NetworksStep.tsx:96`).
+    - The client trims the product key before validating it, and `toNestedImageCreateRequest` trims it again before submit (`nested.transform.ts:158`), so the two agree.
+    - The build-time estimate's per-install minutes (`accessReview.ts:94-104`) are a heuristic, not values from the PRD. The PRD asks only for "the estimated build time".
+    - The "verified in browser" done-whens for V17–V20 are still carried by HUMAN, which stays `[ ]`.
+- **Gate results:**
+  - api/unit_tests: 1636 passed, coverage 97.75%, exit 0.
+  - cloud_functions/tests: 819 passed, coverage 96.24%, exit 0.
+  - build_files/cloud_deployment/tests: 327 passed, exit 0.
+  - frontend `npm test`: 43 files and 543 tests passed, exit 0.
+  - CTF ESLint gate: exit 0. CTF tsc gate: 0 CTF matches (repo-wide tsc exits 2 on pre-existing errors).
+  - Group V ESLint gate: exit 0. Group V tsc gate: 0 matches.
+- **Reopened:** none.
