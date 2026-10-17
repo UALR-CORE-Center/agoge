@@ -14,6 +14,7 @@ main_app/tests/test.py
 /.pnp
 .pnp.js
 /coverage
+.coverage
 /build
 .DS_Store
 .env.local

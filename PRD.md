@@ -1744,8 +1744,9 @@ Group 0 is done.
 
 ```bash
 # Python suites. PYTHONPATH is mandatory. ./venv/bin/python is Python 3.12 with the dependencies.
-PYTHONPATH=.:api ./venv/bin/python -m pytest api/unit_tests -q                                          # today 45 passed / 4 failed; after 0.2: 49 passed
-PYTHONPATH=.:cloud_functions ./venv/bin/python -m pytest cloud_functions/tests -q                       # 280 passed
+# The api and cloud_functions lines also enforce SC-23 (>= 85% line coverage of the CTF modules).
+PYTHONPATH=.:api ./venv/bin/python -m pytest api/unit_tests -q --cov=core.ctf --cov=common.utilities.ctf_flags --cov=common.utilities.ctf_state_manager --cov-fail-under=85   # >=1554 passed, 97.75% on 2026-10-17
+PYTHONPATH=.:cloud_functions ./venv/bin/python -m pytest cloud_functions/tests -q --cov=cloud_fn_utilities.course_objects.ctf --cov=handlers.ctf_handler --cov-fail-under=85   # >=641 passed, 94.28% on 2026-10-17
 PYTHONPATH=.:build_files:cloud_functions ./venv/bin/python -m pytest build_files/cloud_deployment/tests -q  # 293 passed
 
 # Frontend unit tests.
@@ -1758,18 +1759,12 @@ PYTHONPATH=.:build_files:cloud_functions ./venv/bin/python -m pytest build_files
 (cd frontend && ! npx tsc --noEmit 2>&1 | grep -E '^src/(components/(Teacher|Student)/Ctf|services/Ctf|hooks/useCtfEnabled|utilities/transformers/ctf|components/Common/Dialogs/ActionConfirmDialog)')
 
 # Group V: the same two checks, scoped to the nested image builder code.
-(cd frontend && npx eslint src/components/Teacher/ServerManagement/Forms/NestedImage src/services/Server/nested.service.ts src/services/Server/nested.model.ts src/utilities/transformers/nested.transform.ts --max-warnings 0)
+(cd frontend && npx eslint --no-error-on-unmatched-pattern src/components/Teacher/ServerManagement/Forms/NestedImage src/services/Server/nested.service.ts src/services/Server/nested.model.ts src/utilities/transformers/nested.transform.ts --max-warnings 0)
 (cd frontend && ! npx tsc --noEmit 2>&1 | grep -E '^src/(components/Teacher/ServerManagement/Forms/NestedImage|services/Server/nested|utilities/transformers/nested)')
 ```
 
-Coverage gate for SC-23. `pytest-cov` is **not** installed; the first
-iteration that needs it adds `pytest-cov>=6,<8` to the root `requirements.txt`
-only:
-
-```bash
-PYTHONPATH=.:api ./venv/bin/python -m pytest api/unit_tests -q --cov=core.ctf --cov=common.utilities.ctf_flags --cov=common.utilities.ctf_state_manager --cov-fail-under=85
-PYTHONPATH=.:cloud_functions ./venv/bin/python -m pytest cloud_functions/tests -q --cov=cloud_fn_utilities.course_objects.ctf --cov=handlers.ctf_handler --cov-fail-under=85
-```
+`pytest-cov` is in the root `requirements.txt`; the coverage flags in the first two
+commands above are the SC-23 gate. Coverage data goes to `.coverage`, which is gitignored.
 
 **Do not run `api/tests/`.** It is a live integration suite that builds real VMs,
 costs money, takes many minutes, and asserts the active project is in

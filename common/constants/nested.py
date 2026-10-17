@@ -21,3 +21,5 @@ NESTED_MEDIA_MAX_BYTES = 21474836480  # 20 GiB
 NESTED_UPLOAD_URL_TTL_SECONDS = 3600
 # The media bucket is <project>_nested-media.
 NESTED_MEDIA_BUCKET_SUFFIX = 'nested-media'
+# Compute Engine caps one metadata value at 256 KB (and all of an instance's metadata at 512 KB).
+NESTED_METADATA_MAX_BYTES = 262144
