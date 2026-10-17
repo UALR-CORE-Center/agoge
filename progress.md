@@ -156,7 +156,7 @@ See `### Nested Guest Contract` in PRD.md.
 See `### Nested Image Builder Contract` and Working Notes 14–23. Independent of the CTF groups except V23. Frontend items use the Group V eslint/tsc gate lines in PRD.md `## Quality Gates`.
 - [x] **V1** Nested virtualization for template and lab servers — spec + done-when at PRD.md:1661
 - [x] **V2** Nested machine types — spec + done-when at PRD.md:1663
-- [ ] **V3** License on check-in — spec + done-when at PRD.md:1665
+- [x] **V3** License on check-in — spec + done-when at PRD.md:1665
 - [ ] **V4** Template startup-script merge — spec + done-when at PRD.md:1667
 - [ ] **V5** Models and constants — spec + done-when at PRD.md:1669 (`common/constants/nested.py` already exists from V2 with `NESTED_MACHINE_FAMILIES`, `NESTED_MAX_MACHINE_MEMORY_MB`, `STANDARD_MAX_MACHINE_MEMORY_MB`; extend it)
 - [ ] **V6** OS catalog and seeding — spec + done-when at PRD.md:1671
@@ -1453,3 +1453,14 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** docs only; `check.py` reports no affected suites.
 - **Blockers:** none.
 - **Next:** V3 (license on check-in).
+
+### Iteration 92 — 2026-10-17
+- **Completed:** V3.
+  - `ENABLE_VMX_LICENSE` is in `common/constants/nested.py`.
+  - `ComputeImageAPI.create(licenses=...)` sets `Image.licenses` on the image it builds (ignored when `image_resource` is supplied).
+  - `ImageTemplateManager._create_image_from_snapshot` passes `[ENABLE_VMX_LICENSE]` when `nested_host` (from the record's `nested`), otherwise `licenses=None`.
+- **Tests:** `test_check_in_licenses_only_nested_images_for_vmx` (nested / standard) in `test_image_template_source_lifecycle.py`. It runs `check_in()` through a real `ComputeImageAPI.create` with a mock `ImagesClient` and inspects the `InsertImageRequest`. The shared check-in assertion now expects `licenses=None`.
+- **Learned:** an unset repeated proto field reads back as `[]`, so "no licenses" means `list(image.licenses) == []`. Not verified live: whether `images.insert` accepts a license the source snapshot already inherits (every re-check-in of a nested image does this). V25 will show it.
+- **Gate results:** api/unit_tests 1461 passed; cloud_functions/tests 637 passed; build_files 319 passed. No frontend files changed.
+- **Blockers:** none.
+- **Next:** V4 (template startup-script merge).
