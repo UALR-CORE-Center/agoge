@@ -2384,3 +2384,19 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. CentOS Stream 9 and VyOS publish no SHA-256. V25 and HUMAN need a person.
 - **Next:** the rest of V6b2: pfSense CE (check for a published SHA-256 and a VGA-console image), Metasploitable 2 (SourceForge zip; check for a published hash), or Alpine (needs builder work for apk/openrc).
+
+### Verification — 2026-10-17 — PASS
+- **Checked:** the items ticked since the last verification (fc8970f): V6e, V6f, V6b2g, V6g and V6b2h. Parent V6, V6b and V6b2 are still `[ ]`, and so are I4b, V25 and HUMAN.
+  - V6e: `NestedHostValidator.media_sizes` keys each medium the way `builder.sh` `fetch_media` does (the sha256, else `upload-<media_id>`). It counts a shared medium once, lets `media_id` win over a downloadable entry, and falls back to `NESTED_MEDIA_MAX_BYTES` when a size is unknown. `min_disk_size` adds the GiB ceiling of each medium. `validate()` returns `NestedValidation.disk_size`, and `NestedImage.create` stores it. `media_size_bytes` is in the model with `gt=0`.
+  - V6f: `nestedMediaSizes`/`nestedMinDiskSize` in `nestedWizardState.ts` match the API rule line for line. `context` is a required argument of `effectiveDiskSize`, `validateHostStep` and `capacityMeters`, and `HostStep`, `ReviewStep` and the wizard pass it. The transformer keeps `media_size_bytes`.
+  - V6g/V6b2g: in `prepare_disk`, the `img.xz` and `img.bz2` branches both remove `work-<guest>`, set `FAIL_MESSAGE` and return 1 when expansion fails. `bzip2` is in `HOST_PACKAGES`. `img.bz2` is in the Python Literal, the TS type and `MEDIA_FORMATS`. The four xz/bz2 builder tests run real binaries, and `-rs` shows none skipped.
+  - Catalog hashes, checked independently: the OPNsense `OPNsense-26.7-checksums-amd64.sha256` lists `28d5e2f3…cb9d` for the nano image, and its `Content-Length` (490849116) matches. I downloaded all three Debian qcow2s over https. Each passed `shasum -a 512 -c` against its dated dir's `SHA512SUMS`, and its SHA-256 and byte size match the JSON exactly (debian-11 `9e857537…58ee`/288358400, debian-12 `2f2a2fa5…f6cc`/349044736, debian-13 `87211f08…3b02`/342818816).
+  - The new code has no TODO, FIXME or `NotImplemented`.
+- **Gate results:**
+  - api/unit_tests: 1660 passed, coverage 97.67% (≥85%).
+  - cloud_functions/tests: 913 passed, 96.19% (≥85%).
+  - build_files: 502 passed.
+  - Frontend `npm test`: 47 files, 574 tests passed.
+  - CTF eslint: exit 0. CTF tsc grep: 0 matches.
+  - Group V eslint: exit 0. Group V tsc grep: 0 matches. `tsc` itself exits 2, but only on files outside both scopes.
+- **Reopened:** none.
