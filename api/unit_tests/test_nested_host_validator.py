@@ -9,13 +9,15 @@ from common.exceptions import BadRequest
 from common.models.agoge import NestedImageCreateRequest
 from common.models.google import MachineTypeModel
 from core.compute.nested import validator as validator_module
-from core.compute.nested.validator import NestedHostValidator
+from common.constants.nested import NESTED_MEDIA_MAX_BYTES
+from core.compute.nested.validator import GIB, NestedHostValidator
 
 CATALOG = {
     'debian-12': {
         'id': 'debian-12', 'display_name': 'Debian 12', 'family': 'linux', 'group': 'linux', 'version': '12',
         'install_method': 'cloud_image', 'media_url': 'https://cloud.debian.org/debian-12.qcow2',
-        'media_sha256': 'a' * 64, 'media_formats': ['qcow2'], 'license_note': 'Free software.',
+        'media_sha256': 'a' * 64, 'media_size_bytes': 400_000_000, 'media_formats': ['qcow2'],
+        'license_note': 'Free software.',
         'osinfo': 'debian12', 'agent': True, 'net_config': 'ifupdown',
         'min_memory_mb': 512, 'default_memory_mb': 1024, 'min_disk_gb': 4, 'default_disk_gb': 10,
     },
@@ -23,7 +25,7 @@ CATALOG = {
         'id': 'win2022-eval', 'display_name': 'Windows Server 2022 Evaluation', 'family': 'windows',
         'group': 'windows_server', 'version': '2022', 'install_method': 'unattended_iso',
         'media_url': 'https://go.microsoft.com/fwlink/p/?LinkID=2195280', 'media_sha256': 'b' * 64,
-        'media_formats': ['iso'], 'license_note': '180-day evaluation.', 'eval_days': 180, 'osinfo': 'win2k22',
+        'media_size_bytes': 5_500_000_000, 'media_formats': ['iso'], 'license_note': '180-day evaluation.', 'eval_days': 180, 'osinfo': 'win2k22',
         'agent': True, 'net_config': 'windows', 'unattend_template': 'autounattend', 'virtio_win_version': '0.1.266',
         'min_memory_mb': 2048, 'default_memory_mb': 4096, 'min_disk_gb': 32, 'default_disk_gb': 40,
     },
@@ -132,10 +134,12 @@ def _guest(body, name):
 
 
 def test_valid_three_guest_two_network_spec_passes(validator):
-    entries = validator.validate(NestedImageCreateRequest(**_body()))
+    validation = validator.validate(NestedImageCreateRequest(**_body()))
 
-    assert {name: entry.id for name, entry in entries.items()} == {
+    assert {name: entry.id for name, entry in validation.entries.items()} == {
         'router': 'debian-12', 'dc01': 'win2022-eval', 'ws01': 'win10-licensed'}
+    # disk_size is omitted, so it is the computed minimum.
+    assert validation.disk_size == 134
 
 
 # Row 1: server_name passes _validate_new_name and is not `nested`.
@@ -256,13 +260,65 @@ def test_rejects_e2_and_unknown_machine_types(validator, field):
         _reject(validator, body, field, name, fragment)
 
 
-# Row 8: disk_size between the computed minimum and NESTED_MAX_DISK_GB.
-def test_computed_minimum_disk_size():
-    request = NestedImageCreateRequest(**_body())
-    assert NestedHostValidator.min_disk_size(request.nested.guests) == 20 + (10 + 40 + 40) + 12
+# Row 8: disk_size between the computed minimum and NESTED_MAX_DISK_GB. The minimum also reserves each
+# distinct medium, which stays cached on the parent disk for the whole build (V6e).
+def test_computed_minimum_disk_size_reserves_each_medium_in_whole_gib():
+    guests = NestedImageCreateRequest(**_body()).nested.guests
+    sizes = {'a' * 64: 400_000_000, 'b' * 64: 5_500_000_000, 'upload-media-win10': 5_000_000_000}
+
+    # Base 20 + guest disks + scratch 12 + media 1 + 6 + 5 GiB (each rounded up).
+    assert NestedHostValidator.min_disk_size(guests, sizes) == 20 + (10 + 40 + 40) + 12 + (1 + 6 + 5)
+    assert NestedHostValidator.min_disk_size(guests, {'x': GIB}) == 20 + 90 + 12 + 1
 
 
-@pytest.mark.parametrize('size, fragment', [(121, 'below the 122 GB'), (1001, 'exceeds')])
+def test_media_sizes_key_each_medium_like_the_builder_cache(validator):
+    body = _body()
+    body['nested']['guests'].append(dict(_guest(body, 'router'), name='router2', nics=[{'network': 'corp'}]))
+    guests = NestedImageCreateRequest(**body).nested.guests
+    validation = validator.validate(NestedImageCreateRequest(**body))
+    media = {'media-win10': validator._load_media('media-win10')}
+
+    # Two debian-12 guests share one cached download, so it is counted once.
+    assert NestedHostValidator.media_sizes(guests, validation.entries, media) == {
+        'a' * 64: 400_000_000, 'b' * 64: 5_500_000_000, 'upload-media-win10': 5_000_000_000}
+    assert validation.disk_size == 20 + (10 + 10 + 40 + 40) + 12 + (1 + 6 + 5)
+
+
+def test_an_uploads_sha256_is_its_cache_key(validator):
+    guests = NestedImageCreateRequest(**_body()).nested.guests
+    entries = validator.validate(NestedImageCreateRequest(**_body())).entries
+    medium = validator._load_media('media-win10').model_copy(update={'sha256': 'd' * 64})
+
+    assert NestedHostValidator.media_sizes(guests, entries, {'media-win10': medium})['d' * 64] == 5_000_000_000
+
+
+def test_an_unknown_media_size_reserves_the_upload_limit(validator, monkeypatch):
+    # An entry synced before media_size_bytes existed: the API cannot know its size.
+    monkeypatch.setitem(CATALOG, 'win2022-eval', dict(CATALOG['win2022-eval'], media_size_bytes=None))
+    validation = validator.validate(NestedImageCreateRequest(**_body()))
+
+    assert validation.disk_size == 20 + 90 + 12 + (1 + NESTED_MEDIA_MAX_BYTES // GIB + 5)
+
+
+def test_a_media_id_on_a_downloadable_entry_reserves_the_upload_not_the_download(validator):
+    # nested_manifest._media_source builds from the upload whenever a guest names one.
+    body = _body()
+    _guest(body, 'dc01')['media_id'] = 'media-vmdk'
+    validation = validator.validate(NestedImageCreateRequest(**body))
+
+    assert validation.disk_size == 20 + 90 + 12 + (1 + 1 + 5)
+
+
+def test_a_missing_upload_on_a_downloadable_entry_reserves_the_upload_limit(validator):
+    body = _body()
+    _guest(body, 'dc01')['media_id'] = 'media-gone'
+    validation = validator.validate(NestedImageCreateRequest(**body))
+
+    assert validation.disk_size == 20 + 90 + 12 + (1 + NESTED_MEDIA_MAX_BYTES // GIB + 5)
+
+
+@pytest.mark.parametrize('size, fragment', [(133, 'below the 134 GB the guests and their media need'),
+                                            (1001, 'exceeds')])
 def test_rejects_disk_size_out_of_range(validator, size, fragment):
     body = _body()
     body['disk_size'] = size
@@ -271,8 +327,8 @@ def test_rejects_disk_size_out_of_range(validator, size, fragment):
 
 def test_accepts_disk_size_at_the_minimum(validator):
     body = _body()
-    body['disk_size'] = 122
-    validator.validate(NestedImageCreateRequest(**body))
+    body['disk_size'] = 134
+    assert validator.validate(NestedImageCreateRequest(**body)).disk_size == 134
 
 
 # Row 9: NIC networks exist; static IPs inside, unique, not parent_address, outside the DHCP range.

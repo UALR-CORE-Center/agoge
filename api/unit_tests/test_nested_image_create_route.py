@@ -13,7 +13,6 @@ import dependencies
 from common.constants.database import DbCollections
 from common.constants.pub_sub import PubSub
 from common.constants.states import ImageStatus
-from common.models.agoge import NestedImageCreateRequest
 from core.compute import image as image_module
 from core.compute.nested import nested_image as nested_image_module
 from core.compute.nested import validator as validator_module
@@ -94,9 +93,8 @@ def test_valid_request_stores_a_queued_checked_out_record_and_publishes_one_chec
     assert [tuple(e) for e in record['nested']['exposures']] == [('router', 0), ('dc01', 0)]
     assert record['nested']['console_ports'] == {'router': 5901, 'dc01': 5902, 'ws01': 5903}
     assert all(len(p) == 8 for p in record['nested']['vnc_passwords'].values())
-    # disk_size is omitted, so the parent disk is the computed minimum for the three guests.
-    guests = NestedImageCreateRequest(**_body()).nested.guests
-    assert record['add_disk'] == str(NestedHostValidator.min_disk_size(guests))
+    # disk_size is omitted, so the parent disk is the computed minimum for the three guests and their media.
+    assert record['add_disk'] == '134'
     [access] = record['human_interaction']
     assert (access['username'], access['ssh_key'], access['protocol']) == ('agoge', 'ssh-ed25519 AAAA', 'ssh')
 

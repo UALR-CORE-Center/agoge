@@ -8,6 +8,7 @@
     "install_method": "unattended_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -41,6 +42,7 @@
     "install_method": "unattended_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -74,6 +76,7 @@
     "install_method": "unattended_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -107,6 +110,7 @@
     "install_method": "unattended_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -140,6 +144,7 @@
     "install_method": "unattended_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -173,6 +178,7 @@
     "install_method": "unattended_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -206,6 +212,7 @@
     "install_method": "unattended_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -239,6 +246,7 @@
     "install_method": "unattended_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -272,6 +280,7 @@
     "install_method": "unattended_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -305,6 +314,7 @@
     "install_method": "unattended_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -338,6 +348,7 @@
     "install_method": "unattended_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -371,6 +382,7 @@
     "install_method": "unattended_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -404,6 +416,7 @@
     "install_method": "unattended_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -437,6 +450,7 @@
     "install_method": "manual_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -470,6 +484,7 @@
     "install_method": "disk_image",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "qcow2",
       "raw",
@@ -512,6 +527,7 @@
     "install_method": "manual_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -545,6 +561,7 @@
     "install_method": "disk_image",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "qcow2",
       "raw",
@@ -587,6 +604,7 @@
     "install_method": "cloud_image",
     "media_url": "https://cloud-images.ubuntu.com/releases/xenial/release-20211001/ubuntu-16.04-server-cloudimg-amd64-disk1.img",
     "media_sha256": "fff2494a70bcaffb59f26f71ec49e137dd87d319341c35832dbe0ea65ff15140",
+    "media_size_bytes": 315359232,
     "media_formats": [
       "qcow2"
     ],
@@ -620,6 +638,7 @@
     "install_method": "cloud_image",
     "media_url": "https://cloud-images.ubuntu.com/releases/bionic/release-20230607/ubuntu-18.04-server-cloudimg-amd64.img",
     "media_sha256": "8dd2e6b5e5aad20c3f836123b300cba9861249408cbb07c359145a65d6bab6b6",
+    "media_size_bytes": 405667840,
     "media_formats": [
       "qcow2"
     ],
@@ -653,6 +672,7 @@
     "install_method": "cloud_image",
     "media_url": "https://cloud-images.ubuntu.com/releases/focal/release-20250624/ubuntu-20.04-server-cloudimg-amd64.img",
     "media_sha256": "18f2977d77dfea1b74aee14533bd21c34f789139e949c57023b7364894b7e5e9",
+    "media_size_bytes": 647992832,
     "media_formats": [
       "qcow2"
     ],
@@ -686,6 +706,7 @@
     "install_method": "cloud_image",
     "media_url": "https://cloud-images.ubuntu.com/releases/jammy/release-20261004/ubuntu-22.04-server-cloudimg-amd64.img",
     "media_sha256": "012d81fade7e8ff4428fc35dfeee711d66d1f47d5ea9c5c8ced96a85b959835c",
+    "media_size_bytes": 730497536,
     "media_formats": [
       "qcow2"
     ],
@@ -719,6 +740,7 @@
     "install_method": "cloud_image",
     "media_url": "https://cloud-images.ubuntu.com/releases/noble/release-20261017/ubuntu-24.04-server-cloudimg-amd64.img",
     "media_sha256": "04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94",
+    "media_size_bytes": 621284352,
     "media_formats": [
       "qcow2"
     ],
@@ -752,6 +774,7 @@
     "install_method": "cloud_image",
     "media_url": "https://cloud-images.ubuntu.com/releases/resolute/release-20260927/ubuntu-26.04-server-cloudimg-amd64.img",
     "media_sha256": "8800651811af9a85465ad1d552add729947bb16488dddb4a9b5305a3d97332b2",
+    "media_size_bytes": 865115136,
     "media_formats": [
       "qcow2"
     ],
@@ -785,6 +808,7 @@
     "install_method": "cloud_image",
     "media_url": "https://dl.rockylinux.org/pub/rocky/8.10/images/x86_64/Rocky-8-GenericCloud-Base-8.10-20240528.0.x86_64.qcow2",
     "media_sha256": "e56066c58606191e96184de9a9183a3af33c59bcbd8740d8b10ca054a7a89c14",
+    "media_size_bytes": 2065760256,
     "media_formats": [
       "qcow2"
     ],
@@ -818,6 +842,7 @@
     "install_method": "cloud_image",
     "media_url": "https://dl.rockylinux.org/pub/rocky/9.8/images/x86_64/Rocky-9-GenericCloud-Base-9.8-20260525.0.x86_64.qcow2",
     "media_sha256": "92c206cc6f790c61583247eefe87890f8828420662c17cacf247cec78ab4eec8",
+    "media_size_bytes": 645988352,
     "media_formats": [
       "qcow2"
     ],
@@ -851,6 +876,7 @@
     "install_method": "cloud_image",
     "media_url": "https://dl.rockylinux.org/pub/rocky/10.2/images/x86_64/Rocky-10-GenericCloud-Base-10.2-20260525.0.x86_64.qcow2",
     "media_sha256": "9fc9e9ff16888bb68ac39b0392e25c9c92684d50c85f1cce6ab549363bbc4b48",
+    "media_size_bytes": 544997376,
     "media_formats": [
       "qcow2"
     ],
@@ -884,6 +910,7 @@
     "install_method": "cloud_image",
     "media_url": "https://repo.almalinux.org/almalinux/8.10/cloud/x86_64/images/AlmaLinux-8-GenericCloud-8.10-20260928.x86_64.qcow2",
     "media_sha256": "4a4dfcbd0a02f9fbf62dee6420a168858ff1640a26fb8840ea4013db57436a6c",
+    "media_size_bytes": 1656029184,
     "media_formats": [
       "qcow2"
     ],
@@ -917,6 +944,7 @@
     "install_method": "cloud_image",
     "media_url": "https://repo.almalinux.org/almalinux/9.8/cloud/x86_64/images/AlmaLinux-9-GenericCloud-9.8-20261005.x86_64.qcow2",
     "media_sha256": "25942b554efaac077e2f60d6bb27bd3332c171454cc21bbd33e5f79244d7570f",
+    "media_size_bytes": 572850176,
     "media_formats": [
       "qcow2"
     ],
@@ -950,6 +978,7 @@
     "install_method": "cloud_image",
     "media_url": "https://repo.almalinux.org/almalinux/10.2/cloud/x86_64/images/AlmaLinux-10-GenericCloud-10.2-20261012.0.x86_64.qcow2",
     "media_sha256": "cbee4726fc0f5a60694bb4f289003cc221e715dfbacebcce76b54daf386d8eca",
+    "media_size_bytes": 497876992,
     "media_formats": [
       "qcow2"
     ],
@@ -983,6 +1012,7 @@
     "install_method": "cloud_image",
     "media_url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2",
     "media_sha256": "846574c8a97cd2d8dc1f231062d73107cc85cbbbda56335e264a46e3a6c8ab2f",
+    "media_size_bytes": 583335936,
     "media_formats": [
       "qcow2"
     ],
@@ -1016,6 +1046,7 @@
     "install_method": "cloud_image",
     "media_url": "https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2",
     "media_sha256": "28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f",
+    "media_size_bytes": 583729152,
     "media_formats": [
       "qcow2"
     ],
@@ -1049,6 +1080,7 @@
     "install_method": "cloud_image",
     "media_url": "https://cloud.centos.org/centos/10-stream/x86_64/images/CentOS-Stream-GenericCloud-x86_64-10-20260728.1.x86_64.qcow2",
     "media_sha256": "c98bf5b4ebad99dda83a07d184102ee9f16aa051c9ffb7eb4cc2347b2e1b1e8b",
+    "media_size_bytes": 2411266048,
     "media_formats": [
       "qcow2"
     ],
@@ -1082,6 +1114,7 @@
     "install_method": "cloud_image",
     "media_url": "https://geo.mirror.pkgbuild.com/images/v20261001.604814/Arch-Linux-x86_64-cloudimg-20261001.604814.qcow2",
     "media_sha256": "360f0fa49db6813bdc8e35bed230a2dc2ae3567b7b5ab74719c0a706e4e34e87",
+    "media_size_bytes": 578080256,
     "media_formats": [
       "qcow2"
     ],
@@ -1115,6 +1148,7 @@
     "install_method": "cloud_image",
     "media_url": "https://download.opensuse.org/distribution/leap/16.0/appliances/Leap-16.0-Minimal-VM.x86_64-Cloud-Build18.81.qcow2",
     "media_sha256": "ed375c62192b801293b279aa3e8f3bfbb9a73cd3d0cced73dd1fe2e08932a31b",
+    "media_size_bytes": 338000896,
     "media_formats": [
       "qcow2"
     ],
@@ -1148,6 +1182,7 @@
     "install_method": "manual_iso",
     "media_url": "https://download.securityonion.net/file/securityonion/securityonion-3.3.0-20260911.iso",
     "media_sha256": "0938c73b76ce30ec9e4394d312c79ea7cac721b6818541697279a6221f7d870d",
+    "media_size_bytes": 14007926784,
     "media_formats": [
       "iso"
     ],
@@ -1181,6 +1216,7 @@
     "install_method": "manual_iso",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "iso"
     ],
@@ -1214,6 +1250,7 @@
     "install_method": "disk_image",
     "media_url": null,
     "media_sha256": null,
+    "media_size_bytes": null,
     "media_formats": [
       "qcow2",
       "raw",

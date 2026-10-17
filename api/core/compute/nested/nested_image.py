@@ -67,7 +67,7 @@ class NestedImage(ComputeImage):
         """
         server_name = request.server_name
         self.user = user.email
-        self.validator.validate(request)
+        validation = self.validator.validate(request)
         if self.db.get(collection_name=self.collection, doc_id=server_name):
             raise Conflict(f'Template {server_name} already exists. Choose a different name.')
 
@@ -77,7 +77,7 @@ class NestedImage(ComputeImage):
         parent_access = self._generate_human_interaction(
             {'username': request.username, 'ssh_key': request.ssh_key}, infer_from_os=False
         )
-        disk_size = request.disk_size if request.disk_size is not None else self.validator.min_disk_size(spec.guests)
+        disk_size = validation.disk_size
         image = AgogeImageModel(
             name=server_name,
             status=ImageStatus.CHECKED_OUT.value,

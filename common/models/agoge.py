@@ -747,6 +747,8 @@ class NestedOsCatalogModel(BaseModel):
     install_method: NestedInstallMethod
     media_url: Optional[str] = Field(default=None, description="https only; None means the instructor uploads the media")
     media_sha256: Optional[str] = Field(default=None, pattern=r'^[a-f0-9]{64}$')
+    media_size_bytes: Optional[int] = Field(default=None, gt=0, description="media_url's download size; the parent disk "
+                                            "reserves room for it, or for NESTED_MEDIA_MAX_BYTES when None")
     media_formats: List[NestedMediaFormat] = Field(..., min_length=1, description="Accepted formats; the first is the media_url's")
     requires_upload: bool = False
     license_note: str = Field(..., description="Shown in the wizard before selection")
