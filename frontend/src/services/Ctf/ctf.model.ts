@@ -4,6 +4,7 @@
 
 export type LocationType = 'file' | 'registry' | 'env' | 'ads';
 export type OperatingSystem = 'linux' | 'windows';
+export type WindowsAccess = 'administrators' | 'user' | 'everyone';
 export type PlantStatus = 'pending' | 'planting' | 'planted' | 'failed' | 'stale';
 export type ArmStatus = 'pending' | 'arming' | 'armed' | 'failed';
 // A runtime list, not just a type, so the Submissions panel can offer every verdict as a filter.
@@ -54,6 +55,10 @@ export interface CtfFlagSpec {
     unlocks_after: string[] | null;
     file_mode: string | null;
     file_owner: string | null;
+    // Windows file and ads flags only; optional so specs saved before these existed still type-check.
+    windows_access?: WindowsAccess | null;
+    windows_user?: string | null;
+    hidden?: boolean;
 }
 
 export interface CtfScoringSpec {

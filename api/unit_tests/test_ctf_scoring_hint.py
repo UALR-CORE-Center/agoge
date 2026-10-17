@@ -275,3 +275,49 @@ def test_missing_event_is_not_found(db):
 
     with pytest.raises(NotFound, match="CTF event not found"):
         CtfScoring(db=db).hint(A, "web1")
+
+
+def set_decoy_points(db, decoy_points, reveal=False):
+    board(db)["decoy_points"] = decoy_points
+    db.col(DbCollections.CTF)[CTF_ID]["spec"]["scoring"] = {"reveal_decoy_penalty": reveal}
+
+
+def test_first_hint_score_excludes_decoy_points_but_stored_score_keeps_them(db):
+    seed_event(db, score=250)
+    set_decoy_points(db, -50)
+
+    response = CtfScoring(db=db).hint(A, "web1")
+
+    assert response.score == 275                 # 250 - 25 hint = 225 true, decoy -50 taken back out
+    assert board(db)["score"] == 225             # the stored score is the true one
+    assert board(db)["decoy_points"] == -50
+
+
+def test_already_taken_hint_score_excludes_decoy_points(db):
+    seed_event(db, score=250)
+    set_decoy_points(db, -50)
+    scoring = CtfScoring(db=db)
+    scoring.hint(A, "web1")
+    writes = len(db.updates)
+
+    again = scoring.hint(A, "web1")
+
+    assert again.score == 275
+    assert board(db)["score"] == 225
+    assert len(db.updates) == writes
+
+
+def test_hint_score_is_raw_when_the_decoy_penalty_is_revealed(db):
+    seed_event(db, score=250)
+    set_decoy_points(db, -50, reveal=True)
+    scoring = CtfScoring(db=db)
+
+    assert scoring.hint(A, "web1").score == 225
+    assert scoring.hint(A, "web1").score == 225
+    assert board(db)["score"] == 225
+
+
+def test_hint_without_decoy_points_key_returns_the_true_score(db):
+    assert "decoy_points" not in board(db)
+
+    assert CtfScoring(db=db).hint(A, "web1").score == 275

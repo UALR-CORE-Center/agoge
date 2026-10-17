@@ -14,6 +14,7 @@ import {
     FormGroupOutline,
     FormSwitch,
     FormTextField,
+    RequiredMark,
     StyledFormFieldLabel,
 } from "../utils/FormFields";
 import {Add, CloudUpload, Delete, Error} from "@mui/icons-material";
@@ -131,8 +132,9 @@ const AssessmentForm: React.FC<Props> = (
                 assessmentFormHook.hasAssessmentScript() &&
                 <FormGroupOutline showOverlay={disableForm} sx={{width: '100%'}}>
                     <FormGroup>
-                        <StyledFormFieldLabel>Install Server</StyledFormFieldLabel>
+                        <StyledFormFieldLabel>Install Server<RequiredMark/></StyledFormFieldLabel>
                         <FormAutocompleteField
+                            required
                             placeholder={"Install Server"}
                             helpText={"Server where the Assessment Script will be hosted"}
                             options={remoteServers}

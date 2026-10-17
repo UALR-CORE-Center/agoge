@@ -494,6 +494,16 @@ class CtfFlagSpecModel(BaseModel):
     unlocks_after: Optional[List[str]] = Field(default=None, description="Flag ids that must be solved before this one is listed to the team")
     file_mode: Optional[str] = Field(default=None, pattern=r'^0[0-7]{3}$', description="Linux file placements only")
     file_owner: Optional[str] = Field(default=None, pattern=r'^[a-z_][a-z0-9_-]*:[a-z_][a-z0-9_-]*$', description="Linux file placements only")
+    windows_access: Optional[Literal['administrators', 'user', 'everyone']] = Field(
+        default=None,
+        description="Windows file/ads placements only: replaces the file's inherited permissions so only "
+                    "SYSTEM and Administrators (plus windows_user, or Everyone) can read it. None keeps the folder's"
+    )
+    windows_user: Optional[str] = Field(
+        default=None, pattern=r'^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$',
+        description="Local account given read access; required when windows_access is 'user'"
+    )
+    hidden: bool = Field(default=False, description="Windows file/ads placements only: set the file's Hidden attribute")
 
 
 class CtfScoringSpecModel(BaseModel):
@@ -859,6 +869,7 @@ class CtfBoardModel(BaseModel):
     score: int = Field(default=0, description="Solved points + decoy points - hint costs + manual adjustments")
     solve_count: int = Field(default=0)
     decoy_count: int = Field(default=0)
+    decoy_points: int = Field(default=0, description="Sum of decoy points in `score`; student views subtract it unless reveal_decoy_penalty")
     last_solve_at: Optional[float] = Field(default=None, description="Ranking tiebreaker")
     arm_status: ArmStatus = Field(default='pending')
     arm_error: Optional[str] = Field(default=None)

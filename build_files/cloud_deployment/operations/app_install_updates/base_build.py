@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import getpass
 from googleapiclient import discovery
@@ -113,10 +114,11 @@ class BaseBuild:
     # ---------------------------------------------------------------------
     def _get_project_number(self) -> str:
         """Return the numeric project ID so we can construct IAM principals."""
-        cmd = (
-            f"gcloud projects describe {self.project} --format=""value(projectNumber)"""
-        )
-        result = subprocess.run(cmd, capture_output=True, shell=True, text=True, check=True)
+        # An argv list, not shell=True: /bin/sh rejects the unquoted parentheses in value(...).
+        # Without a shell, Windows needs the resolved gcloud.cmd path.
+        gcloud = shutil.which("gcloud") or shutil.which("gcloud.cmd") or "gcloud"
+        cmd = [gcloud, "projects", "describe", self.project, "--format=value(projectNumber)"]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         return result.stdout.strip()
 
     # ---------------------------------------------------------------------

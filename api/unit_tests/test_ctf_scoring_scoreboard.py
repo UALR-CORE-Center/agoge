@@ -276,3 +276,64 @@ def test_team_labels_follow_board_ids_even_when_a_board_is_invalid(db):
     rows = CtfScoring(db=db).public_scoreboard(A)
 
     assert [(r.team_label, r.is_you) for r in rows] == [("Team 3", False), ("Team 1", True)]
+
+
+# --- decoy masking -----------------------------------------------------------------------------
+
+def seed_decoy_boards(db, **event_fields):
+    """A has 100 solved and hit a -50 decoy (raw 50); B is clean at 75."""
+    seed_event(db, board_ids=(A, B), **event_fields)
+    seed_board(db, A, {"web1": 10.0}, score=50)
+    db.col(DbCollections.CTF_BOARD)[f"{CTF_ID}-{A}"]["decoy_points"] = -50
+    seed_board(db, B, {"web1": 20.0}, score=75)
+
+
+def test_public_scoreboard_masks_decoy_points_and_ranks_on_the_masked_score(db):
+    seed_decoy_boards(db)
+
+    rows = CtfScoring(db=db).public_scoreboard(B)
+
+    # A shows 50 - (-50) = 100 and so outranks B at 75, though its raw score is lower.
+    assert [(r.rank, r.team_label, r.score, r.is_you) for r in rows] == [
+        (1, "Team 1", 100, False),
+        (2, "Team 2", 75, True),
+    ]
+
+
+def test_public_scoreboard_uses_raw_scores_and_ranking_when_the_penalty_is_revealed(db):
+    seed_decoy_boards(db)
+    db.col(DbCollections.CTF)[CTF_ID]["spec"]["scoring"]["reveal_decoy_penalty"] = True
+
+    rows = CtfScoring(db=db).public_scoreboard(B)
+
+    assert [(r.rank, r.team_label, r.score) for r in rows] == [(1, "Team 2", 75), (2, "Team 1", 50)]
+
+
+def test_public_scoreboard_masks_decoy_points_on_top_of_the_freeze(db):
+    seed_event(db, board_ids=(A, B), scoreboard_frozen_at=FREEZE)
+    # A: 100 + 200 - 50 decoy = 250 raw, web2 after the freeze -> frozen 50, masked 100.
+    seed_board(db, A, {"web1": FREEZE - 5, "web2": FREEZE + 5}, score=250)
+    db.col(DbCollections.CTF_BOARD)[f"{CTF_ID}-{A}"]["decoy_points"] = -50
+    seed_board(db, B, {"web1": FREEZE - 4}, score=100 - 10)         # frozen 90, no decoys
+
+    rows = CtfScoring(db=db).public_scoreboard(A)
+
+    assert [(r.team_label, r.score, r.solve_count) for r in rows] == [("Team 1", 100, 1), ("Team 2", 90, 1)]
+
+
+def test_instructor_scoreboard_keeps_the_true_score_despite_decoy_points(db):
+    seed_decoy_boards(db)
+
+    rows = CtfScoring(db=db).scoreboard(CTF_ID, INSTRUCTOR)
+
+    assert [(r.rank, r.workout_id, r.score, r.decoy_count) for r in rows] == [(1, B, 75, 0), (2, A, 50, 0)]
+
+
+def test_public_scoreboard_board_without_decoy_points_key_is_unmasked(db):
+    seed_event(db, board_ids=(A,))
+    seed_board(db, A, {"web1": 10.0})
+    assert "decoy_points" not in db.col(DbCollections.CTF_BOARD)[f"{CTF_ID}-{A}"]
+
+    [row] = CtfScoring(db=db).public_scoreboard(A)
+
+    assert row.score == 100

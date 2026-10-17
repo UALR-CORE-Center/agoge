@@ -20,6 +20,7 @@ import {Assessment, ContentCopy, ExpandLess, ExpandMore} from "@mui/icons-materi
 import {ReviewSectionLabel} from "./ReviewCommonStyles";
 import WebAppReview from "./WebAppReview";
 import AssessmentReview from "./AssessmentReview";
+import CtfReview from "./CtfReview";
 import {SxProps} from "@mui/system";
 import {Theme} from "@mui/material/styles/createTheme";
 
@@ -99,6 +100,10 @@ const Review: React.FC<Props> = ({specification, onNavigateToStep}) => {
 
             <ServerReview elevation={elevation} loading={loading} specification={specification}
                           onNavigateToStep={onNavigateToStep} styles={defaultSX}/>
+            {specification?.ctf && (
+                <CtfReview elevation={elevation} loading={loading} specification={specification}
+                           onNavigateToStep={onNavigateToStep} styles={defaultSX}/>
+            )}
             <WebAppReview elevation={elevation} loading={loading} specification={specification}
                           onNavigateToStep={onNavigateToStep} styles={defaultSX}/>
             <AssessmentReview elevation={elevation} loading={loading} specification={specification}

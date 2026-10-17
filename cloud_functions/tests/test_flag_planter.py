@@ -331,3 +331,59 @@ def test_linux_payload_failing_iptables_is_not_a_plant_failure(sandbox):
     payload = _linux_planter(sandbox['root']).build_payload(_board(BOARD_IDS), 'web', NONCE, SEED)
     _run(payload, sandbox)
     assert f"--data ok:{NONCE} " in (sandbox['calls'] / 'curl').read_text()
+
+
+# --- Windows access and hidden -------------------------------------------------------------------------
+
+def _windows_planter(**options):
+    flags = [
+        _flag('dc-file', 'dc', 1, 'file', 'C:\\Secrets\\flag.txt', 'windows', **options),
+        _flag('dc-ads', 'dc', 2, 'ads', 'C:\\Windows\\Temp\\notes.txt:hidden', 'windows', **options),
+    ]
+    return FlagPlanter(_event(flags))
+
+
+def test_windows_payload_sets_access_and_hidden_on_file_and_ads_host():
+    payload = _windows_planter(windows_access='user', windows_user='student', hidden=True).build_payload(
+        _board(['dc-file', 'dc-ads']), 'dc', NONCE, SEED)
+    assert "Set-AgogeCtfAccess 'C:\\Secrets\\flag.txt' 'user' 'student' 'dc-file'" in payload
+    assert "Set-AgogeCtfHidden 'C:\\Secrets\\flag.txt' 'dc-file'" in payload
+    # The stream's permissions and attributes live on its host file
+    assert "Set-AgogeCtfAccess 'C:\\Windows\\Temp\\notes.txt' 'user' 'student' 'dc-ads'" in payload
+    assert "Set-AgogeCtfHidden 'C:\\Windows\\Temp\\notes.txt' 'dc-ads'" in payload
+    # Access is applied after the write, and Hidden last
+    lines = payload.splitlines()
+    write = lines.index(next(line for line in lines if line.startswith("Set-AgogeCtfFile ")))
+    access = lines.index("Set-AgogeCtfAccess 'C:\\Secrets\\flag.txt' 'user' 'student' 'dc-file'")
+    hidden = lines.index("Set-AgogeCtfHidden 'C:\\Secrets\\flag.txt' 'dc-file'")
+    assert write < access < hidden
+
+
+def test_windows_payload_without_options_keeps_inherited_access():
+    payload = _windows_planter().build_payload(_board(['dc-file', 'dc-ads']), 'dc', NONCE, SEED)
+    assert "Set-AgogeCtfAccess '" not in payload
+    assert "Set-AgogeCtfHidden '" not in payload
+
+
+def test_windows_access_grants_use_well_known_sids():
+    payload = _windows_planter(windows_access='everyone').build_payload(_board(['dc-file']), 'dc', NONCE, SEED)
+    for sid in ('*S-1-5-18:(F)', '*S-1-5-32-544:(F)', '*S-1-1-0:(R)'):
+        assert sid in payload
+    # A replant must be able to overwrite a file an earlier plant hid
+    assert "Clear-AgogeCtfAttributes $Path" in payload
+
+
+def test_windows_payload_with_access_parses_as_powershell(tmp_path):
+    if shutil.which('pwsh') is None:
+        pytest.skip("PowerShell is not installed")
+    script = tmp_path / 'payload.ps1'
+    script.write_text(_windows_planter(windows_access='user', windows_user='student', hidden=True).build_payload(
+        _board(['dc-file', 'dc-ads']), 'dc', NONCE, SEED))
+    check = (
+        "$errors = $null; "
+        f"[System.Management.Automation.Language.Parser]::ParseFile('{script}', [ref]$null, [ref]$errors) | Out-Null; "
+        "$errors.Count"
+    )
+    result = subprocess.run(['pwsh', '-NoProfile', '-NonInteractive', '-Command', check],
+                            capture_output=True, text=True, timeout=60)
+    assert result.stdout.strip() == '0', result.stdout + result.stderr

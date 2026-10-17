@@ -25,6 +25,8 @@ _NONCE_PATTERN = r'^[A-Za-z0-9-]{1,64}$'
 _FILE_MODE_PATTERN = r'^0[0-7]{3}$'
 _FILE_OWNER_PATTERN = r'^[a-z_][a-z0-9_-]*:[a-z_][a-z0-9_-]*$'
 _DEFAULT_LINUX_FILE_MODE = '0644'
+_WINDOWS_USER_PATTERN = r'^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$'
+_WINDOWS_ACCESS_LEVELS = ('administrators', 'user', 'everyone')
 
 # Module-level so tests can point the Linux env placement at a scratch file
 LINUX_ENVIRONMENT_FILE = '/etc/environment'
@@ -82,12 +84,40 @@ _WINDOWS_PROLOGUE = """# agoge-ctf plant payload. Never prints a flag value.
 $ErrorActionPreference = 'Stop'
 $agogeCtfNonce = {nonce}
 $agogeCtfErrors = New-Object System.Collections.Generic.List[string]
+function Clear-AgogeCtfAttributes([string]$Path) {{
+  # WriteAllText and Set-Content refuse a Hidden or ReadOnly file, which an earlier plant may have hidden
+  if (Test-Path -LiteralPath $Path) {{
+    $item = Get-Item -LiteralPath $Path -Force
+    $cleared = $item.Attributes -band -bnot ([System.IO.FileAttributes]::Hidden -bor [System.IO.FileAttributes]::ReadOnly)
+    if ($cleared -eq 0) {{ $cleared = [System.IO.FileAttributes]::Normal }}
+    $item.Attributes = $cleared
+  }}
+}}
 function Set-AgogeCtfFile([string]$Path, [string]$Value, [string]$FlagId) {{
   try {{
     $parent = Split-Path -Parent $Path
     if (-not (Test-Path -LiteralPath $parent)) {{ New-Item -ItemType Directory -Force -Path $parent | Out-Null }}
+    Clear-AgogeCtfAttributes $Path
     [System.IO.File]::WriteAllText($Path, $Value)
   }} catch {{ $agogeCtfErrors.Add("${{FlagId}}: could not write file") }}
+}}
+function Set-AgogeCtfAccess([string]$Path, [string]$Access, [string]$User, [string]$FlagId) {{
+  try {{
+    # Well-known SIDs, so localized group names do not matter: SYSTEM, Administrators, Everyone
+    $grants = @('*S-1-5-18:(F)', '*S-1-5-32-544:(F)')
+    if ($Access -eq 'everyone') {{ $grants += '*S-1-1-0:(R)' }}
+    if ($Access -eq 'user') {{ $grants += ($User + ':(R)') }}
+    & icacls.exe $Path /reset | Out-Null
+    if ($LASTEXITCODE -ne 0) {{ throw 'reset' }}
+    & icacls.exe $Path /inheritance:r /grant:r @grants | Out-Null
+    if ($LASTEXITCODE -ne 0) {{ throw 'grant' }}
+  }} catch {{ $agogeCtfErrors.Add("${{FlagId}}: could not set file access (does the user exist?)") }}
+}}
+function Set-AgogeCtfHidden([string]$Path, [string]$FlagId) {{
+  try {{
+    $item = Get-Item -LiteralPath $Path -Force
+    $item.Attributes = $item.Attributes -bor [System.IO.FileAttributes]::Hidden
+  }} catch {{ $agogeCtfErrors.Add("${{FlagId}}: could not hide file") }}
 }}
 function Set-AgogeCtfRegistry([string]$Key, [string]$Name, [string]$Value, [string]$FlagId) {{
   try {{
@@ -105,6 +135,7 @@ function Set-AgogeCtfStream([string]$Path, [string]$Stream, [string]$Value, [str
   try {{
     # New-Item -Force on an existing file would truncate it, so only create a missing host file
     if (-not (Test-Path -LiteralPath $Path)) {{ New-Item -ItemType File -Force -Path $Path | Out-Null }}
+    Clear-AgogeCtfAttributes $Path
     Set-Content -LiteralPath $Path -Stream $Stream -Value $Value -NoNewline
   }} catch {{ $agogeCtfErrors.Add("${{FlagId}}: could not write alternate data stream") }}
 }}
@@ -433,6 +464,11 @@ class FlagPlanter:
                 raise BadRequest(f"{self.class_name}:{self.event.id} - Flag {flag.id} has an invalid file_mode")
             if flag.file_owner is not None and not re.fullmatch(_FILE_OWNER_PATTERN, flag.file_owner):
                 raise BadRequest(f"{self.class_name}:{self.event.id} - Flag {flag.id} has an invalid file_owner")
+        if flag.operating_system == 'windows' and flag.location_type in ('file', 'ads'):
+            if flag.windows_access is not None and flag.windows_access not in _WINDOWS_ACCESS_LEVELS:
+                raise BadRequest(f"{self.class_name}:{self.event.id} - Flag {flag.id} has an invalid windows_access")
+            if flag.windows_access == 'user' and not re.fullmatch(_WINDOWS_USER_PATTERN, flag.windows_user or ''):
+                raise BadRequest(f"{self.class_name}:{self.event.id} - Flag {flag.id} has an invalid windows_user")
 
     @staticmethod
     def _linux_payload(planted: list, nonce: str) -> str:
@@ -461,6 +497,7 @@ class FlagPlanter:
         for flag, value in planted:
             if flag.location_type == 'file':
                 lines.append(f"Set-AgogeCtfFile {q(flag.path)} {q(value)} {q(flag.id)}")
+                lines.extend(FlagPlanter._windows_file_options(flag, flag.path))
             elif flag.location_type == 'registry':
                 # HKLM\<key>:<value name> -> the HKLM: PowerShell drive
                 key, name = flag.path.rsplit(':', 1)
@@ -472,10 +509,24 @@ class FlagPlanter:
                 # <drive>:\<file>:<stream>; the last colon separates the stream, the first is the drive
                 path, stream = flag.path.rsplit(':', 1)
                 lines.append(f"Set-AgogeCtfStream {q(path)} {q(stream)} {q(value)} {q(flag.id)}")
+                # A stream shares its host file's permissions and attributes
+                lines.extend(FlagPlanter._windows_file_options(flag, path))
         lines.append(_WINDOWS_EPILOGUE.format(
             ok=RESULT_OK, error=RESULT_ERROR, max_message=MAX_RESULT_MESSAGE_LENGTH, url=q(_GUEST_ATTRIBUTE_URL)
         ))
         return "\n".join(lines)
+
+    @staticmethod
+    def _windows_file_options(flag: CtfFlagSpecModel, path: str) -> List[str]:
+        # Access before Hidden: changing attributes needs the write-attributes right SYSTEM keeps either way
+        q = FlagPlanter._ps_quote
+        lines = []
+        if flag.windows_access:
+            user = flag.windows_user if flag.windows_access == 'user' else ''
+            lines.append(f"Set-AgogeCtfAccess {q(path)} {q(flag.windows_access)} {q(user or '')} {q(flag.id)}")
+        if flag.hidden:
+            lines.append(f"Set-AgogeCtfHidden {q(path)} {q(flag.id)}")
+        return lines
 
     @staticmethod
     def _ps_quote(value: str) -> str:

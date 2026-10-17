@@ -156,17 +156,21 @@ category_menu = {
 }
 
 
+def get_main_menu_categories() -> list[SetupCategories]:
+    """
+    Returns the categories shown in the main menu, in display order.
+    """
+    return [category for category in SetupCategories if category_menu[category]["label"] != "Back"]
+
+
 def display_main_menu():
     """
     Displays the main category menu (top-level), allowing the user to choose
     among predefined SetupCategories.
     """
     print(Fore.YELLOW + "=== Select a Category ===" + Style.RESET_ALL)
-    for category in SetupCategories:
-        category_label = category_menu[category]["label"]
-        if category_label == "Back":
-            continue
-        print(Fore.GREEN + f"{category.value}. {category_label}")
+    for category in get_main_menu_categories():
+        print(Fore.GREEN + f"{category.value}. {category_menu[category]['label']}")
     print(Style.RESET_ALL, end="")
 
 
@@ -188,19 +192,22 @@ def get_setup_selection(selected_category: SetupCategories, choice: int) -> Setu
     return category_menu[selected_category]["options"][choice - 1][0]
 
 
-def get_user_selection(max_choice: int) -> int:
+def get_user_selection(max_choice: int = None, valid_choices: list[int] = None) -> int:
     """
-    Prompts the user for numeric input, ensuring the chosen value is within
-    the valid range [1..max_choice].
+    Prompts the user for numeric input. The value must be in valid_choices when
+    given, otherwise within the range [1..max_choice]. A trailing period is
+    ignored so that "99." is accepted like the menu displays it.
     """
+    if valid_choices is None:
+        valid_choices = list(range(1, max_choice + 1))
     while True:
         try:
-            choice = int(input("Enter your choice: ").strip())
-            if 1 <= choice <= max_choice:
+            choice = int(input("Enter your choice: ").strip().rstrip("."))
+            if choice in valid_choices:
                 return choice
             print(
                 Fore.RED
-                + f"Invalid choice. Please enter a number between 1 and {max_choice}."
+                + f"Invalid choice. Please enter one of: {', '.join(str(c) for c in valid_choices)}."
                 + Style.RESET_ALL
             )
         except ValueError:

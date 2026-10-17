@@ -8,6 +8,7 @@ import {createDefaultFormFieldMeta, FormType} from "../../../../../types/Form";
 import {maxLengthValidator, requiredValidator} from "../../../../../utilities/formValidators";
 
 import {
+    EditorUnitType,
     NetworkFormKeys,
     SummaryFormKeys,
     WebApplicationFormKeys
@@ -19,7 +20,7 @@ export class EditorFormFactory {
 
     static generateSummaryForm(
         summary: Summary | null = null,
-        unitType: UnitType = UnitType.SOLO
+        unitType: EditorUnitType = UnitType.SOLO
     ): FormType {
         return {
             [SummaryFormKeys.summaryName]: {

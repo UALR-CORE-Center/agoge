@@ -10,6 +10,7 @@ import {
     FormFields,
     FormGroup, FormGroupOutline,
     FormTextField,
+    RequiredMark,
     StyledFormFieldLabel,
     StyledFormGroupLabel
 } from "../utils/FormFields";
@@ -174,7 +175,7 @@ const StartupScriptDialog: React.FC<Props> = ({onClose}) => {
 
                     <FormGroup>
                         <Stack direction={'row'} gap={1} flexWrap={'wrap'}>
-                            <StyledFormFieldLabel>Startup Script</StyledFormFieldLabel>
+                            <StyledFormFieldLabel>Startup Script<RequiredMark/></StyledFormFieldLabel>
 
                             {
                                 selectedFileInput.value && (
