@@ -79,4 +79,6 @@ class PubSub:
         RESET_MODE = 'reset_mode'
         # Nested guest slug for a CTF host reset that targets one guest, not the parent server
         GUEST = 'guest'
+        # JSON guest -> Windows product key on a nested CHECK_OUT; never persisted, redacted from logs
+        PRODUCT_KEYS = 'product_keys'
         # CTF messages reuse SERVER_NAME for the target server
