@@ -155,11 +155,13 @@ class ComputeImage:
             raise BadRequest('Confirm that changes to this shared image affect multiple sites and applications.')
         return True
 
-    def _validate_new_name(self, server_name: str) -> None:
+    @classmethod
+    def _validate_new_name(cls, server_name: str) -> None:
+        # A classmethod so NestedHostValidator applies the same rule without a ComputeImage.
         # Leave nine characters for the longest snapshot suffix (-manual-0).
         if not isinstance(server_name, str) or not re.fullmatch(r'[a-z](?:[a-z0-9-]{0,52}[a-z0-9])?', server_name):
             raise BadRequest('Use 1–54 lowercase letters, numbers, or hyphens. Start with a letter and end with a letter or number.')
-        if server_name.startswith('image-') or server_name in self.NAME_RESERVATIONS:
+        if server_name.startswith('image-') or server_name in cls.NAME_RESERVATIONS:
             raise BadRequest('Choose a server name without the reserved image- prefix or reserved names agoge and google.')
 
     def _create_record(self, image: dict) -> None:

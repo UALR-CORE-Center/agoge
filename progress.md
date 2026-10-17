@@ -159,8 +159,8 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V3** License on check-in — spec + done-when at PRD.md:1665
 - [x] **V4** Template startup-script merge — spec + done-when at PRD.md:1667
 - [x] **V5** Models and constants — spec + done-when at PRD.md:1669 (`common/constants/nested.py` already exists from V2 with `NESTED_MACHINE_FAMILIES`, `NESTED_MAX_MACHINE_MEMORY_MB`, `STANDARD_MAX_MACHINE_MEMORY_MB`; extend it)
-- [ ] **V6** OS catalog and seeding — spec + done-when at PRD.md:1671
-- [ ] **V7** Nested host validator — spec + done-when at PRD.md:1673
+- [ ] **V6** OS catalog and seeding — spec + done-when at PRD.md:1671 — **BLOCKED (iteration 95):** its done-when needs Open Question V-5 answered first, and V-5 is human research. Microsoft Evaluation Center does not publish SHA-256 values, so each eval ISO (Server 2016/2019/2025, Windows 10/11 Enterprise) must be downloaded and hashed by a person. The Kali cloud image URL and format still need to be confirmed. The loop must not invent hashes. Unblock by recording V-5's answers (URL + sha256 per entry) in progress.md.
+- [x] **V7** Nested host validator — spec + done-when at PRD.md:1673
 - [ ] **V8** Manifest and unattend rendering — spec + done-when at PRD.md:1675
 - [ ] **V9** Builder script — spec + done-when at PRD.md:1677
 - [ ] **V10** Runtime service — spec + done-when at PRD.md:1679
@@ -1500,3 +1500,25 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** none.
 - **Next:** V6 (OS catalog and seeding). Open Question V-5 must be answered first.
+
+### Iteration 95 — 2026-10-17
+- **Completed:** V7.
+  - `api/core/compute/nested/validator.py` holds `NestedHostValidator(env_dict, db=None, machine_type_api=None)`.
+    - `validate(request)` raises `BadRequest` naming the network, guest, or field, and returns each guest's catalog entry by guest name for V8/V12.
+    - `min_disk_size(guests)` returns the computed minimum disk size.
+    - `derive(spec)` returns a deep copy. Exposures follow guest order, then NIC order. Console ports are 5901+ in the order of guests that have `console` set. VNC passwords are 8 random alphanumeric characters.
+  - `ComputeImage._validate_new_name` is now a classmethod, so the validator reuses it without building a `ComputeImage`.
+  - Choices beyond the table:
+    - `dhcp: true` requires both `dhcp_start` and `dhcp_end`. Without them, the "static IP outside the DHCP range" rule has nothing to test.
+    - `product_keys` naming a guest that doesn't exist are rejected.
+    - Machine types are looked up via `ComputeMachineTypesAPI.get`. The family check runs first, so E2 types are rejected without an API call.
+- **Tests:** `api/unit_tests/test_nested_host_validator.py` (60). Each table row has a test, plus the valid three-guest, two-network spec and determinism tests for `derive`.
+- **Learned:** 169.254.0.0/16 is not RFC 1918, so the RFC 1918 check always rejects it before the reserved-overlap check runs. Only 192.168.122.0/24 actually reaches the reserved-overlap check.
+- **Gate results:**
+  - api/unit_tests: 1554 passed.
+  - cloud_functions/tests: 641 passed.
+  - build_files: 319 passed.
+  - common/tests: 235 passed.
+  - No frontend files changed.
+- **Blockers:** V6 is BLOCKED on Open Question V-5. Microsoft publishes no SHA-256 values for its Evaluation Center ISOs, so a person must download and hash them.
+- **Next:** V8 (manifest and unattend rendering). V8's XML test iterates over the `unattended_iso` catalog entries, so it may need fixture entries until V6 is unblocked.
