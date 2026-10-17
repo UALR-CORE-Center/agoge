@@ -143,7 +143,8 @@ See `### Nested Guest Contract` in PRD.md.
 - [x] **N6** Guest payload builder — spec + done-when at PRD.md:1634
 - [x] **N7** qemu-agent relay section — spec + done-when at PRD.md:1636
 - [x] **N8** Plant watcher installer — spec + done-when at PRD.md:1638
-- [ ] **N9** Nested plant procedure — spec + done-when at PRD.md:1640
+- [x] **N9** Nested plant procedure — spec + done-when at PRD.md:1640
+- [ ] **BUG5** `FlagPlanter.plant`'s `except` calls `_fail_unfinished(board, targets)` with the board as it was before `_await_acks`/`_await_results` were called. Those helpers rebind `board` locally, so if one raises mid-loop (e.g. a Firestore error in `_record`), flags they already recorded `planted`/`failed` still read `planting` on the stale model and get overwritten with `MSG_ABORTED`. This predates N9 for `_await_results`. Fix by re-reading stored flag statuses in `_fail_unfinished` (inside the transaction), with a test that raises on the second `_record`.
 - [ ] **N10** Guest host reset publish — spec + done-when at PRD.md:1642
 - [ ] **N11** Guest host reset modes — spec + done-when at PRD.md:1644
 - [ ] **N12** Offline driver — spec + done-when at PRD.md:1646
@@ -1264,3 +1265,21 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** api/unit_tests 1440 passed; cloud_functions/tests 569 passed; build_files/cloud_deployment/tests 319 passed. ruff on the changed files reports only 2 errors, both in existing lines of `base_compute_manager.py` (588, 718) that this change did not touch. No frontend files changed.
 - **Blockers:** none.
 - **Next:** N9 (nested plant procedure in `FlagPlanter.plant`: wait `WATCHER_ACK_SECONDS` for `plant-ack`, reset only for an un-acked whole-server plant, per-key status).
+
+### Iteration 84 — 2026-10-17
+- **Completed:** N9. In `FlagPlanter.plant(board, servers, guest=None)`:
+  - Targets are now `server -> {result key: flag ids}`, built by `_result_groups`. A guest flag maps to `plant-result-<guest>`; a parent or plain-server flag maps to `plant-result`. With `guest` set, only that guest's flags are targeted, and a server that does not declare the guest is skipped.
+  - `_deliver(..., reset=False)` for nested hosts.
+  - New `_await_acks` polls `plant-ack` every `ACK_POLL_INTERVAL_SECONDS` (5 s) for up to `WATCHER_ACK_SECONDS`. With no ack, a whole-server plant resets the parent once; a guest plant fails `"Plant watcher did not respond"` and never resets. NotFound fails the server's flags.
+  - `_await_results` polls per (server, key). The deadline is 240 s for a plain server and `NESTED_CONFIRM_TIMEOUT_SECONDS` for a nested host (message `No plant confirmation within 420 s`). Once `plant-result` carries the nonce, any guest key still missing fails at once with `"Guest relay reported no result"`, because plant-result is written after every relay section ends.
+  - `build_payload`/`_nested_host_payload` take `guest=`: no parent flags and that guest's relay only. A guest on a plain server raises BadRequest.
+
+  New `cloud_functions/tests/test_flag_plant_nested.py` (15 tests).
+- **Learned:**
+  - A board flag's default `plant_status` is `'pending'`, not None.
+  - `shlex.quote` leaves a plain domain like `ubuntu-lin` unquoted in the payload.
+  - Until N12, flags on `offline` guests get no relay section. In a whole-server plant they fail fast with "Guest relay reported no result". If they are a server's only board flags, `_nested_host_payload` raises, so they fail "Could not build the plant payload".
+- **Gate results:** api/unit_tests 1440 passed; cloud_functions/tests 584 passed; build_files/cloud_deployment/tests 319 passed; ruff clean on changed files. No frontend files changed.
+- **Blockers:** none.
+- **Reviewer:** no house-rule violations. Its finding of a stale board in `_fail_unfinished` was queued as BUG5. Not changed: when `plant-result` is an error and a guest key is missing, the guest flags get the generic message, because the parent's error text describes parent flags, not the guest.
+- **Next:** N10 (`CtfHosts.reset` accepts `guest`, publishes `GUEST`; guest rows in `CtfHosts.hosts`).
