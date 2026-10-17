@@ -483,6 +483,38 @@ def test_rhel_family_relabels_and_unblocks_guest_exec(builder):
 
 
 @needs_tools
+def test_arch_initializes_pacman_and_installs_its_own_ssh_and_sudo_packages(builder):
+    arch = _entry('archlinux', family='linux', group='linux', install_method='cloud_image',
+                  media_url='https://cloud.debian.example/debian-12.qcow2', media_sha256=_sha(DEB_IMAGE),
+                  media_formats=['qcow2'], osinfo='archlinux', agent=True, net_config='networkd')
+    CATALOG['archlinux'] = arch
+    try:
+        result, log = builder(spec=_spec(deb={'os_id': 'archlinux'}))
+    finally:
+        del CATALOG['archlinux']
+
+    customize = _commands(log, 'virt-customize')[0]
+    assert result.returncode == 0, result.stderr
+    # Arch has no openssh-server package; pacman would refuse the whole --install.
+    assert '--install qemu-guest-agent,sudo,openssh,nmap' in customize
+    assert 'openssh-server' not in customize
+    # The keyring and sync databases must exist before --install, so the order matters.
+    assert customize.index('pacman -Syu --noconfirm') < customize.index('--install')
+    assert '/etc/sudoers.d/10-agoge-wheel:%wheel ALL=(ALL:ALL) ALL' in customize
+    assert '/etc/systemd/network/10-agoge-0.network' in customize
+    assert '--selinux-relabel' not in customize
+
+
+@needs_tools
+def test_non_arch_guests_skip_the_pacman_setup(builder):
+    result, log = builder()
+
+    customize = _commands(log, 'virt-customize')[0]
+    assert result.returncode == 0, result.stderr
+    assert 'pacman' not in customize and 'sudoers.d' not in customize
+
+
+@needs_tools
 def test_netplan_default_route_uses_a_cidr_older_netplan_accepts(builder):
     ubuntu = _entry('ubuntu-18.04', family='linux', group='linux', install_method='cloud_image',
                     media_url='https://cloud.debian.example/debian-12.qcow2', media_sha256=_sha(DEB_IMAGE),

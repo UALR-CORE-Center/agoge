@@ -47,6 +47,8 @@ POST_INSTALL_MINUTES=60
 AGENTLESS_SETTLE_SECONDS=120
 # virt-customize --selinux-relabel and the qemu-ga guest-exec block apply to these osinfo ids.
 RHEL_FAMILY='^(rhel|centos|rocky|almalinux|alma|fedora|ol|oraclelinux)'
+# Arch ships an uninitialized pacman keyring, names its ssh package openssh, and has no sudo.
+ARCH_FAMILY='^archlinux'
 
 HEARTBEAT_PID=
 
@@ -447,7 +449,7 @@ write_network_config() {
 # Guest names, usernames, and packages are validated by the API (slugs), so they are safe in
 # --run-command strings. The password is read from a root-only file, never passed as an argument.
 customize_linux() {
-  local guest=$1 disk=$2 method user osinfo net_config packages install upload password_file
+  local guest=$1 disk=$2 method user osinfo net_config packages install upload password_file ssh_package
   local args=()
   method=$(guest_value "$guest" .catalog.install_method)
   user=$(guest_value "$guest" .admin_username)
@@ -461,11 +463,22 @@ customize_linux() {
     return 1
   fi
   install=qemu-guest-agent
+  ssh_package=openssh-server
+  args=(-a "$disk" --hostname "$guest")
+  if echo "$osinfo" | grep -Eq "$ARCH_FAMILY"; then
+    ssh_package=openssh
+    install="$install,sudo"
+    # pacman-init.service fills the keyring only on first boot, and virt-customize's pacman -S does not
+    # sync. A full -Syu, not -Sy: Arch does not support partial upgrades.
+    args+=(--run-command 'pacman-key --init && pacman-key --populate archlinux && pacman -Syu --noconfirm'
+      --write '/etc/sudoers.d/10-agoge-wheel:%wheel ALL=(ALL:ALL) ALL'
+      --chmod '0440:/etc/sudoers.d/10-agoge-wheel')
+  fi
   if [ "$method" = "cloud_image" ]; then
     packages=$(jq -r --arg g "$guest" '.guests[] | select(.name == $g) | .packages | join(",")' "$MANIFEST")
-    install="qemu-guest-agent,openssh-server${packages:+,$packages}"
+    install="$install,$ssh_package${packages:+,$packages}"
   fi
-  args=(-a "$disk" --hostname "$guest" --install "$install"
+  args+=(--install "$install"
     --run-command "id -u $user >/dev/null 2>&1 || useradd -m -s /bin/bash $user"
     --run-command "for group in sudo wheel; do getent group \$group >/dev/null && usermod -aG \$group $user; done; true"
     --password "$user:file:$password_file"

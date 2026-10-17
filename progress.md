@@ -166,7 +166,8 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
     - [x] **V6b2a** (iteration 119) Rocky Linux 8.10/9.8/10.2 and AlmaLinux 8.10/9.8/10.2 GenericCloud images (`nm-keyfile`), pinned to dated files under each publisher's versioned (not major-only) directory, with SHA-256s from the published `CHECKSUM` files.
     - [x] **V6b2b** (iteration 120) Fedora 43 (build 1.6) and Fedora 44 (build 1.7) Cloud Base Generic images (`nm-keyfile`), pinned under `dl.fedoraproject.org/pub/fedora/linux/releases/<n>/Cloud/x86_64/images/` with SHA-256s from each release's signed `CHECKSUM`. Also makes `builder.sh`'s firstboot root grow handle Fedora's btrfs root.
     - [x] **V6b2c** (iteration 121) CentOS Stream 10 GenericCloud image (`nm-keyfile`, osinfo `centos-stream10`), pinned to the dated `10-stream/.../CentOS-Stream-GenericCloud-x86_64-10-20260728.1.x86_64.qcow2` with the SHA-256 from its published `.SHA256SUM` and `CHECKSUM`.
-    - [ ] **V6b2** The rest of V6b (Kali, Debian, CentOS Stream 9, openSUSE/Arch/Alpine, Metasploitable 2, Microsoft evals, appliances). Microsoft and Kali stay BLOCKED on V-5. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file. Debian publishes only SHA512SUMS, so its SHA-256 must come from another source or V-5.
+    - [x] **V6b2d** (iteration 122) Arch Linux cloud image (`networkd`, osinfo `archlinux`), pinned to `geo.mirror.pkgbuild.com/images/v20261001.604814/` with the SHA-256 from its published `.SHA256`. `builder.sh` now initializes the pacman keyring and runs `pacman -Syu` before `--install`, and for Arch it installs `openssh` and `sudo` (not `openssh-server`) plus a wheel sudoers drop-in.
+    - [ ] **V6b2** The rest of V6b (Kali, Debian, CentOS Stream 9, openSUSE/Alpine, Metasploitable 2, Microsoft evals, appliances). Microsoft and Kali stay BLOCKED on V-5. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file. Debian publishes only SHA512SUMS, so its SHA-256 must come from another source or V-5.
 - [x] **V6c** (found in iteration 116; done in iteration 118) Ubuntu 16.04's cloud image needs `net_config: ifupdown`. But its `/etc/network/interfaces` sources only `interfaces.d/*.cfg`, so `builder.sh` `write_network_config` must write `interfaces.d/agoge.cfg`, not `interfaces.d/agoge` (Debian sources `*`, so the rename is safe there). Then add `ubuntu-16.04` (`xenial/release-20211001/ubuntu-16.04-server-cloudimg-amd64-disk1.img`, sha256 `fff2494a70bcaffb59f26f71ec49e137dd87d319341c35832dbe0ea65ff15140`).
 - [x] **V6d** (found in iteration 116; done in iteration 117) Ubuntu 18.04 ships netplan.io 0.99 (`bionic/release-20230607` manifest), and `routes: [{to: default}]` needs netplan 0.103+. Make `builder.sh` write `to: 0.0.0.0/0`, which every netplan version accepts. Then add `ubuntu-18.04` (`bionic/release-20230607/ubuntu-18.04-server-cloudimg-amd64.img`, sha256 `8dd2e6b5e5aad20c3f836123b300cba9861249408cbb07c359145a65d6bab6b6`).
 - [x] **V7** Nested host validator — spec + done-when at PRD.md:1673
@@ -2248,3 +2249,17 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. CentOS Stream 9 has no published SHA-256 for its GenericCloud image. V25 and HUMAN need a person.
 - **Next:** V6b2's openSUSE Leap / Arch / Alpine cloud images, each from a dated or versioned dir with a published SHA-256.
+
+### Iteration 122 — 2026-10-17
+- **Completed:** V6b2d, split out of V6b2. `common/data/nested_os_catalog.json` has 35 entries. The new one, `archlinux`, follows `centos-stream-10`. It is a `cloud_image` (qcow2) with `networkd`, osinfo `archlinux`, an agent, BIOS, virtio, and 1024 MB minimum memory.
+- **Learned:**
+  - Arch publishes dated build dirs `images/vYYYYMMDD.NNNNNN/`, each file with its own `.SHA256`. The SHA-256 `360f0fa4…4e87` matched on both the geo and fastly mirrors on 2026-10-17. The file starts with `QFI\xfb`, is 578080256 bytes, and has a 2 GiB virtual size. The root is btrfs, which iteration 120's firstboot grow already handles.
+  - arch-boxes leaves the pacman keyring empty: `pacman-init.service` fills it only on first boot (`ConditionFirstBoot`). virt-customize's `--install` runs `pacman -S` with no sync, Arch has no `openssh-server` package, and the image has no `sudo`. So the old customize would have failed on Arch. `builder.sh` now has `ARCH_FAMILY` and runs keyring init plus `pacman -Syu` before `--install`. It uses a full upgrade, not `-Sy`, because Arch does not support partial upgrades. virt-customize applies operations in command-line order.
+- **Tests:** `test_nested_builder.py::test_arch_initializes_pacman_and_installs_its_own_ssh_and_sudo_packages` checks the package list, that pacman setup comes before `--install`, and the sudoers drop-in. `test_non_arch_guests_skip_the_pacman_setup` checks that other distros don't get it.
+- **Gate results:**
+  - api/unit_tests: 1654 passed, 97.67%.
+  - cloud_functions/tests: 902 passed, 94.28%.
+  - build_files: 444 passed.
+  - No frontend files changed.
+- **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. CentOS Stream 9 has no published SHA-256. V25 and HUMAN need a person.
+- **Next:** V6b2's openSUSE Leap 16 (NetworkManager, but SELinux-enforcing, so it also needs `--selinux-relabel`) or Alpine. Alpine needs builder work: OpenRC, busybox `adduser`, and an `interfaces` file that does not source `interfaces.d`.
