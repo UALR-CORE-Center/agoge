@@ -8,7 +8,7 @@ import PublicIcon from '@mui/icons-material/Public';
 import {Alert, Box, CircularProgress, Paper, Typography, Button, Chip, Tooltip} from '@mui/material';
 import {GridColDef, GridRowSelectionModel} from "@mui/x-data-grid";
 import {useModal} from "mui-modal-provider";
-import React, {useCallback, useEffect, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useState} from 'react';
 
 import {useNavigate} from "react-router-dom";
 import {useAuthContext} from '../../../context/AuthContext';
@@ -16,6 +16,8 @@ import {usePolling} from "../../../hooks/usePolling";
 import {URL_TEACHER_SERVERS_CREATE, URL_TEACHER_SERVERS_EDITOR} from '../../../router/urls';
 import {AgogeImage} from '../../../services/Server/image.model';
 import {imageService} from '../../../services/Server/image.service';
+import {NestedBuildStatus} from '../../../services/Server/nested.model';
+import {nestedService} from '../../../services/Server/nested.service';
 import {ServerStates} from "../../../types/AgogeStates";
 import {AppUiObjectNames} from "../../../types/AppObjectNames";
 import {PubSub} from '../../../types/PubSub';
@@ -32,6 +34,13 @@ import StatusBadge from '../../Common/Status/StatusBadge';
 import {EditImageButton} from "./Buttons/EditImageButton";
 import {ImageActionButton} from "./Buttons/ImageActionButton";
 import {ConfirmCancelDialog} from "./ConfirmCancelDialog";
+import {
+    isNestedBuildActive,
+    isNestedCheckInBlocked,
+    nestedPhaseLabel,
+    prunePolledBuilds,
+    withPolledBuildStatus,
+} from "./Forms/NestedImage/nestedImageStatus";
 import {ImageDetailsDialog} from "./ImageDetailsDialog/ImageDetailsDialog";
 import {resolveStatus} from "../../Common/Status/StateMapping";
 import {SharedImageCopyDialog} from './SharedImageCopyDialog';
@@ -76,13 +85,15 @@ const ImageListTable: React.FC = () => {
         }
     );
     const [imageDialog, setImageDialog] = useState<boolean>(false);
-    const [imageDialogContents, setImageDialogContents] = useState<AgogeImage | null>(null);
+    const [imageDialogName, setImageDialogName] = useState<string | null>(null);
     const [imageName, setImageName] = useState<string>('');
     const [cancelModal, setCancelModal] = useState<ActiveRow>({open: false, row: undefined});
     const [cancelingRows, setCancelingRows] = useState<{ name: string, initialState: number }[]>([]);
     const [initialState, setInitialState] = useState<boolean>(true);
     const [copyRequest, setCopyRequest] = useState<{image: AgogeImage, action: 'edit' | 'checkOut'} | null>(null);
     const [sharedWarning, setSharedWarning] = useState<{image: AgogeImage, action: 'checkOut' | 'checkIn'} | null>(null);
+    // image name -> the latest GET …/nested-build/ result, which refreshes guest attributes on the parent.
+    const [polledBuilds, setPolledBuilds] = useState<Record<string, NestedBuildStatus>>({});
 
     const fetchImages = async (showLoading: boolean = false) => {
         if (showLoading) {
@@ -119,6 +130,34 @@ const ImageListTable: React.FC = () => {
 
     const fetchImageCallback = useCallback(() => fetchImages(initialState), [initialState])
     usePolling(fetchImageCallback, {enabled: true})
+
+    const rows = useMemo(
+        () => activeImages.map(image => withPolledBuildStatus(image, polledBuilds)),
+        [activeImages, polledBuilds],
+    );
+    const activeNestedNames = useMemo(
+        () => rows.filter(image => image.nested && isNestedBuildActive(image.nested_build)).map(image => image.name),
+        [rows],
+    );
+    const pollNestedBuilds = useCallback(async () => {
+        const results = await Promise.allSettled(activeNestedNames.map(name => nestedService.get_build_status(name)));
+        setPolledBuilds(previous => {
+            const next = {...previous};
+            // A failed poll (e.g. the image was just deleted) keeps the last known status; the list poll decides.
+            results.forEach((result, index) => {
+                if (result.status === 'fulfilled') {
+                    next[activeNestedNames[index]] = result.value;
+                }
+            });
+            return next;
+        });
+    }, [activeNestedNames]);
+    usePolling(pollNestedBuilds, {enabled: activeNestedNames.length > 0});
+    useEffect(() => {
+        setPolledBuilds(previous => prunePolledBuilds(activeImages, previous));
+    }, [activeImages]);
+    const imageDialogContents = rows.find(image => image.name === imageDialogName) ?? null;
+
     useEffect(() => {
         const updatedCancelingRows = cancelingRows.filter(({ name, initialState }) => {
             const correspondingImage = activeImages.find(image => image.name === name);
@@ -275,11 +314,12 @@ const ImageListTable: React.FC = () => {
 
     const handleImageDialogClose = () => {
         setImageDialog(false);
-        setImageDialogContents(null);
+        setImageDialogName(null);
     }
 
     const handleImageDialogBtn = (rowData: AgogeImage)  => {
-        setImageDialogContents(rowData);
+        // Looked up by name on each render, so an open dialog follows the polled build status.
+        setImageDialogName(rowData.name);
         setImageDialog(true);
     }
 
@@ -336,6 +376,10 @@ const ImageListTable: React.FC = () => {
             disabled = [ServerStates.STOPPED, ServerStates.RUNNING].includes(row.state);
         } else if (["checkIn", "cancel", "snapshot"].includes(action)) {
             disabled = [ServerStates.START].includes(row.state);
+            // The API refuses Check In (409) while a nested host is still provisioning, building or finalizing.
+            if (action === "checkIn" && isNestedCheckInBlocked(row)) {
+                disabled = true;
+            }
         } else if (action === "start") {
             disabled = [ServerStates.START, ServerStates.RUNNING].includes(row.state);
         } else if (action === "stop") {
@@ -588,6 +632,30 @@ const ImageListTable: React.FC = () => {
             }
         },
         {
+            field: 'nested_build',
+            headerName: 'Nested build',
+            minWidth: 140,
+            filterable: false,
+            sortable: false,
+            renderCell: (params: any) => {
+                const build: NestedBuildStatus | null | undefined = params.row.nested_build;
+                if (!params.row.nested || !build) {
+                    return null;
+                }
+                const phase = nestedPhaseLabel(build.phase);
+                return (
+                    <Tooltip title={build.message || ''}>
+                        <Chip
+                            size="small"
+                            label={phase.label}
+                            color={phase.color}
+                            icon={isNestedBuildActive(build) ? <CircularProgress size={14} color="inherit" /> : undefined}
+                        />
+                    </Tooltip>
+                );
+            }
+        },
+        {
             field: 'in_use_by',
             headerName: 'In use by',
             width: 200,
@@ -648,7 +716,7 @@ const ImageListTable: React.FC = () => {
                     {' '}Copy one for this site to customize it. Only administrators can edit the shared image.
                 </Alert>}
                 <StyledDataGrid
-                    data={activeImages}
+                    data={rows}
                     columns={newColumns}
                     disableMultiRowSelection={true}
                     disableSelectBtn={false}

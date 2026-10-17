@@ -174,7 +174,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V18** Networks step — spec + done-when at PRD.md:1695 (code and vitest here; the browser check is carried by HUMAN)
 - [x] **V19** Guests step — spec + done-when at PRD.md:1697 (code and vitest here; the browser check is carried by HUMAN)
 - [x] **V20** Access and Review steps — spec + done-when at PRD.md:1699 (code and vitest here; the browser check is carried by HUMAN)
-- [ ] **V21** Image list and details for nested images — spec + done-when at PRD.md:1701 (code and vitest here; the browser check is carried by HUMAN)
+- [x] **V21** Image list and details for nested images — spec + done-when at PRD.md:1701 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **V22** Guacamole targets for guests — spec + done-when at PRD.md:1703
 - [ ] **V23** Spec editor and CTF integration — spec + done-when at PRD.md:1705 (needs N3, N5, N13; the browser check is carried by HUMAN)
 - [ ] **V24** Nested image guide — spec + done-when at PRD.md:1707
@@ -1982,3 +1982,31 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - CTF ESLint gate: exit 0. CTF tsc gate: 0 CTF matches (repo-wide tsc exits 2 on pre-existing errors).
   - Group V ESLint gate: exit 0. Group V tsc gate: 0 matches.
 - **Reopened:** none.
+
+### Iteration 111 — 2026-10-17
+- **Completed:** V21 (code and vitest; the "verified in browser on a live build" check is carried by HUMAN).
+  - `AgogeImage` now carries `nested`/`nested_build`. Before this, `transformToAgogeImage` dropped both, so the list never saw a nested record. `finalize_nonce` is still stripped.
+  - `Forms/NestedImage/nestedImageStatus.ts` holds the pure logic:
+    - Phase and guest-status labels.
+    - `isStaleFinalize`, which mirrors `is_stale_finalize` (360+900 s).
+    - `isNestedBuildActive`: queued, provisioning, building, or a live finalizing.
+    - `isNestedCheckInBlocked`. This deliberately also blocks `queued`, which the API would allow, because a queued host has no guests.
+    - `latestBuildStatus`/`withPolledBuildStatus`: whichever of the list record and the poll has the later `updated_at` wins.
+    - `prunePolledBuilds`.
+    - `nestedGuestDetails`.
+    - `nestedTunnels`: a console tunnel is `ssh -L p:localhost:p`; an exposed guest is `ssh -L 13389+slot:<ip>:3389` (Windows) or `2222+slot:<ip>:22`.
+  - `ImageListTable` has a **Nested build** chip column. It polls `get_build_status` for active nested rows through a second `usePolling`, and disables Check In while the build is active. The details dialog is looked up by name on each render, so it follows the polled status.
+  - `ImageDetailsDialog` renders `NestedGuestDetails`: status, IPs (DHCP when not static), alias slots, credentials, and console port plus VNC password, with passwords behind a switch.
+  - `ServerConnectButton` renders `NestedTunnelHints`. It uses the parent's SSH `human_interaction` username and fetches the catalog on open.
+- **Learned:**
+  - The catalog is the only source of a guest's family. No os_id naming convention exists (V6 is unseeded), so when the catalog does not know a guest, the hint offers both the RDP and SSH tunnels rather than guessing.
+  - The agoge-reviewer found that an unpruned polled map masks a re-created `queued` record (`updated_at` null), and polling never resumes. Fixed with `prunePolledBuilds` on each list refresh.
+- **Tests:** `nestedImageStatus.test.ts` (12): activity, stale finalize, Check In blocking, the merge, the prune, guest details, tunnels, and the transformer. `NestedImageDetails.test.tsx` (3): the guest table with the password switch, the tunnel commands with a mocked catalog, and no hostname.
+- **Gate results:**
+  - frontend `npm test`: 45 files and 558 tests passed.
+  - Group V ESLint gate: exit 0.
+  - Group V tsc gate: 0 matches.
+  - The touched files outside the gate add no new lint errors or tsc errors. The 2 import/order errors and 5 TS2322 errors in `ImageListTable.tsx` are pre-existing.
+  - No Python files changed.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V22, Guacamole `alias_index`/`port` targets in `DisplayProxy` and `GuacamoleConfiguration.prepare_guac_connection`, plus the lab spec validation for nested images on both save paths.

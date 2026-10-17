@@ -1,4 +1,5 @@
 import type {AgogeImage} from "../../services/Server/image.model"
+import {transformToNestedBuildStatus, transformToNestedHostSpec} from "./nested.transform";
 
 export const transformToAgogeImage = (data: any): AgogeImage => {
     return {
@@ -25,6 +26,8 @@ export const transformToAgogeImage = (data: any): AgogeImage => {
         state_timestamp: data.state_timestamp,
         status: data.status,
         tags: data.tags,
+        nested: data.nested ? transformToNestedHostSpec(data.nested) : null,
+        nested_build: data.nested_build ? transformToNestedBuildStatus(data.nested_build) : null,
     };
 };
 
