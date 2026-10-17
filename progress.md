@@ -1130,3 +1130,24 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - Group V tsc gate: exit 0.
   - Group V ESLint gate: **exit 2**, "No files matching the pattern src/components/Teacher/ServerManagement/Forms/NestedImage". None of the targeted files (`NestedImage/`, `nested.service.ts`, `nested.model.ts`, `nested.transform.ts`) exist yet. They belong to V16–V21, which are all `[ ]`. No completed task is responsible, so this is not a failure of checked work, but the gate cannot pass until V16 exists.
 - **Reopened:** none.
+
+### Verification — 2026-10-17 — PASS
+- **Checked:** every `[x]` task: 0.1, 0.2, A1–A6, B1–B4, C1, C2, BUG, D1–D4, E1–E5, E4b, BUG2, F1–F7, BUG3, G1–G7, G4b, H1–H7, R1–R4, BUG4, I1–I17 (I4b stays open), LINT1, J1–J4, K1, L1–L7, V1, V2.
+  - HEAD is `321d8f4` and the tree is clean. Since the last verification, only progress.md has changed.
+  - Three read-only agents re-checked each task against its PRD done-when.
+  - I swept the tracked CTF/nested source for TODO, FIXME, NotImplemented and XXX. The only hit is the mktemp template `XXXXXX` in `ctf_plant_contract.py:49`, which is not a stub.
+  - Notes, not reopened:
+    - BUG3: if the `_fail_unpublished` recovery write itself fails (`event.py:261-265`), the event is still stuck in ARMING.
+    - BUG3: a late arm message can pass the terminal check (`arm_worker.py:59`) before recovery runs. `_mark_arming` then overwrites `failed`, so the board can be counted twice.
+    - C2: `edit_manager` runs `CtfValidator` only for the None, `ctf` and `review` form types. Other partial saves validate only the model. The done-when (each save path rejects a bad block) is still met.
+    - C1: `points=True` passes the int check.
+- **Gate results:**
+  - api/unit_tests: 1369 passed.
+  - cloud_functions/tests: 493 passed.
+  - build_files/cloud_deployment/tests: 319 passed.
+  - frontend `npm test`: 34 files, 393 tests passed (exit 0).
+  - CTF ESLint gate: exit 0.
+  - CTF tsc gate: exit 0. No CTF file is named among the pre-existing tsc errors.
+  - Group V tsc gate: exit 0.
+  - Group V ESLint gate: **exit 2**, "No files matching the pattern src/components/Teacher/ServerManagement/Forms/NestedImage". The targeted files belong to V16–V21, which are all `[ ]`, so no completed task is responsible.
+- **Reopened:** none.
