@@ -528,17 +528,23 @@ class ImageTemplateManager(BaseComputeManager):
     def _add_metadata(self) -> None:
         """Generates and adds metadata for the server based on specifications."""
         metadata = {'items': []}
-        if self.server_spec.startup_script:
-            metadata['items'].append({"key": "startup-script", "value": self.server_spec.startup_script})
-        if self.server_spec.ssh_keys:
-            metadata['items'].append({"key": "ssh-keys", "value": self._ssh_keys()})
+        # User creation goes first: a long-running or early-exiting image script
+        # (e.g. the nested builder) must not delay or skip the login account.
         if connections := self.server_spec.human_interaction:
             if not isinstance(connections, list):
                 connections = [connections]
 
             if startup_script := self._generate_startup_script(connections):
                 metadata_key, script = startup_script
-                metadata['items'].append({"key": metadata_key, "value": script})
+                self._merge_metadata_item(metadata['items'], {"key": metadata_key, "value": script})
+        if self.server_spec.startup_script:
+            # Merged, not appended: a Linux user script shares the startup-script key (Working Note 21).
+            self._merge_metadata_item(
+                metadata['items'],
+                {"key": "startup-script", "value": self.server_spec.startup_script},
+            )
+        if self.server_spec.ssh_keys:
+            self._merge_metadata_item(metadata['items'], {"key": "ssh-keys", "value": self._ssh_keys()})
         self.server_spec.metadata = metadata
 
     def _add_nics(self) -> None:
