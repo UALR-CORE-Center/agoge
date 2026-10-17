@@ -360,7 +360,8 @@ write_network_config() {
   net_config=$(guest_value "$guest" .catalog.net_config)
   mkdir -p "$out"
   [ "$net_config" = "netplan" ] && printf 'network:\n  version: 2\n  ethernets:\n' > "$out/90-agoge.yaml"
-  [ "$net_config" = "ifupdown" ] && : > "$out/agoge"
+  # .cfg because Ubuntu 16.04 sources only interfaces.d/*.cfg; Debian sources interfaces.d/*.
+  [ "$net_config" = "ifupdown" ] && : > "$out/agoge.cfg"
   while IFS=$'\t' read -r index mac ip prefix gateway dns dhcp; do
     # A NIC with neither a static address nor DHCP is a pure L2 port; leave it unconfigured.
     if [ "$ip" = "-" ] && [ "$dhcp" != "dhcp" ]; then
@@ -427,7 +428,7 @@ write_network_config() {
             [ "$gateway" != "-" ] && printf '  gateway %s\n' "$gateway"
             [ "$dns" != "-" ] && printf '  dns-nameservers %s\n' "$dns"
           fi
-        } >> "$out/agoge"
+        } >> "$out/agoge.cfg"
         ;;
     esac
   done < <(jq -r --arg g "$guest" '
@@ -438,7 +439,7 @@ write_network_config() {
        (if $n.mode == "nat" and $n.parent_address then $n.parent_address else "-" end),
        ($n.parent_address // "-"), (if $n.dhcp then "dhcp" else "static" end)] | @tsv' "$MANIFEST")
   [ "$net_config" = "netplan" ] && echo "$out/90-agoge.yaml:/etc/netplan/90-agoge.yaml"
-  [ "$net_config" = "ifupdown" ] && echo "$out/agoge:/etc/network/interfaces.d/agoge"
+  [ "$net_config" = "ifupdown" ] && echo "$out/agoge.cfg:/etc/network/interfaces.d/agoge.cfg"
   return 0
 }
 

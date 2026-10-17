@@ -164,7 +164,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - [ ] **V6b** Add the downloadable entries to the JSON: the Kali cloud image and the Kali QEMU VM, the Debian, Ubuntu, Fedora, Rocky, Alma, CentOS, openSUSE, Arch and Alpine cloud images, Metasploitable 2, the Server 2016–2025 and Windows 10/11 Enterprise evaluations, and pfSense, OPNsense, VyOS and Security Onion. Each needs a pinned `https` URL and its SHA-256. **BLOCKED on V-5** for the Microsoft and Kali entries: a person must download and hash them. The Linux images and appliances also need pinned, dated releases with published hashes, not `current/` URLs whose hashes rotate. `test_nested_os_catalog_sync.py` already checks the https/SHA-256 and Microsoft-host rules for any entry added.
     - [x] **V6b1** (iteration 116) Ubuntu 20.04, 22.04, 24.04 and 26.04 cloud images, pinned to dated `cloud-images.ubuntu.com/releases/<codename>/release-YYYYMMDD/` files with the SHA-256s from each release's published `SHA256SUMS`.
     - [ ] **V6b2** The rest of V6b (Kali, Debian, Fedora/Rocky/Alma/CentOS, openSUSE/Arch/Alpine, Metasploitable 2, Microsoft evals, appliances). Microsoft and Kali stay BLOCKED on V-5. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file. Debian publishes only SHA512SUMS, so its SHA-256 must come from another source or V-5.
-- [ ] **V6c** (found in iteration 116) Ubuntu 16.04's cloud image needs `net_config: ifupdown`. But its `/etc/network/interfaces` sources only `interfaces.d/*.cfg`, so `builder.sh` `write_network_config` must write `interfaces.d/agoge.cfg`, not `interfaces.d/agoge` (Debian sources `*`, so the rename is safe there). Then add `ubuntu-16.04` (`xenial/release-20211001/ubuntu-16.04-server-cloudimg-amd64-disk1.img`, sha256 `fff2494a70bcaffb59f26f71ec49e137dd87d319341c35832dbe0ea65ff15140`).
+- [x] **V6c** (found in iteration 116; done in iteration 118) Ubuntu 16.04's cloud image needs `net_config: ifupdown`. But its `/etc/network/interfaces` sources only `interfaces.d/*.cfg`, so `builder.sh` `write_network_config` must write `interfaces.d/agoge.cfg`, not `interfaces.d/agoge` (Debian sources `*`, so the rename is safe there). Then add `ubuntu-16.04` (`xenial/release-20211001/ubuntu-16.04-server-cloudimg-amd64-disk1.img`, sha256 `fff2494a70bcaffb59f26f71ec49e137dd87d319341c35832dbe0ea65ff15140`).
 - [x] **V6d** (found in iteration 116; done in iteration 117) Ubuntu 18.04 ships netplan.io 0.99 (`bionic/release-20230607` manifest), and `routes: [{to: default}]` needs netplan 0.103+. Make `builder.sh` write `to: 0.0.0.0/0`, which every netplan version accepts. Then add `ubuntu-18.04` (`bionic/release-20230607/ubuntu-18.04-server-cloudimg-amd64.img`, sha256 `8dd2e6b5e5aad20c3f836123b300cba9861249408cbb07c359145a65d6bab6b6`).
 - [x] **V7** Nested host validator — spec + done-when at PRD.md:1673
 - [x] **V8** Manifest and unattend rendering — spec + done-when at PRD.md:1675
@@ -2172,3 +2172,17 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. V25 and HUMAN need a person.
 - **Next:** V6c (the `interfaces.d/agoge.cfg` rename plus `ubuntu-16.04`), then V6b2's Fedora/Rocky/Alma entries, done like V6b1.
+
+### Iteration 118 — 2026-10-17
+- **Completed:** V6c.
+  - `builder.sh` `write_network_config` now writes the ifupdown config as `interfaces.d/agoge.cfg`, not `interfaces.d/agoge`.
+  - `common/data/nested_os_catalog.json` has 25 entries. The new one, `ubuntu-16.04`, is placed before 18.04. It uses `ifupdown` and `osinfo` `ubuntu16.04`, and is pinned to `xenial/release-20211001/...-disk1.img`.
+- **Learned:** I re-fetched that release's `SHA256SUMS` over https on 2026-10-17, and it matches the queued hash. The magic number is `QFI\xfb` (qcow2). The manifest lists `ifupdown 0.8.10ubuntu1.4` and `systemd 229`. That systemd is new enough for the udev `.link` rename. The image does not ship `qemu-guest-agent`, but `customize_linux` installs it.
+- **Tests:** `test_nested_builder.py::test_ifupdown_config_is_a_cfg_file_ubuntu_16_04_sources` checks the upload target, the `.link` file and the static stanza. The existing catalog and manifest tests also cover the new entry.
+- **Gate results:**
+  - api/unit_tests: 1654 passed, 97.67%.
+  - cloud_functions/tests: 887 passed, 94.28%.
+  - build_files: 405 passed.
+  - No frontend files changed.
+- **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. V25 and HUMAN need a person.
+- **Next:** V6b2's Fedora/Rocky/Alma entries, done like V6b1: a dated release dir with a published SHA-256 file.
