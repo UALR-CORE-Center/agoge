@@ -163,3 +163,46 @@ def test_linux_loader_does_not_stop_the_script_it_is_appended_to(loader_env):
     result = _run(script, env)
 
     assert result.stdout == "before\nafter\n"
+
+
+def test_linux_loader_blocks_forwarded_metadata_traffic_before_the_fetch():
+    loader = contract.LINUX_LOADER
+    check = "iptables -C FORWARD -d 169.254.169.254 -j REJECT"
+    insert = "iptables -I FORWARD -d 169.254.169.254 -j REJECT"
+    lines = loader.splitlines()
+    curl_line = next(i for i, line in enumerate(lines) if line.lstrip().startswith("if curl "))
+    check_at = next(i for i, line in enumerate(lines) if check in line)
+    insert_at = next(i for i, line in enumerate(lines) if insert in line)
+    assert check_at < insert_at < curl_line
+
+
+# Logs its call to the same file as the fake curl, so the test can see the order of the two.
+FAKE_IPTABLES = textwrap.dedent("""\
+    #!/bin/bash
+    echo "iptables $*" >> "$FAKE_CURL_ARGS"
+    [ "$1" = "-C" ] && exit "${FAKE_IPTABLES_CHECK:-1}"
+    exit 0
+""")
+
+
+@pytest.mark.parametrize("rule_present, expected_calls", [
+    ("1", ["iptables -C FORWARD -d 169.254.169.254 -j REJECT",
+           "iptables -I FORWARD -d 169.254.169.254 -j REJECT"]),
+    ("0", ["iptables -C FORWARD -d 169.254.169.254 -j REJECT"]),
+])
+@pytestmark_bash
+def test_linux_loader_inserts_the_forward_rule_once_and_before_curl(loader_env, rule_present, expected_calls):
+    tmp_path, _, env = loader_env
+    iptables = tmp_path / "bin" / "iptables"
+    iptables.write_text(FAKE_IPTABLES)
+    iptables.chmod(iptables.stat().st_mode | stat.S_IEXEC)
+    env["FAKE_IPTABLES_CHECK"] = rule_present
+
+    result = _run(contract.LINUX_LOADER, env)
+
+    assert result.returncode == 0
+    assert result.stdout == "" and result.stderr == ""
+    calls = (tmp_path / "curl-args").read_text().splitlines()
+    first_curl = calls.index("-sf")
+    assert calls[:first_curl] == expected_calls
+    assert not any(c.startswith("iptables") for c in calls[first_curl:])

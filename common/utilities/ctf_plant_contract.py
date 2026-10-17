@@ -37,14 +37,22 @@ LOCATION_PATH_PATTERNS = {
 LINUX_LOADER_METADATA_KEY = "startup-script"
 WINDOWS_LOADER_METADATA_KEY = "windows-startup-script-ps1"
 
+_METADATA_SERVER_IP = "169.254.169.254"
 _METADATA_URL = f"http://metadata.google.internal/computeMetadata/v1/instance/attributes/{PLANT_METADATA_KEY}"
 
 # Appended to whatever startup-script already holds, so it runs in a subshell, never calls a
 # top-level `exit`, and silences everything: startup-script output reaches the serial console
 # and Cloud Logging. curl -f turns the metadata server's 404 (no plant pending) into a no-op.
+# The FORWARD rule goes in before the fetch, on every boot: guests NAT'd through a nested host
+# must never reach the metadata server, where a pending plant payload holds every flag.
 LINUX_LOADER = f"""#!/bin/bash
 # agoge-ctf loader: run a pending flag plant, if any. Never prints the payload.
 (
+  if command -v iptables >/dev/null 2>&1; then
+    iptables -C FORWARD -d {_METADATA_SERVER_IP} -j REJECT \\
+      || iptables -I FORWARD -d {_METADATA_SERVER_IP} -j REJECT \\
+      || true
+  fi
   umask 077
   agoge_ctf_plant_file="$(mktemp "${{TMPDIR:-/tmp}}/agoge-ctf-plant.XXXXXX")" || exit 0
   if curl -sf -H "Metadata-Flavor: Google" -o "$agoge_ctf_plant_file" "{_METADATA_URL}" >/dev/null 2>&1 \\
