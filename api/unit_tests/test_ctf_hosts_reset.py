@@ -229,3 +229,84 @@ def test_writes_nothing(db):
     before = copy.deepcopy(db.store)
     hosts(db, FakePubSub()).reset(CTF_ID, BOARDS[0], "web", "rebuild", user())
     assert db.store == before
+
+
+# --- nested guests (N10) ------------------------------------------------------------------------
+
+# "ubuntu-lin" carries a flag on web; "win" is a flagless guest on web; "kali-lin" lives on db.
+GUEST_FLAG = {"id": "web-g1", "server": "web", "guest": "ubuntu-lin", "slot": 1, "points": 100,
+              "location_type": "file", "path": "/root/flag.txt", "operating_system": "linux"}
+NESTED_GUESTS = [
+    {"name": "ubuntu-lin", "server": "web", "domain": "ubuntu", "operating_system": "linux"},
+    {"name": "win", "server": "web", "domain": "win10", "operating_system": "windows"},
+    {"name": "kali-lin", "server": "db", "domain": "kali", "operating_system": "linux"},
+]
+
+
+@pytest.fixture
+def nested_db(db):
+    spec = db.store[DbCollections.CTF.value][CTF_ID]["spec"]
+    spec["flags"].append(copy.deepcopy(GUEST_FLAG))
+    spec["nested_guests"] = copy.deepcopy(NESTED_GUESTS)
+    return db
+
+
+@pytest.mark.parametrize("mode", ["replant", "restart", "rebuild"])
+def test_guest_reset_publishes_the_guest_attribute(nested_db, mode):
+    pubsub = FakePubSub()
+    hosts(nested_db, pubsub).reset(CTF_ID, BOARDS[0], "web", mode, user(), guest="ubuntu-lin")
+    assert pubsub.messages == [{**message(BOARDS[0], "web", mode), PubSub.EventAttributes.GUEST: "ubuntu-lin"}]
+
+
+def test_server_reset_carries_no_guest_attribute(nested_db):
+    pubsub = FakePubSub()
+    hosts(nested_db, pubsub).reset(CTF_ID, BOARDS[0], "web", "restart", user())
+    assert PubSub.EventAttributes.GUEST not in pubsub.messages[0]
+
+
+@pytest.mark.parametrize("server, guest", [("web", "nope"), ("web", "kali-lin"), ("db", "ubuntu-lin")])
+def test_undeclared_guest_is_not_found_and_publishes_nothing(nested_db, server, guest):
+    # kali-lin exists, but on db: a guest is declared per (server, guest), not per spec.
+    pubsub = FakePubSub()
+    with pytest.raises(NotFound):
+        hosts(nested_db, pubsub).reset(CTF_ID, BOARDS[0], server, "restart", user(), guest=guest)
+    assert pubsub.messages == []
+
+
+def test_guest_on_an_event_without_nested_guests_is_not_found(db):
+    pubsub = FakePubSub()
+    with pytest.raises(NotFound):
+        hosts(db, pubsub).reset(CTF_ID, BOARDS[0], "web", "restart", user(), guest="ubuntu-lin")
+    assert pubsub.messages == []
+
+
+def test_replant_of_a_flagless_guest_is_a_bad_request(nested_db):
+    # web itself has flags, but the replant targets only the guest's.
+    pubsub = FakePubSub()
+    with pytest.raises(BadRequest):
+        hosts(nested_db, pubsub).reset(CTF_ID, BOARDS[0], "web", "replant", user(), guest="win")
+    assert pubsub.messages == []
+
+
+@pytest.mark.parametrize("mode", ["restart", "rebuild"])
+def test_flagless_guest_can_be_restarted_or_rebuilt(nested_db, mode):
+    pubsub = FakePubSub()
+    hosts(nested_db, pubsub).reset(CTF_ID, BOARDS[0], "web", mode, user(), guest="win")
+    assert len(pubsub.messages) == 1
+
+
+def test_guest_on_a_wireguard_parent_can_be_rebuilt(nested_db):
+    # A guest rebuild reverts a snapshot inside the parent; the WireGuard nuke limit does not apply.
+    nested_db.store[DbCollections.CTF.value][CTF_ID]["spec"]["nested_guests"].append(
+        {"name": "vpn-guest", "server": "vpn", "domain": "g", "operating_system": "linux"})
+    pubsub = FakePubSub()
+    hosts(nested_db, pubsub).reset(CTF_ID, BOARDS[0], "vpn", "rebuild", user(), guest="vpn-guest")
+    assert pubsub.messages[0][PubSub.EventAttributes.GUEST] == "vpn-guest"
+
+
+def test_guest_of_a_missing_parent_document_is_not_found(nested_db):
+    del nested_db.store[DbCollections.SERVER.value][f"{BOARDS[0]}-web"]
+    pubsub = FakePubSub()
+    with pytest.raises(NotFound):
+        hosts(nested_db, pubsub).reset(CTF_ID, BOARDS[0], "web", "restart", user(), guest="ubuntu-lin")
+    assert pubsub.messages == []

@@ -145,11 +145,11 @@ See `### Nested Guest Contract` in PRD.md.
 - [x] **N8** Plant watcher installer — spec + done-when at PRD.md:1638
 - [x] **N9** Nested plant procedure — spec + done-when at PRD.md:1640
 - [x] **BUG5** `FlagPlanter.plant`'s `except` calls `_fail_unfinished(board, targets)` with the board as it was before `_await_acks`/`_await_results` were called. Those helpers rebind `board` locally, so if one raises mid-loop (e.g. a Firestore error in `_record`), flags they already recorded `planted`/`failed` still read `planting` on the stale model and get overwritten with `MSG_ABORTED`. This predates N9 for `_await_results`. Fix by re-reading stored flag statuses in `_fail_unfinished` (inside the transaction), with a test that raises on the second `_record`.
-- [ ] **N10** Guest host reset publish — spec + done-when at PRD.md:1642
-- [ ] **N11** Guest host reset modes — spec + done-when at PRD.md:1644
+- [x] **N10** Guest host reset publish — spec + done-when at PRD.md:1642
+- [ ] **N11** Guest host reset modes — spec + done-when at PRD.md:1644 (**land before any deploy**: since N10 the API publishes `guest`, but `CtfHandler` ignores it, so a guest reset would act on the whole parent server)
 - [ ] **N12** Offline driver — spec + done-when at PRD.md:1646
 - [ ] **N13** Nested guests in the spec editor — spec + done-when at PRD.md:1648 (code and vitest here; the browser check is carried by HUMAN)
-- [ ] **N14** Guest rows on the Hosts panel — spec + done-when at PRD.md:1650 (code and vitest here; the browser check is carried by HUMAN)
+- [ ] **N14** Guest rows on the Hosts panel — spec + done-when at PRD.md:1650 (`transformToCtfHostRow` drops `guest` today, so guest rows render as duplicate parent rows whose menu resets the parent; hide replant on guest rows with `flag_count == 0`, which the API refuses) (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **N15** Nested host guide — spec + done-when at PRD.md:1652
 
 ### Group V — Nested image builder
@@ -1313,3 +1313,15 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - Group V tsc gate: 0 matches (passes).
   - Group V ESLint gate: **exit 2**, "No files matching the pattern src/components/Teacher/ServerManagement/Forms/NestedImage". Those files belong to V16–V21, which are all `[ ]`, so no completed task is responsible.
 - **Reopened:** none.
+
+### Iteration 86 — 2026-10-17
+- **Completed:** N10.
+  - `CtfHosts.reset(..., guest=None)`: the guest must be declared as a `(server, guest)` pair in `spec.nested_guests`, otherwise `NotFound`. A guest replant needs that guest's own flags, otherwise `BadRequest`. The WireGuard rebuild refusal applies only to the parent, because a guest rebuild is a snapshot revert. `GUEST` is added to the `CTF_HOST_RESET` message only when set.
+  - `CtfHosts.hosts`: each server row is followed by one row per declared guest, with the parent's state and `rebuild_allowed: true`. `flag_count` is now keyed by `(server, guest)`, so a guest's flags count on its own row and not on the parent's.
+  - Router: passes `guest=request.guest`, and adds `guest` to the audit `detail` when set.
+  - Tests: 21 new across `test_ctf_hosts_reset.py`, `test_ctf_hosts_rows.py` and `test_ctf_router.py`.
+- **Learned:** `_parse` turns a body that fails validation (e.g. a non-slug guest) into 400, not 422. The router asserts `reset` with `guest=` as a kwarg.
+- **Gate results:** api/unit_tests 1461 passed; cloud_functions/tests 585 passed; build_files/cloud_deployment/tests 319 passed; ruff clean on changed files. No frontend files changed.
+- **Blockers:** none.
+- **Reviewer:** no house-rule violations. Its two minor notes are queued on N14 (hide replant on flagless guest rows); the other (a guest reset 404s when the parent document is missing) is intended and tested.
+- **Next:** N11. It is urgent: `CtfHandler`/`HostReset` must read `GUEST`, because a guest reset published now is executed as a whole-server reset.

@@ -59,8 +59,11 @@ class CtfHosts:
         )
         return len(messages)
 
-    def reset(self, ctf_id: str, workout_id: str, server: str, mode: str, user: AgogeUser) -> None:
-        """Publish one CTF_HOST_RESET for one server of one board (Host Reset Modes).
+    def reset(
+        self, ctf_id: str, workout_id: str, server: str, mode: str, user: AgogeUser, guest: Optional[str] = None
+    ) -> None:
+        """Publish one CTF_HOST_RESET for one server of one board (Host Reset Modes), or for one nested
+        guest of that server when `guest` is set (Nested Guest Contract).
 
         Every check runs before the publish, so a refused reset sends nothing. Resets share the replant
         states: before ARMED there is nothing planted to restore (and ARMING would race the arm
@@ -78,28 +81,42 @@ class CtfHosts:
         doc = self.db.get(DbCollections.SERVER, f"{workout_id}-{server}")
         if not doc:
             raise NotFound(message=f"Server {server} does not exist on workout {workout_id}")
-        if mode == 'replant' and server not in {flag.server for flag in event.spec.flags}:
+        if guest is not None:
+            # Guest names are unique per server, not per spec, so the pair is what must be declared.
+            if not any(g.name == guest and g.server == server for g in event.spec.nested_guests):
+                raise NotFound(message=f"Guest {guest} is not declared on server {server}")
+            if mode == 'replant' and not any(f.server == server and f.guest == guest for f in event.spec.flags):
+                raise BadRequest(message=f"Guest {guest} carries no flags, so there is nothing to replant")
+        elif mode == 'replant' and server not in {flag.server for flag in event.spec.flags}:
             raise BadRequest(message=f"Server {server} carries no flags, so there is nothing to replant")
-        if mode == 'rebuild' and doc.get('wireguard_endpoint_id'):
+        # A guest rebuild reverts a libvirt snapshot inside the parent and never touches its instance.
+        if guest is None and mode == 'rebuild' and doc.get('wireguard_endpoint_id'):
             # LabServerManager.nuke() deletes WireGuard servers without rebuilding them.
             raise BadRequest(message=f"Server {server} has a WireGuard endpoint and cannot be rebuilt")
 
         attrs = PubSub.EventAttributes
-        self._publish(ctf_id, [{
+        message = {
             attrs.HANDLER: PubSub.Handlers.CTF.value,
             attrs.ACTION: str(PubSub.Actions.CTF_HOST_RESET.value),
             attrs.CTF_ID: ctf_id,
             attrs.WORKOUT_ID: workout_id,
             attrs.SERVER_NAME: server,
             attrs.RESET_MODE: mode,
-        }])
+        }
+        if guest is not None:
+            # Omitted, not empty, for the server itself: Pub/Sub attributes are strings, so "" would
+            # have to be read back as None by the handler.
+            message[attrs.GUEST] = guest
+        self._publish(ctf_id, [message])
         self.logger.info(
-            f"{self.class_name}:{ctf_id} - Published host reset", workout_id=workout_id, server=server, mode=mode,
+            f"{self.class_name}:{ctf_id} - Published host reset",
+            workout_id=workout_id, server=server, mode=mode, guest=guest,
         )
 
     def hosts(self, ctf_id: str, user: AgogeUser) -> List[CtfHostRow]:
         """One row per board per server: the flag-bearing spec servers first (spec order), then the
-        workout's other servers by name, so restart and rebuild reach every host a team owns.
+        workout's other servers by name, so restart and rebuild reach every host a team owns. Each
+        server row is followed by one row per nested guest declared on it (spec order).
 
         Server documents are read with `parent_id in` queries of at most MAX_IN_VALUES boards, never
         one read per board. A flag-bearing server with no document yet (unbuilt or deleted) still gets
@@ -109,8 +126,13 @@ class CtfHosts:
         """
         event = self.events.get(ctf_id, user)
         boards = self.events._boards(event)
-        flag_servers = {flag.id: flag.server for flag in event.spec.flags}
-        spec_servers = list(dict.fromkeys(flag_servers.values()))
+        # (server, guest) per flag id; guest None is the server itself, so a guest's flags count on the
+        # guest's row and not again on its parent's.
+        flag_hosts = {flag.id: (flag.server, flag.guest) for flag in event.spec.flags}
+        spec_servers = list(dict.fromkeys(server for server, _ in flag_hosts.values()))
+        guests = {}
+        for nested in event.spec.nested_guests:
+            guests.setdefault(nested.server, []).append(nested.name)
         docs = self._server_docs([board.workout_id for board in boards])
 
         rows = []
@@ -118,9 +140,9 @@ class CtfHosts:
             servers = docs.get(board.workout_id, {})
             flag_counts = {}
             for flag in board.flags:
-                server = flag_servers.get(flag.flag_id)
-                if server is not None:
-                    flag_counts[server] = flag_counts.get(server, 0) + 1
+                host = flag_hosts.get(flag.flag_id)
+                if host is not None:
+                    flag_counts[host] = flag_counts.get(host, 0) + 1
             names = spec_servers + sorted(name for name in servers if name not in spec_servers)
             for name in names:
                 doc = servers.get(name)
@@ -131,11 +153,24 @@ class CtfHosts:
                     server=name,
                     server_state=state,
                     server_state_name=self._server_state_name(state),
-                    flag_count=flag_counts.get(name, 0),
+                    flag_count=flag_counts.get((name, None), 0),
                     # Host Reset Modes: LabServerManager.nuke() leaves WireGuard servers deleted, and a
                     # server with no document has nothing to rebuild.
                     rebuild_allowed=doc is not None and not doc.get('wireguard_endpoint_id'),
                 ))
+                for guest in guests.get(name, []):
+                    # A guest shows its parent's state: the parent is the only instance there is.
+                    rows.append(CtfHostRow(
+                        workout_id=board.workout_id,
+                        team_name=board.team_name,
+                        server=name,
+                        guest=guest,
+                        server_state=state,
+                        server_state_name=self._server_state_name(state),
+                        flag_count=flag_counts.get((name, guest), 0),
+                        # A guest rebuild is a snapshot revert inside the parent, never an instance nuke.
+                        rebuild_allowed=True,
+                    ))
         return rows
 
     def _server_docs(self, workout_ids: List[str]) -> dict:
