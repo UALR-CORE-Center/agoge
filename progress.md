@@ -164,10 +164,10 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V8** Manifest and unattend rendering — spec + done-when at PRD.md:1675
 - [x] **V9** Builder script — spec + done-when at PRD.md:1677 (must install the V10 runtime from `nested_scripts.render_runtime()`/`render_runtime_unit()` and write `/etc/agoge-nested/host.json` in the shape `runtime.sh` documents; see iteration 97)
 - [x] **V10** Runtime service — spec + done-when at PRD.md:1679 (done before V9, which installs it: `render_runtime()`/`render_runtime_unit()` in `cloud_fn_utilities/server_specific/nested_scripts.py`)
-- [ ] **V11** Nested template server provisioning — spec + done-when at PRD.md:1681
-- [ ] **V12** Create route — spec + done-when at PRD.md:1683
+- [x] **V11** Nested template server provisioning — spec + done-when at PRD.md:1681
+- [ ] **V12** Create route — spec + done-when at PRD.md:1683 (`ImageTemplateManager.check_out(product_keys=...)` takes the never-persisted keys; V12 must carry them in the CHECK_OUT message and `ControlHandler._check_out` must pass them through)
 - [ ] **V13** Build monitor — spec + done-when at PRD.md:1685
-- [ ] **V14** Finalize handshake — spec + done-when at PRD.md:1687
+- [ ] **V14** Finalize handshake — spec + done-when at PRD.md:1687 (also merge the finalize-watcher bootstrap into `startup-script` on both check-out paths in `ImageTemplateManager._prepare_nested_check_out`; V11 left the re-check-out path with only `enable-guest-attributes`)
 - [ ] **V15** Media uploads — spec + done-when at PRD.md:1689
 - [ ] **V16** Frontend service layer — spec + done-when at PRD.md:1691
 - [ ] **V17** Wizard shell and Host step — spec + done-when at PRD.md:1693 (code and vitest here; the browser check is carried by HUMAN)
@@ -1617,3 +1617,29 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V11 (nested template server provisioning).
+
+### Iteration 99 — 2026-10-17
+- **Completed:** V11.
+  - `ImageTemplateManager.check_out(product_keys=None)` calls `_prepare_nested_check_out` before `build()`. A record without `nested` is untouched.
+  - Phase `queued` or `provisioning` (a duplicate Pub/Sub delivery) is the first build. It sets `self_link` to `projects/debian-cloud/global/images/family/<parent_os>` and the machine type to `build_machine_type`, and the disk keeps `add_disk`. It reads the catalog entries and media from `nested-os-catalog`/`nested-media`, and adds `agoge-nested-manifest`, `agoge-nested-secrets`, and `enable-guest-attributes=TRUE`. It merges `render_builder_bootstrap()` into `startup-script` after the user-creation script and before the image's own script. Then `_update_record_status(..., nested_phase='provisioning')` stamps `started_at` (once) and `updated_at`.
+  - Phase `finalized` adds only `enable-guest-attributes` and keeps the record's `self_link` (image-<name>) and `machine_type`. It reads no catalog, media, or secrets.
+  - Any other phase raises `Conflict` before anything is built. A render failure (missing catalog entry or medium, oversized metadata) records phase `failed` with the message and re-raises.
+  - `render_secrets(spec, product_keys, catalog)` now adds each unattended Windows guest's rendered `autounattend` XML when a catalog is given. This is the V9 contract.
+  - `nested_scripts.render_builder_bootstrap()` writes the builder to `BUILDER_PATH` through a quoted heredoc and starts it with `systemd-run --unit=agoge-nested-builder` unless the unit is already active. It contains no `exit`, and `bash -n` and `shellcheck -S warning` pass.
+- **Learned:**
+  - A failed nested build cannot be retried by check-out. Product keys are never persisted, so a retry has to come through a new create request. That is deliberate.
+  - If `build()` itself fails, the phase stays `queued`, so a retried delivery reprovisions.
+  - Test records need `protocol` in `human_interaction`, or `AgogeImageModel` validation fails.
+- **Tests:** `cloud_functions/tests/test_nested_template_provisioning.py` (11):
+  - the metadata keys and machine type for both paths;
+  - secrets only on the first build, with no secret in the manifest or the stored record;
+  - duplicate delivery, the mid-build Conflict, and the missing-catalog failure;
+  - a standard image unchanged;
+  - the bootstrap's bash syntax and delimiter guard.
+- **Gate results:**
+  - cloud_functions/tests: 752 passed (94.28%).
+  - api/unit_tests: 1554 passed (97.75%).
+  - build_files: 319 passed.
+  - No frontend files changed.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V12 (create route). It must carry `product_keys` to `check_out`.
