@@ -80,7 +80,7 @@ def test_no_stop_for_active_board_in_live_event(state):
     # SC-20: 0 STOPs for the boards; the ordinary workout is still stopped
     assert _stopped_workout_ids(maintenance) == ['plainwkccc']
     maintenance.project_server_manager.stop_everything.assert_called_once_with(
-        exempt_prefixes=['boardwkaaa-', 'boardwkbbb-']
+        exempt_prefixes=['boardwkaaa-', 'boardwkbbb-'], exempt_names=[]
     )
 
 
@@ -95,7 +95,7 @@ def test_boards_in_other_event_states_are_stopped(state):
     maintenance._stop_all()
 
     assert _stopped_workout_ids(maintenance) == ['boardwkaaa']
-    maintenance.project_server_manager.stop_everything.assert_called_once_with(exempt_prefixes=[])
+    maintenance.project_server_manager.stop_everything.assert_called_once_with(exempt_prefixes=[], exempt_names=[])
 
 
 def test_inactive_board_is_stopped_even_in_running_event():
@@ -108,7 +108,9 @@ def test_inactive_board_is_stopped_even_in_running_event():
     maintenance._stop_all()
 
     assert _stopped_workout_ids(maintenance) == ['boardwkaaa']
-    maintenance.project_server_manager.stop_everything.assert_called_once_with(exempt_prefixes=['boardwkbbb-'])
+    maintenance.project_server_manager.stop_everything.assert_called_once_with(
+        exempt_prefixes=['boardwkbbb-'], exempt_names=[]
+    )
 
 
 def test_board_of_ended_event_is_stopped_while_other_event_runs():
@@ -129,7 +131,7 @@ def test_no_ctf_events_stops_every_running_workout():
     maintenance._stop_all()
 
     assert _stopped_workout_ids(maintenance) == ['plainwkaaa', 'plainwkbbb']
-    maintenance.project_server_manager.stop_everything.assert_called_once_with(exempt_prefixes=[])
+    maintenance.project_server_manager.stop_everything.assert_called_once_with(exempt_prefixes=[], exempt_names=[])
 
 
 def test_event_query_asks_only_for_live_states():

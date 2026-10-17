@@ -8,6 +8,7 @@ from common.constants.database import DbCollections, DbOperators, DATABASE_NAME,
 from common.constants.states import CtfStates
 from common.models.agoge import UnitModel
 from common.models.model_validators.model_validator import ModelValidator
+from common.utilities.nested_build_monitor import ACTIVE_PHASES as NESTED_ACTIVE_PHASES, is_active_nested_build
 from common.utilities.timestamps import Timestamps
 from ..course_objects.compute.snapshot_manager import SnapshotManager
 from ..course_objects.workout.factory_workout import WorkoutFactory
@@ -85,9 +86,19 @@ class DailyMaintenance:
 
         # Stop any remaining compute instances. Every workout instance is named
         # f"{workout_id}-...", so the CTF boards' VMs are exempted by that prefix.
+        # A nested template server is named after its image record and is exempt while its build runs.
         self.project_server_manager.stop_everything(
-            exempt_prefixes=[f"{workout_id}-" for workout_id in sorted(ctf_workout_ids)]
+            exempt_prefixes=[f"{workout_id}-" for workout_id in sorted(ctf_workout_ids)],
+            exempt_names=self._nested_build_names(),
         )
+
+    def _nested_build_names(self) -> list:
+        """Template servers whose nested build is still provisioning or building"""
+        images = self.db.query(
+            collection_name=DbCollections.IMAGE,
+            filters=[('nested_build.phase', DbOperators.IN, list(NESTED_ACTIVE_PHASES))]
+        ) or []
+        return sorted(image['name'] for image in images if is_active_nested_build(image))
 
     def _ctf_workout_ids(self) -> set:
         """Workout ids of the active boards in every event that is armed or in play"""

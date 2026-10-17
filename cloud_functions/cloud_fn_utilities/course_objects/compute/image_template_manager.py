@@ -18,6 +18,7 @@ from common.utilities.gcp.compute.image_compatibility import compatible_boot_ima
 from common.utilities.gcp.compute.image_ownership import image_source, image_source_project, is_shared_image
 from common.utilities.gcp.compute.resources.network_interface_resource import NetworkInterfaceResource
 from common.utilities.gcp.compute.resources.image_resource import ImageResource
+from common.utilities.nested_build_monitor import is_active_nested_build
 from common.utilities.nested_manifest import render_manifest, render_secrets
 
 from cloud_fn_utilities.gcp.dns_manager import DnsManager
@@ -198,6 +199,9 @@ class ImageTemplateManager(BaseComputeManager):
         running_images = self.db_query.get_running(collection_name=DbCollections.IMAGE)
         for image in running_images:
             image_id = str(image['name'])
+            if is_active_nested_build(image):
+                # A midnight stop would kill the builder mid-install; the build monitor bounds its runtime.
+                continue
             # Trusted daily maintenance stops edit VMs in this site only.
             shared_edit_authorized = is_shared_image(image, self.env.project)
             if self.debug:

@@ -10,7 +10,7 @@ from fastapi import (
 )
 
 from common.exceptions import NotFound, BadRequest, Conflict, Forbidden, OperationTimeout, ServiceUnavailable, AgogeValidationError, NotReady
-from common.models.agoge import AgogeImageModel, NestedImageCreateRequest
+from common.models.agoge import AgogeImageModel, NestedBuildStatusModel, NestedImageCreateRequest
 from common.models.users import AgogeUser
 from common.models.response import (
     AgogeResponse,
@@ -202,6 +202,27 @@ async def get_image(
     except NotFound as e:
         logger.error(e.message, **log_args)
         raise HTTPException(status_code=404, detail=e.message)
+
+
+@compute_image_router.get('/{image_name}/nested-build/')
+def get_nested_build(
+    image_name: str,
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[NestedBuildStatusModel]:
+    # Sync: the refresh reads guest attributes from Compute, so it runs in the worker thread pool.
+    log_args = {
+        'user': current_user.uid,
+        'image': image_name,
+    }
+    try:
+        return AgogeResponse(data=NestedImage(env_dict).build_status(image_name))
+    except NotFound as e:
+        logger.error(e.message, **log_args)
+        raise HTTPException(status_code=404, detail=e.message)
+    except BadRequest as e:
+        logger.error(e.message, **log_args)
+        raise HTTPException(status_code=400, detail=e.message)
 
 
 @compute_image_router.get("/{image_name}/state/")
