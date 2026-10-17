@@ -4,9 +4,6 @@ import {
     Box,
     Button,
     CircularProgress,
-    List,
-    ListItem,
-    ListItemText,
     Paper,
     Stack,
     Step,
@@ -23,12 +20,14 @@ import {useNavigate} from "react-router-dom";
 import {URL_TEACHER_SERVERS} from "../../../../../router/urls";
 import {NestedMedia} from "../../../../../services/Server/nested.model";
 import {nestedService} from "../../../../../services/Server/nested.service";
+import AccessStep from "./AccessStep";
 import GuestsStep, {CatalogOptions} from "./GuestsStep";
 import HostStep, {MachineTypeOptions} from "./HostStep";
 import NetworksStep from "./NetworksStep";
+import ReviewStep from "./ReviewStep";
+import {toCreateRequest} from "./accessReview";
 import {GuestRuleContext} from "./guestRules";
 import {
-    effectiveDiskSize,
     hasErrors,
     initialNestedWizardState,
     NESTED_WIZARD_STEPS,
@@ -38,36 +37,6 @@ import {
     StepErrors,
     validateStep,
 } from "./nestedWizardState";
-
-// A read-only view of what a step holds; V20 replaces these with the step editors.
-const StepSummary: React.FC<{step: NestedWizardSteps; state: NestedWizardState; errors: StepErrors}> = (
-    {step, state, errors}
-) => {
-    const messages = Object.values(errors).filter((message): message is string => !!message);
-    return (
-        <Stack gap={2} mt={2}>
-            {messages.map(message => <Alert key={message} severity="error">{message}</Alert>)}
-            {step === NestedWizardSteps.Access && (
-                <Typography color="text.secondary">
-                    Exposed NICs and consoles follow from the guests.
-                </Typography>
-            )}
-            {step === NestedWizardSteps.Review && (
-                <List dense aria-label="Host summary">
-                    <ListItem><ListItemText primary="Server name" secondary={state.server_name || "—"} /></ListItem>
-                    <ListItem><ListItemText primary="Parent OS" secondary={state.parent_os} /></ListItem>
-                    <ListItem>
-                        <ListItemText
-                            primary="Machine types"
-                            secondary={`build ${state.build_machine_type || "—"}, lab ${state.machine_type || "—"}`}
-                        />
-                    </ListItem>
-                    <ListItem><ListItemText primary="Disk" secondary={`${effectiveDiskSize(state)} GB`} /></ListItem>
-                </List>
-            )}
-        </Stack>
-    );
-};
 
 const NestedImageWizard: React.FC = () => {
     const navigate = useNavigate();
@@ -80,6 +49,8 @@ const NestedImageWizard: React.FC = () => {
     const [machineTypes, setMachineTypes] = useState<MachineTypeOptions>({pending: true, data: [], error: ""});
     const [catalog, setCatalog] = useState<CatalogOptions>({pending: true, data: [], error: ""});
     const [media, setMedia] = useState<NestedMedia[]>([]);
+    const [submitting, setSubmitting] = useState(false);
+    const [submitError, setSubmitError] = useState("");
     const guestContext: GuestRuleContext = useMemo(() => ({catalog: catalog.data, media}), [catalog.data, media]);
 
     useEffect(() => {
@@ -145,6 +116,24 @@ const NestedImageWizard: React.FC = () => {
         setActiveStep(destination);
     };
 
+    const handleSubmit = async () => {
+        const reviewIndex = NESTED_WIZARD_STEPS.length - 1;
+        setCheckedSteps(prev => new Set(prev).add(reviewIndex));
+        if (hasErrors(errorsFor(reviewIndex))) {
+            return;
+        }
+        setSubmitting(true);
+        setSubmitError("");
+        try {
+            await nestedService.create(toCreateRequest(state, catalog.data));
+            navigate(URL_TEACHER_SERVERS);
+        } catch (error) {
+            // The API names the network, guest, or field it refused; keep the wizard state so it can be fixed.
+            setSubmitError((error as Error)?.message || "The image could not be created.");
+            setSubmitting(false);
+        }
+    };
+
     const step = NESTED_WIZARD_STEPS[activeStep];
     const currentErrors = shownErrors(activeStep);
 
@@ -188,9 +177,19 @@ const NestedImageWizard: React.FC = () => {
                         >
                             Back
                         </Button>
-                        {activeStep < NESTED_WIZARD_STEPS.length - 1 && (
+                        {activeStep < NESTED_WIZARD_STEPS.length - 1 ? (
                             <Button size="small" variant="contained" onClick={() => goTo(activeStep + 1)}>
                                 Next
+                            </Button>
+                        ) : (
+                            <Button
+                                size="small"
+                                variant="contained"
+                                disabled={submitting || catalog.pending || machineTypes.pending}
+                                onClick={handleSubmit}
+                                startIcon={submitting ? <CircularProgress size={16} color="inherit" /> : undefined}
+                            >
+                                Create image
                             </Button>
                         )}
                     </Stack>
@@ -217,8 +216,20 @@ const NestedImageWizard: React.FC = () => {
                             onMediaUploaded={handleMediaUploaded}
                         />
                     )}
-                    {(step === NestedWizardSteps.Access || step === NestedWizardSteps.Review) && (
-                        <StepSummary step={step} state={state} errors={currentErrors} />
+                    {step === NestedWizardSteps.Access && (
+                        <AccessStep state={state} disabled={submitting} onChange={handleChange} />
+                    )}
+                    {step === NestedWizardSteps.Review && (
+                        <>
+                            {submitError && <Alert severity="error" sx={{mt: 2}}>{submitError}</Alert>}
+                            <ReviewStep
+                                state={state}
+                                errors={currentErrors}
+                                machineTypes={machineTypes.data}
+                                catalog={catalog.data}
+                                media={media}
+                            />
+                        </>
                     )}
                 </Box>
             </Stack>

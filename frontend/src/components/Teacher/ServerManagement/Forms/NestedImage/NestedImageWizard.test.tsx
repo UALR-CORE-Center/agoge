@@ -4,11 +4,19 @@ import {cleanup, fireEvent, render, screen, waitFor, within} from "@testing-libr
 import React from "react";
 import {MemoryRouter} from "react-router-dom";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
+import {URL_TEACHER_SERVERS} from "../../../../../router/urls";
 import {nestedService} from "../../../../../services/Server/nested.service";
 import NestedImageWizard from "./NestedImageWizard";
 
+const navigate = vi.hoisted(() => vi.fn());
+vi.mock("react-router-dom", async (importOriginal) => ({
+    ...await importOriginal<typeof import("react-router-dom")>(),
+    useNavigate: () => navigate,
+}));
 vi.mock("../../../../../services/Server/nested.service", () => ({
-    nestedService: {list_machine_types: vi.fn(), list_catalog: vi.fn(), list_media: vi.fn(), upload_media: vi.fn()},
+    nestedService: {
+        list_machine_types: vi.fn(), list_catalog: vi.fn(), list_media: vi.fn(), upload_media: vi.fn(), create: vi.fn(),
+    },
 }));
 
 const machineTypes = [
@@ -275,5 +283,101 @@ describe("NestedImageWizard", () => {
         });
         expect(await screen.findByText("pfSense accepts iso media.")).toBeInTheDocument();
         expect(nestedService.upload_media).not.toHaveBeenCalled();
+    });
+
+    describe("Access, Review and submit", () => {
+        const kali = {
+            id: "kali-rolling", display_name: "Kali Rolling", family: "linux", group: "kali", version: "2026.3",
+            install_method: "cloud_image", media_url: "https://kali.test/kali.qcow2", media_sha256: null,
+            media_formats: ["qcow2"], requires_upload: false, license_note: "Free software.", eval_days: null,
+            osinfo: "debian12", firmware: "bios", disk_bus: "virtio", nic_model: "virtio", video: "virtio",
+            virtio_win_version: null, agent: true, net_config: "ifupdown", unattend_template: null,
+            windows_image_index: null, default_username: "kali", min_memory_mb: 1024, default_memory_mb: 2048,
+            min_disk_gb: 10, default_disk_gb: 20, default_vcpus: 2, is_enabled: true,
+        } as const;
+
+        const addExposedKali = async (index: number, ip: string) => {
+            fireEvent.click(screen.getByRole("button", {name: /Add guest/}));
+            const dialog = within(await screen.findByRole("dialog"));
+            fireEvent.click(dialog.getByText("Kali Rolling"));
+            fireEvent.click(dialog.getByRole("button", {name: "Add guest"}));
+            await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+            const section = within(screen.getByRole("region", {name: `Guest ${index}`}));
+            fireEvent.mouseDown(section.getByRole("combobox", {name: /Addressing/}));
+            fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", {name: "Static"}));
+            fireEvent.change(section.getByRole("textbox", {name: /IP address/}), {target: {value: ip}});
+            fireEvent.click(section.getByRole("checkbox", {name: "Expose"}));
+        };
+
+        const toReview = async () => {
+            vi.mocked(nestedService.list_catalog).mockResolvedValue([{...kali, media_formats: [...kali.media_formats]}]);
+            renderWizard();
+            await screen.findByText(/n2-standard-8/);
+            fillHost();
+            fireEvent.click(screen.getByRole("button", {name: "Next"}));
+            fireEvent.click(screen.getByRole("button", {name: "Next"}));
+            await addExposedKali(1, "192.168.100.10");
+            await addExposedKali(2, "192.168.100.11");
+            fireEvent.click(screen.getByRole("button", {name: "Next"}));
+            expect(heading()).toHaveTextContent("Access");
+        };
+
+        it("reorders alias slots, reviews the host, and posts the request built from wizard state", async () => {
+            vi.mocked(nestedService.create).mockResolvedValue({build_id: "abcdefghij"});
+            await toReview();
+
+            const slots = within(screen.getByRole("table", {name: "Exposure slots"}));
+            const guestsInOrder = () => slots.getAllByRole("row").slice(1).map(row => within(row).getAllByRole("cell")[1].textContent);
+            expect(guestsInOrder()).toEqual(["kali", "kali-2"]);
+            expect(screen.getByRole("button", {name: "Move kali NIC 0 up"})).toBeDisabled();
+            fireEvent.click(screen.getByRole("button", {name: "Move kali-2 NIC 0 up"}));
+            expect(guestsInOrder()).toEqual(["kali-2", "kali"]);
+            // Console ports follow the same guest order.
+            const ports = within(screen.getByRole("table", {name: "Console ports"})).getAllByRole("row").slice(1)
+                .map(row => row.textContent);
+            expect(ports).toEqual(["kali-25901", "kali5902"]);
+            expect(screen.getByText(/need 2 alias IPs on NIC 0/)).toBeInTheDocument();
+
+            fireEvent.click(screen.getByRole("button", {name: "Next"}));
+            expect(heading()).toHaveTextContent("Review");
+            expect(screen.getByLabelText("Estimated build time")).toHaveTextContent("about 20 minutes");
+            expect(screen.getByRole("progressbar", {name: "Lab RAM (n1-standard-4)"})).toHaveAttribute("aria-valuenow", "40");
+            const credentials = within(screen.getByRole("table", {name: "Guest credentials"}));
+            expect(credentials.getAllByText("••••••••")).toHaveLength(2);
+            fireEvent.click(screen.getByRole("checkbox", {name: "Show passwords"}));
+            expect(credentials.queryByText("••••••••")).not.toBeInTheDocument();
+
+            fireEvent.click(screen.getByRole("button", {name: "Create image"}));
+            await waitFor(() => expect(navigate).toHaveBeenCalledWith(URL_TEACHER_SERVERS));
+            const request = vi.mocked(nestedService.create).mock.calls[0][0];
+            expect(request).toMatchObject({
+                server_name: "ad-lab-host",
+                description: "AD lab",
+                machine_type: "n1-standard-4",
+                disk_size: null,
+                username: "gm",
+                product_keys: {},
+            });
+            expect(request.nested.build_machine_type).toBe("n2-standard-8");
+            expect(request.nested.networks.map(network => network.name)).toEqual(["lab"]);
+            // The reorder on Access is the guest order the API derives alias slots from.
+            expect(request.nested.guests.map(guest => [guest.name, guest.nics])).toEqual([
+                ["kali-2", [{network: "lab", ip: "192.168.100.11", expose: true}]],
+                ["kali", [{network: "lab", ip: "192.168.100.10", expose: true}]],
+            ]);
+            expect(request.nested).not.toHaveProperty("exposures");
+        });
+
+        it("keeps the wizard and shows the API's refusal when create fails", async () => {
+            vi.mocked(nestedService.create).mockRejectedValue(new Error("Guest kali: the name is taken."));
+            await toReview();
+            fireEvent.click(screen.getByRole("button", {name: "Next"}));
+            fireEvent.click(screen.getByRole("button", {name: "Create image"}));
+
+            expect(await screen.findByText("Guest kali: the name is taken.")).toBeInTheDocument();
+            expect(heading()).toHaveTextContent("Review");
+            expect(navigate).not.toHaveBeenCalled();
+            expect(screen.getByRole("button", {name: "Create image"})).toBeEnabled();
+        });
     });
 });

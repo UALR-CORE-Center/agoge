@@ -173,7 +173,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V17** Wizard shell and Host step — spec + done-when at PRD.md:1693 (code and vitest here; the browser check is carried by HUMAN)
 - [x] **V18** Networks step — spec + done-when at PRD.md:1695 (code and vitest here; the browser check is carried by HUMAN)
 - [x] **V19** Guests step — spec + done-when at PRD.md:1697 (code and vitest here; the browser check is carried by HUMAN)
-- [ ] **V20** Access and Review steps — spec + done-when at PRD.md:1699 (code and vitest here; the browser check is carried by HUMAN)
+- [x] **V20** Access and Review steps — spec + done-when at PRD.md:1699 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **V21** Image list and details for nested images — spec + done-when at PRD.md:1701 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **V22** Guacamole targets for guests — spec + done-when at PRD.md:1703
 - [ ] **V23** Spec editor and CTF integration — spec + done-when at PRD.md:1705 (needs N3, N5, N13; the browser check is carried by HUMAN)
@@ -1933,3 +1933,18 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No Python files changed.
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V20, the Access and Review steps. The Review meters can reuse `NESTED_PARENT_OVERHEAD_MB` and the capacity logic in `guestRules.ts`. The submit sends `toNestedImageCreateRequest` with `state.product_keys`.
+
+### Iteration 110 — 2026-10-17
+- **Completed:** V20 (code and vitest; the browser check, creating the SC-35 three-guest host, is still carried by HUMAN).
+  - `Forms/NestedImage/accessReview.ts` holds the pure logic. `deriveExposures`/`deriveConsoles` mirror `NestedHostValidator.derive`: guest order, then NIC order; console ports 5901+ over guests with a console. Because the API derives slots and the client may not send them, `moveExposure` reorders the **guests**. An exposure can only pass a neighbour on another guest (`canMoveExposure`), and the whole guest moves, console port included. `capacityMeters` gives build/lab RAM and vCPU plus the disk minimum. `estimateBuildMinutes` is a heuristic: 10 min parent, then per-method minutes on two install slots in `start_order`. `reviewWarnings` covers evaluation expiry, manual installs (and manual with the console off), agentless → CTF `offline` driver, uploaded Windows media, and an estimate over the 240-minute limit. `toCreateRequest` sends product keys only for guests that need one, because the API refuses a key for an unknown guest.
+  - `AccessStep.tsx` has the slot table with up/down buttons (no drag), the alias-count note, and the console port table. `ReviewStep.tsx` has the host summary, estimate, `LinearProgress` meters, warnings, and a credentials table with a show-passwords switch.
+  - The wizard replaces Next with **Create image** on Review. It posts `nestedService.create(toCreateRequest(...))` and navigates to `URL_TEACHER_SERVERS`; on failure it keeps the state and shows the API message. `StepSummary` is gone.
+- **Learned:** `toNestedImageCreateRequest` (inside the service) already trims keys and names, so `toCreateRequest` does not need to.
+- **Tests:** `accessReview.test.ts` (11) uses an SC-35 state: derive order, moves, meters, estimate, warnings, and the request body. `NestedImageWizard.test.tsx` adds 2 flow tests (reorder → review → submit body and navigate; a create failure keeps the wizard), and mocks `useNavigate` and `create`.
+- **Gate results:**
+  - frontend `npm test`: 43 files and 543 tests passed.
+  - Group V ESLint gate: exit 0.
+  - Group V tsc gate: 0 matches.
+  - No Python files changed.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V21, nested rows in `ImageListTable`: poll `get_build_status` while the phase is active, disable Check In while building, and add guest details and SSH tunnel hints to `ImageDetailsDialog`/Connect. `transformToNestedHostSpec` already reads the stored `exposures`/`console_ports`.
