@@ -157,7 +157,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V1** Nested virtualization for template and lab servers — spec + done-when at PRD.md:1661
 - [x] **V2** Nested machine types — spec + done-when at PRD.md:1663
 - [x] **V3** License on check-in — spec + done-when at PRD.md:1665
-- [ ] **V4** Template startup-script merge — spec + done-when at PRD.md:1667
+- [x] **V4** Template startup-script merge — spec + done-when at PRD.md:1667
 - [ ] **V5** Models and constants — spec + done-when at PRD.md:1669 (`common/constants/nested.py` already exists from V2 with `NESTED_MACHINE_FAMILIES`, `NESTED_MAX_MACHINE_MEMORY_MB`, `STANDARD_MAX_MACHINE_MEMORY_MB`; extend it)
 - [ ] **V6** OS catalog and seeding — spec + done-when at PRD.md:1671
 - [ ] **V7** Nested host validator — spec + done-when at PRD.md:1673
@@ -1464,3 +1464,13 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** api/unit_tests 1461 passed; cloud_functions/tests 637 passed; build_files 319 passed. No frontend files changed.
 - **Blockers:** none.
 - **Next:** V4 (template startup-script merge).
+
+### Iteration 93 — 2026-10-17
+- **Completed:** V4.
+  - `_merge_metadata_item` and `_CONCATENATED_SCRIPT_KEYS` moved from `LabServerManager` to `BaseComputeManager`, so both managers share one helper.
+  - `ImageTemplateManager._add_metadata` builds every item through it. The Linux user-creation script goes first and the image `startup_script` is concatenated after it under the single `startup-script` key, so a long-running image script (the V9 builder) can't delay the login account.
+- **Tests:** `cloud_functions/tests/test_template_startup_metadata.py` (4 tests). It covers one merged `startup-script` with both scripts, user creation first, the image script alone when there is no user, Windows unchanged (user script under `sysprep-specialize-script-ps1`, image script kept separate), and the shared-helper identity.
+- **Learned:** the Windows user-creation key is `sysprep-specialize-script-ps1`, not `startup-script`, so the duplicate only ever affected Linux templates.
+- **Gate results:** api/unit_tests 1461 passed; cloud_functions/tests 641 passed; build_files 319 passed. No frontend files changed.
+- **Blockers:** none.
+- **Next:** V5 (models and constants).

@@ -655,6 +655,22 @@ class BaseComputeManager:
     def _add_metadata(self) -> None:
         pass
 
+    _CONCATENATED_SCRIPT_KEYS = frozenset({'startup-script', 'windows-startup-script-ps1'})
+
+    @classmethod
+    def _merge_metadata_item(cls, items: list, item: dict) -> None:
+        """Keep metadata keys unique, concatenating multiple startup scripts."""
+        if not isinstance(item, dict) or not item.get('key'):
+            return
+        for existing in items:
+            if existing.get('key') == item['key']:
+                if item['key'] in cls._CONCATENATED_SCRIPT_KEYS and item.get('value'):
+                    existing['value'] = f"{(existing.get('value') or '').rstrip()}\n{item['value'].lstrip()}"
+                else:
+                    existing.update(item)
+                return
+        items.append(item)
+
     @abstractmethod
     def _add_nics(self) -> None:
         pass

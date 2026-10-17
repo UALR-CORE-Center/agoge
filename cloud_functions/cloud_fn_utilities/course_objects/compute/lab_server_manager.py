@@ -368,8 +368,6 @@ class LabServerManager(BaseComputeManager):
             return
         cls._merge_metadata_item(items, {'key': LINUX_LOADER_METADATA_KEY, 'value': WATCHER_INSTALLER})
 
-    _CONCATENATED_SCRIPT_KEYS = frozenset({'startup-script', 'windows-startup-script-ps1'})
-
     @classmethod
     def _add_ctf_loaders(cls, items: list) -> None:
         """Append the fixed CTF loaders last, so they run after every other boot script.
@@ -383,20 +381,6 @@ class LabServerManager(BaseComputeManager):
             if any(item.get('key') == key and loader in (item.get('value') or '') for item in items):
                 continue
             cls._merge_metadata_item(items, {'key': key, 'value': loader})
-
-    @classmethod
-    def _merge_metadata_item(cls, items: list, item: dict) -> None:
-        """Keep metadata keys unique, concatenating multiple startup scripts."""
-        if not isinstance(item, dict) or not item.get('key'):
-            return
-        for existing in items:
-            if existing.get('key') == item['key']:
-                if item['key'] in cls._CONCATENATED_SCRIPT_KEYS and item.get('value'):
-                    existing['value'] = f"{(existing.get('value') or '').rstrip()}\n{item['value'].lstrip()}"
-                else:
-                    existing.update(item)
-                return
-        items.append(item)
 
     def _add_nics(self) -> None:
         network_interface_resource = NetworkInterfaceResource(region=self.env.region, project=self.env.project)
