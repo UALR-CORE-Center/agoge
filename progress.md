@@ -2202,3 +2202,18 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. V25 and HUMAN need a person.
 - **Next:** V6b2's Fedora 43/44 entries (`dl.fedoraproject.org/pub/fedora/linux/releases/<n>/Cloud/x86_64/images/` with its `CHECKSUM`), done the same way.
+
+### Verification — 2026-10-17 — PASS
+- **Checked:** the items ticked since the last verification (7b23b7b): V6a, V6b1, V6d, V6c and V6b2a. I also confirmed that parent V6 and V6b/V6b2 are still `[ ]`, that V6 is BLOCKED on V-5, and that V25/HUMAN are still `[ ]` and marked human-only.
+  - V6a: `nested_os_catalog_sync.py` makes all four add-setup-operation edits (SetupOptions 25, `category_menu`, the class, the `operation_map` binding). It upserts by id, keeps a stored boolean `is_enabled`, writes only changed entries, and leaves ids that are absent from the JSON alone. Firestore `query` returns plain `to_dict()` records, so the second-sync no-op also holds against the real database. The tests use a stateful fake database, not hardcoded values.
+  - V6d and V6c: `builder.sh` now writes `to: 0.0.0.0/0`, and the ifupdown file is `interfaces.d/agoge.cfg` in both the write and the upload mapping. Each fix has its own test.
+  - V6b1, V6d, V6c and V6b2a catalog entries: there are 31 entries, and all 12 downloadable URLs are dated or versioned paths. I re-fetched the publishers' checksum files over https and compared four hashes: ubuntu-24.04, ubuntu-16.04, rocky-9 and almalinux-10. All four match the JSON exactly.
+  - No TODO, stub or `NotImplemented` in the new code.
+- **Gate results:**
+  - api/unit_tests: 1654 passed, coverage 97.67% (≥85%).
+  - cloud_functions/tests: 893 passed, 94.28% (≥85%).
+  - build_files: 429 passed.
+  - Frontend `npm test`: 47 files, 572 tests passed.
+  - CTF eslint: exit 0. CTF tsc grep: no matches.
+  - Group V eslint: exit 0. Group V tsc grep: no matches.
+- **Reopened:** none.
