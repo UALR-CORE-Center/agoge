@@ -142,7 +142,7 @@ See `### Nested Guest Contract` in PRD.md.
 - [x] **N5** Nested guest validator — spec + done-when at PRD.md:1632
 - [x] **N6** Guest payload builder — spec + done-when at PRD.md:1634
 - [x] **N7** qemu-agent relay section — spec + done-when at PRD.md:1636
-- [ ] **N8** Plant watcher installer — spec + done-when at PRD.md:1638
+- [x] **N8** Plant watcher installer — spec + done-when at PRD.md:1638
 - [ ] **N9** Nested plant procedure — spec + done-when at PRD.md:1640
 - [ ] **N10** Guest host reset publish — spec + done-when at PRD.md:1642
 - [ ] **N11** Guest host reset modes — spec + done-when at PRD.md:1644
@@ -1238,3 +1238,29 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** api/unit_tests 1440 passed; cloud_functions/tests 545 passed; build_files/cloud_deployment/tests 319 passed; ruff clean on changed files. No frontend files changed.
 - **Blockers:** none.
 - **Next:** N8 (plant watcher installer in `LabServerManager._add_metadata`; loader stub takes the run lock and writes `/run/agoge-ctf/last`).
+
+### Iteration 83 — 2026-10-17
+- **Completed:** N8. In `ctf_plant_contract.py`:
+  - **`_LOCKED_RUN`**: one shell block that both `LINUX_LOADER` and the new `WATCHER_SCRIPT` embed. It runs `mkdir`/`chmod 700` on `RUN_DIR`, then `exec 9>plant.lock`, then `flock 9`. It compares the payload's SHA-256 with `last`, writes `last` *before* running, and runs the payload with `9>&-`. It fails closed if the hash is missing.
+  - **`WATCHER_SCRIPT`**: long-polls `agoge-ctf-plant?wait_for_change=true&timeout_sec=300&last_etag=<etag>`. It filters the ETag to alphanumerics and sleeps 5 s on a 404 or a curl failure. A TERM/INT trap removes its in-flight temp files.
+  - **`WATCHER_UNIT`** and **`WATCHER_INSTALLER`**: the installer exits if `systemctl` or `flock` is missing. It writes the script via a quoted heredoc and installs it with `mv` (rename). It writes the unit, then runs `daemon-reload` and `enable --now`.
+
+  `LabServerManager._add_metadata` merges the installer ahead of the loader only when `_is_linux_nested_host()` is true. That check reads `server_spec.os` and the NICs' `ip_aliases`, not `self.ip_aliases`, because `_add_nics` runs after `_add_metadata`. It skips the merge when the installer is already present. `_load_lab_server` now sets `server_spec.os` from `details.os` or a top-level `os`.
+
+  New test file `cloud_functions/tests/test_ctf_plant_watcher.py` (24 tests). The scripts run for real under bash, with fake curl and systemctl and a Python fake `flock` that takes a real `flock(2)` lock on the inherited fd. They cover:
+  - the merge gating;
+  - existing scripts kept, and no duplicate merge;
+  - the same lock and dedupe paths in both scripts;
+  - concurrent loaders running the payload exactly once;
+  - the watcher following the ETag and dedupe after the loader;
+  - a payload's orphaned child not holding the lock;
+  - installer idempotence, and the no-flock path.
+
+  Two existing loader-execution tests now replace `RUN_DIR` with a temp directory.
+- **Learned:**
+  - Any test that runs `LINUX_LOADER` must replace `RUN_DIR` (`/run/agoge-ctf` needs root). macOS has no `flock`, so the tests supply one.
+  - `enable --now` leaves an already-running watcher on its old script until its next restart. That is deliberate: a restart at boot could kill a payload that is mid-run.
+  - When the watcher is missing (no systemd or flock), the plant gets no ack and N9 falls back to a reset.
+- **Gate results:** api/unit_tests 1440 passed; cloud_functions/tests 569 passed; build_files/cloud_deployment/tests 319 passed. ruff on the changed files reports only 2 errors, both in existing lines of `base_compute_manager.py` (588, 718) that this change did not touch. No frontend files changed.
+- **Blockers:** none.
+- **Next:** N9 (nested plant procedure in `FlagPlanter.plant`: wait `WATCHER_ACK_SECONDS` for `plant-ack`, reset only for an un-acked whole-server plant, per-key status).

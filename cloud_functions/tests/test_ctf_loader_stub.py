@@ -10,6 +10,7 @@ from cloud_fn_utilities.course_objects.compute import lab_server_manager as lab_
 from common.utilities.ctf_plant_contract import (
     LINUX_LOADER,
     LINUX_LOADER_METADATA_KEY,
+    RUN_DIR,
     WINDOWS_LOADER,
     WINDOWS_LOADER_METADATA_KEY,
 )
@@ -141,7 +142,8 @@ def test_concatenated_startup_script_runs_the_original_script_and_then_the_loade
     original = f"#!/bin/bash\necho original > {original_marker}\n"
     items = _items(_manager(startup_script=original))
     script_path = tmp_path / "startup-script.sh"
-    script_path.write_text(_value(items, LINUX_LOADER_METADATA_KEY))
+    # The loader's run lock and dedupe file live in /run/agoge-ctf, which only root can create.
+    script_path.write_text(_value(items, LINUX_LOADER_METADATA_KEY).replace(RUN_DIR, str(tmp_path / "run")))
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
