@@ -48,6 +48,10 @@ class FakeDb:
     def get(self, collection_name, doc_id):
         return copy.deepcopy(self._source(collection_name).get(doc_id))
 
+    def delete(self, collection_name, doc_id):
+        assert collection_name == DbCollections.IMAGE
+        self.images.pop(doc_id, None)
+
     def query(self, collection_name, **kwargs):
         return copy.deepcopy(list(self._source(collection_name).values()))
 
@@ -190,6 +194,48 @@ def test_client_supplied_derived_fields_are_rejected(world):
 
     assert _client(TEACHER).post('/compute/images/nested/', json=body).status_code == 422
     world.pubsub.msg.assert_not_called()
+
+
+def test_publish_raising_is_503_and_removes_the_new_record(world):
+    world.pubsub.msg.side_effect = RuntimeError('pubsub down')
+
+    response = _client(TEACHER).post('/compute/images/nested/', json=_body())
+
+    assert response.status_code == 503
+    assert 'No template was created' in response.json()['detail']
+    assert 'ad-lab' not in world.db.images
+
+
+def test_publish_future_failing_is_503_and_a_retry_with_the_same_name_succeeds(world):
+    # publish() returns at once; a delivery failure surfaces only on the future.
+    world.pubsub.msg.return_value.result.side_effect = TimeoutError()
+
+    assert _client(TEACHER).post('/compute/images/nested/', json=_body()).status_code == 503
+    assert 'ad-lab' not in world.db.images
+    world.pubsub.msg.return_value.result.assert_called_once_with(
+        timeout=nested_image_module.NestedImage.CHECK_OUT_PUBLISH_TIMEOUT_SECONDS)
+
+    world.pubsub.msg.return_value.result.side_effect = None
+    assert _client(TEACHER).post('/compute/images/nested/', json=_body()).status_code == 200
+    assert world.db.images['ad-lab']['nested_build']['phase'] == 'queued'
+
+
+def test_publish_failure_never_puts_product_keys_in_the_response(world):
+    world.pubsub.msg.side_effect = RuntimeError('pubsub down')
+
+    response = _client(TEACHER).post('/compute/images/nested/', json=_body())
+
+    assert PRODUCT_KEY not in response.text
+
+
+def test_publish_failure_with_a_failed_cleanup_says_the_record_must_be_deleted(world, monkeypatch):
+    world.pubsub.msg.side_effect = RuntimeError('pubsub down')
+    monkeypatch.setattr(world.db, 'delete', MagicMock(side_effect=RuntimeError('firestore down')))
+
+    response = _client(TEACHER).post('/compute/images/nested/', json=_body())
+
+    assert response.status_code == 503
+    assert 'Delete the template' in response.json()['detail']
 
 
 def test_catalog_lists_enabled_entries_and_is_not_captured_by_get_image(world, monkeypatch):
