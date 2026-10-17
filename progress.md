@@ -1824,3 +1824,36 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V16, the frontend service layer. The browser must POST `upload_url` with exactly `upload_headers`, then PUT the bytes to the returned `Location` session URI, then call `PUT …/media/{id}/`.
+
+### Verification — 2026-10-17 — PASS
+- **Checked:** V13, V14, V14b, V12b and V15, which are every task ticked since the last verification (`38fad61`). HEAD is `2d33bea` and the tree is clean. Two read-only agents checked the commits against PRD.md:1685-1689 and the Nested Image Builder Contract table (PRD.md:1361-1364, 1409). I also ran these checks myself:
+  - `bash -n` on `server_specific/nested/finalize.sh`: exit 0, and the file contains no `virsh destroy`.
+  - The constants match the contract: 360 / 45 / 240 / 20 GiB / 3600 / `<project>_nested-media`.
+  - The signed upload sets `x-goog-content-length-range: 0,{NESTED_MEDIA_MAX_BYTES}` (`api/core/compute/nested/media.py:77`).
+  - I scanned the files changed in `38fad61..HEAD` for TODO/FIXME/NotImplemented. The only hit is a TODO at `common/models/agoge.py:909`, written by pdhuff on 2026-03-07, outside this work.
+  - V13: `NestedBuildMonitor.refresh` maps the phases and writes only `nested_build`. It removes the secrets before the write, once (a failed removal is retried). It fails and stops a build on a stall or timeout. The teacher-only `GET …/nested-build/` route, the quarter-hourly `_refresh_nested_builds`, and the daily `exempt_names` and `stop_all_running` skip are all present. Tests cover each done-when case (`test_nested_build_monitor.py`).
+  - V14:
+    - `_check_in_action` returns 409 for provisioning, building and a fresh finalizing phase, and publishes NESTED_FINALIZE for ready and finalized.
+    - `ControlHandler` calls `finalize_nested`, which writes the nonce, polls until 360 s, and removes the key in a `finally`. On ok it publishes CHECK_IN once; on error it sets `failed` with the message; on timeout it returns to `ready` with a message. It never stops the server.
+    - The watcher and its transient `systemd-run` bootstrap are installed on both check-out paths.
+    - Tests: `test_nested_finalize.py:119,147,165,379`, plus the watcher run against fake virsh and curl.
+  - V14b: `is_stale_finalize` (timeout + 900 s; a missing or unparseable time counts as stale) is used in both `_check_in_action` and `finalize_nested`. Tests are in both suites.
+  - V12b: all three paths that create a record use `_check_out_new_record`, which waits on the publish future. On failure it deletes the record and raises `ServiceUnavailable` (503). Tests cover a raise, a failed future, a failed cleanup and a retry.
+  - V15:
+    - The four media routes are declared before `/{image_name}/`, and they sign a V4 resumable POST with the TTL. Completion checks the object's size.
+    - Setup option 24 is wired in all four places, with CORS, the 2-day `media/` lifecycle rule (by Custom-Time), and tokenCreator on itself.
+    - The builder fetches `gs://` media with the gcloud CLI copy.
+    - Tests cover the unsupported extension (400), oversize (413), and completion with the object missing or the wrong size.
+  - Notes, not reopened:
+    - The lifecycle rule keys on Custom-Time because GCS cannot see Firestore's `complete` flag. This meets the intent.
+    - The DELETE media response labels the id `build_id`.
+    - Deleting a medium that a queued build references is not prevented (iteration 105 logged this).
+    - `finalize_nested`'s read-then-write is not transactional (iteration 103 logged this).
+- **Gate results:**
+  - api/unit_tests: 1636 passed, coverage 97.75%, exit 0.
+  - cloud_functions/tests: 819 passed, coverage 96.24%, exit 0.
+  - build_files/cloud_deployment/tests: 327 passed, exit 0.
+  - frontend `npm test`: 34 files and 452 tests passed.
+  - CTF ESLint gate: exit 0. CTF tsc gate: 0 CTF matches (repo-wide tsc exits 2 on pre-existing errors).
+  - Group V ESLint gate: exit 0. Group V tsc gate: 0 matches.
+- **Reopened:** none.
