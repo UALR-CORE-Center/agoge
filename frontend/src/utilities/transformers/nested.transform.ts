@@ -26,6 +26,7 @@ export const transformToNestedOsCatalogEntry = (data: NestedOsCatalogEntry): Nes
     install_method: data.install_method,
     media_url: orNull(data.media_url),
     media_sha256: orNull(data.media_sha256),
+    media_size_bytes: orNull(data.media_size_bytes),
     media_formats: data.media_formats ?? [],
     requires_upload: data.requires_upload === true,
     license_note: data.license_note ?? '',

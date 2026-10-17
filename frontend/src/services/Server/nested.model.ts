@@ -22,6 +22,8 @@ export interface NestedOsCatalogEntry {
     install_method: NestedInstallMethod;
     media_url: string | null;
     media_sha256: string | null;
+    // Content-Length of media_url; null for upload-only entries and entries synced before it existed.
+    media_size_bytes: number | null;
     media_formats: NestedMediaFormat[];
     requires_upload: boolean;
     license_note: string;

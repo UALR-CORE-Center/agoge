@@ -103,9 +103,17 @@ describe("nested transformers", () => {
             min_disk_gb: 64, default_disk_gb: 80, is_enabled: false, firmware: "uefi",
         } as Parameters<typeof transformToNestedOsCatalogEntry>[0]);
         expect(entry).toMatchObject({
-            media_url: null, eval_days: null, firmware: "uefi", disk_bus: "virtio", video: "vga",
+            media_url: null, media_size_bytes: null, eval_days: null, firmware: "uefi", disk_bus: "virtio", video: "vga",
             unattend_template: null, default_vcpus: 1, is_enabled: false, requires_upload: true,
         });
+
+        // A downloaded entry keeps its size: the wizard reserves it on the parent disk.
+        expect(transformToNestedOsCatalogEntry({
+            id: "debian-12", display_name: "Debian 12", family: "linux", group: "linux", version: "12",
+            install_method: "cloud_image", media_url: "https://example.test/debian.qcow2", media_sha256: "abc",
+            media_size_bytes: 400000000, media_formats: ["qcow2"], osinfo: "debian12", net_config: "networkd",
+            min_memory_mb: 512, default_memory_mb: 2048, min_disk_gb: 4, default_disk_gb: 20,
+        } as Parameters<typeof transformToNestedOsCatalogEntry>[0])).toMatchObject({media_size_bytes: 400000000});
 
         expect(transformToNestedMedia({
             id: "m1", filename: "a.iso", format: "iso", size_bytes: 1, gcs_path: "gs://b/media/m1/a.iso",

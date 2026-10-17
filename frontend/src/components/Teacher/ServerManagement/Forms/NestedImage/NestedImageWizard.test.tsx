@@ -187,6 +187,7 @@ describe("NestedImageWizard", () => {
         const server2019 = {
             id: "windows-server-2019", display_name: "Windows Server 2019", family: "windows", group: "windows_server",
             version: "2019", install_method: "unattended_iso", media_url: null, media_sha256: null, media_formats: ["iso"],
+            media_size_bytes: null,
             requires_upload: true, license_note: "Bring your own volume license.", eval_days: null, osinfo: "win2k19",
             firmware: "uefi", disk_bus: "sata", nic_model: "e1000e", video: "qxl", virtio_win_version: null, agent: true,
             net_config: "windows", unattend_template: "autounattend", windows_image_index: 2,
@@ -257,7 +258,7 @@ describe("NestedImageWizard", () => {
     it("rejects a media file in the wrong format before uploading", async () => {
         const appliance = {
             id: "pfsense", display_name: "pfSense", family: "appliance", group: "appliance", version: "2.7",
-            install_method: "manual_iso", media_url: null, media_sha256: null, media_formats: ["iso"],
+            install_method: "manual_iso", media_url: null, media_sha256: null, media_size_bytes: null, media_formats: ["iso"],
             requires_upload: true, license_note: "", eval_days: null, osinfo: "freebsd14.0", firmware: "bios",
             disk_bus: "virtio", nic_model: "virtio", video: "vga", virtio_win_version: null, agent: false,
             net_config: "none", unattend_template: null, windows_image_index: null, default_username: null,
@@ -289,7 +290,7 @@ describe("NestedImageWizard", () => {
         const kali = {
             id: "kali-rolling", display_name: "Kali Rolling", family: "linux", group: "kali", version: "2026.3",
             install_method: "cloud_image", media_url: "https://kali.test/kali.qcow2", media_sha256: null,
-            media_formats: ["qcow2"], requires_upload: false, license_note: "Free software.", eval_days: null,
+            media_size_bytes: 3 * 1024 ** 3, media_formats: ["qcow2"], requires_upload: false, license_note: "Free software.", eval_days: null,
             osinfo: "debian12", firmware: "bios", disk_bus: "virtio", nic_model: "virtio", video: "virtio",
             virtio_win_version: null, agent: true, net_config: "ifupdown", unattend_template: null,
             windows_image_index: null, default_username: "kali", min_memory_mb: 1024, default_memory_mb: 2048,
@@ -341,6 +342,8 @@ describe("NestedImageWizard", () => {
             fireEvent.click(screen.getByRole("button", {name: "Next"}));
             expect(heading()).toHaveTextContent("Review");
             expect(screen.getByLabelText("Estimated build time")).toHaveTextContent("about 20 minutes");
+            // 20 parent + 2 x 20 guest + 12 scratch + 3 for the Kali image both guests share.
+            expect(screen.getByText(/75 GB disk/)).toBeInTheDocument();
             expect(screen.getByRole("progressbar", {name: "Lab RAM (n1-standard-4)"})).toHaveAttribute("aria-valuenow", "40");
             const credentials = within(screen.getByRole("table", {name: "Guest credentials"}));
             expect(credentials.getAllByText("••••••••")).toHaveLength(2);

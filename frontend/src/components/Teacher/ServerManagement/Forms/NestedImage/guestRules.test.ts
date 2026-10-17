@@ -19,6 +19,7 @@ import {defaultNestedNetwork} from "./nestedWizardState";
 const entry = (overrides: Partial<NestedOsCatalogEntry>): NestedOsCatalogEntry => ({
     id: "debian-12", display_name: "Debian 12", family: "linux", group: "linux", version: "12",
     install_method: "cloud_image", media_url: "https://example.test/debian.qcow2", media_sha256: null,
+    media_size_bytes: null,
     media_formats: ["qcow2"], requires_upload: false, license_note: "Free software.", eval_days: null,
     osinfo: "debian12", firmware: "bios", disk_bus: "virtio", nic_model: "virtio", video: "virtio",
     virtio_win_version: null, agent: true, net_config: "networkd", unattend_template: null,

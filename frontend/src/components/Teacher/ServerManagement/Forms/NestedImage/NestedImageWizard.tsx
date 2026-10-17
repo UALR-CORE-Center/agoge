@@ -200,6 +200,7 @@ const NestedImageWizard: React.FC = () => {
                             state={state}
                             errors={currentErrors}
                             machineTypes={machineTypes}
+                            context={guestContext}
                             onChange={handleChange}
                         />
                     )}

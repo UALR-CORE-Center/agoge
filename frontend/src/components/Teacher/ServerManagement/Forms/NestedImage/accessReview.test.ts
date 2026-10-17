@@ -17,6 +17,7 @@ import {defaultNestedNetwork, initialNestedWizardState, NestedWizardState} from 
 const entry = (overrides: Partial<NestedOsCatalogEntry>): NestedOsCatalogEntry => ({
     id: "ubuntu-24.04", display_name: "Ubuntu 24.04", family: "linux", group: "linux", version: "24.04",
     install_method: "cloud_image", media_url: "https://example.test/noble.img", media_sha256: null,
+    media_size_bytes: null,
     media_formats: ["qcow2"], requires_upload: false, license_note: "Free software.", eval_days: null,
     osinfo: "ubuntu24.04", firmware: "bios", disk_bus: "virtio", nic_model: "virtio", video: "virtio",
     virtio_win_version: null, agent: true, net_config: "netplan", unattend_template: null,
@@ -126,20 +127,27 @@ describe("capacityMeters", () => {
             {id: "1", name: "n2-standard-8", description: "", is_shared_core: false, memory_mb: 32768, guest_cpus: 8},
             {id: "2", name: "n2-standard-4", description: "", is_shared_core: false, memory_mb: 16384, guest_cpus: 4},
         ];
-        const meters = capacityMeters({...state, disk_size: 200}, machineTypes);
+        // Ubuntu 600 MiB and Kali 3.5 GiB round up to 1 + 4 GB; the eval ISO has no recorded size, so it
+        // reserves the 20 GiB upload limit, as NestedHostValidator.media_sizes does.
+        const sized = [
+            {...ubuntu, media_sha256: "ubuntu-sha", media_size_bytes: 600 * 1024 ** 2},
+            {...kali, media_sha256: "kali-sha", media_size_bytes: 3.5 * 1024 ** 3},
+            server2022,
+        ];
+        const meters = capacityMeters({...state, disk_size: 200}, machineTypes, {catalog: sized, media: []});
         expect(meters.map(item => [item.label, item.used, item.available])).toEqual([
             ["Build RAM (n2-standard-8)", 3 * 4096 + 2048, 32768],
             ["Build vCPU (n2-standard-8)", 6, 16],
             ["Lab RAM (n2-standard-4)", 3 * 4096 + 2048, 16384],
             ["Lab vCPU (n2-standard-4)", 6, 8],
-            ["Disk", 20 + 3 * 40 + 12, 200],
+            ["Disk", 20 + 3 * 40 + 12 + 1 + 4 + 20, 200],
         ]);
         expect(meterPercent(meters[2])).toBe(88);
         expect(meterPercent({label: "x", used: 30, available: 10, unit: "GB"})).toBe(100);
     });
 
     it("skips a machine type the list does not have", () => {
-        expect(capacityMeters(sc35(), []).map(item => item.label)).toEqual(["Disk"]);
+        expect(capacityMeters(sc35(), [], {catalog, media: []}).map(item => item.label)).toEqual(["Disk"]);
     });
 });
 

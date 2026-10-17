@@ -13,6 +13,7 @@ import React, {useState} from "react";
 import {NestedParentOs} from "../../../../../services/Server/nested.model";
 import {ServerMachineTypes} from "../../../../../services/Specification/specificationEdit.model";
 import InputTags from "../../../../Common/FormInputs/InputTags";
+import {GuestRuleContext} from "./guestRules";
 import {
     effectiveDiskSize,
     NESTED_MAX_DISK_GB,
@@ -32,6 +33,8 @@ interface HostStepProps {
     state: NestedWizardState;
     errors: StepErrors;
     machineTypes: MachineTypeOptions;
+    // The OS catalog and media library, for the size of each guest's install media.
+    context: GuestRuleContext;
     disabled?: boolean;
     onChange: (patch: Partial<NestedWizardState>) => void;
 }
@@ -39,8 +42,8 @@ interface HostStepProps {
 const machineTypeLabel = (type: ServerMachineTypes): string =>
     `${type.name} — ${type.guest_cpus} vCPU, ${Math.round(type.memory_mb / 1024)} GB memory`;
 
-const HostStep: React.FC<HostStepProps> = ({state, errors, machineTypes, disabled, onChange}) => {
-    const minDiskSize = nestedMinDiskSize(state.guests);
+const HostStep: React.FC<HostStepProps> = ({state, errors, machineTypes, context, disabled, onChange}) => {
+    const minDiskSize = nestedMinDiskSize(state.guests, context);
     // What the instructor is typing; without it, clearing the field would snap back to the minimum mid-edit.
     const [diskInput, setDiskInput] = useState<string | null>(null);
 
@@ -144,7 +147,7 @@ const HostStep: React.FC<HostStepProps> = ({state, errors, machineTypes, disable
                 type="number"
                 required
                 disabled={disabled}
-                value={diskInput ?? String(effectiveDiskSize(state))}
+                value={diskInput ?? String(effectiveDiskSize(state, context))}
                 onChange={(event) => {
                     const value = event.target.value;
                     setDiskInput(value);
@@ -154,7 +157,7 @@ const HostStep: React.FC<HostStepProps> = ({state, errors, machineTypes, disable
                 error={!!errors.disk_size}
                 helperText={
                     errors.disk_size ||
-                    `At least ${minDiskSize} GB: the parent, every guest disk, and build scratch space. ` +
+                    `At least ${minDiskSize} GB: the parent, every guest disk, build scratch space, and the install media. ` +
                     `Raise it for room inside the guests (up to ${NESTED_MAX_DISK_GB} GB).`
                 }
                 slotProps={{htmlInput: {min: minDiskSize, max: NESTED_MAX_DISK_GB, step: 1}}}

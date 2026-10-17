@@ -1,6 +1,6 @@
 import {NestedGuest, NestedNetwork, NestedParentOs} from "../../../../../services/Server/nested.model";
 import {ServerMachineTypes} from "../../../../../services/Specification/specificationEdit.model";
-import {GuestRuleContext, validateGuests} from "./guestRules";
+import {catalogEntry, GuestRuleContext, NESTED_MEDIA_MAX_BYTES, validateGuests} from "./guestRules";
 import {validateNetworks} from "./networkRules";
 
 // Mirrors common/constants/nested.py; the API applies the same disk rule (NestedHostValidator.min_disk_size).
@@ -72,11 +72,36 @@ export const initialNestedWizardState = (): NestedWizardState => ({
     product_keys: {},
 });
 
-export const nestedMinDiskSize = (guests: NestedGuest[]): number =>
-    NESTED_PARENT_BASE_DISK_GB + guests.reduce((total, guest) => total + guest.disk_gb, 0) + NESTED_BUILD_SCRATCH_GB;
+const GIB = 1024 ** 3;
 
-export const effectiveDiskSize = (state: NestedWizardState): number =>
-    state.disk_size ?? nestedMinDiskSize(state.guests);
+// NestedHostValidator.media_sizes: bytes of each distinct medium, keyed the way builder.sh fetch_media caches it,
+// so guests sharing a medium count it once. A size the wizard cannot know reserves the upload limit, as the API does.
+export const nestedMediaSizes = (guests: NestedGuest[], context: GuestRuleContext): Record<string, number> => {
+    const sizes: Record<string, number> = {};
+    for (const guest of guests) {
+        // nested_manifest._media_source: a guest's media_id wins over the entry's media_url.
+        if (guest.media_id) {
+            const medium = context.media.find(item => item.id === guest.media_id);
+            sizes[medium?.sha256 || `upload-${guest.media_id}`] = medium ? medium.size_bytes : NESTED_MEDIA_MAX_BYTES;
+        } else {
+            const entry = catalogEntry(context.catalog, guest.os_id);
+            sizes[entry?.media_sha256 || guest.os_id] = entry?.media_size_bytes || NESTED_MEDIA_MAX_BYTES;
+        }
+    }
+    return sizes;
+};
+
+// NestedHostValidator.min_disk_size: every medium stays cached on the parent disk until finalize, so each is
+// reserved on top of the scratch space.
+export const nestedMinDiskSize = (guests: NestedGuest[], context: GuestRuleContext): number => {
+    const mediaGb = Object.values(nestedMediaSizes(guests, context))
+        .reduce((total, size) => total + Math.ceil(size / GIB), 0);
+    return NESTED_PARENT_BASE_DISK_GB + guests.reduce((total, guest) => total + guest.disk_gb, 0)
+        + NESTED_BUILD_SCRATCH_GB + mediaGb;
+};
+
+export const effectiveDiskSize = (state: NestedWizardState, context: GuestRuleContext): number =>
+    state.disk_size ?? nestedMinDiskSize(state.guests, context);
 
 // ComputeImage._validate_new_name: 54 characters leaves room for the longest snapshot suffix.
 const SERVER_NAME_PATTERN = /^[a-z](?:[a-z0-9-]{0,52}[a-z0-9])?$/;
@@ -106,7 +131,11 @@ const validateMachineType = (value: string, machineTypes: ServerMachineTypes[], 
     return "";
 };
 
-export const validateHostStep = (state: NestedWizardState, machineTypes: ServerMachineTypes[]): StepErrors => {
+export const validateHostStep = (
+    state: NestedWizardState,
+    machineTypes: ServerMachineTypes[],
+    context: GuestRuleContext,
+): StepErrors => {
     const errors: StepErrors = {};
     const nameError = validateNestedServerName(state.server_name);
     if (nameError) {
@@ -130,7 +159,7 @@ export const validateHostStep = (state: NestedWizardState, machineTypes: ServerM
         errors.machine_type = labError;
     }
     if (state.disk_size !== null) {
-        const minimum = nestedMinDiskSize(state.guests);
+        const minimum = nestedMinDiskSize(state.guests, context);
         if (!Number.isInteger(state.disk_size) || state.disk_size < minimum || state.disk_size > NESTED_MAX_DISK_GB) {
             errors.disk_size = `Use a whole number from ${minimum} to ${NESTED_MAX_DISK_GB} GB.`;
         }
@@ -167,7 +196,7 @@ export const validateStep = (
 ): StepErrors => {
     switch (step) {
         case NestedWizardSteps.Host:
-            return validateHostStep(state, machineTypes);
+            return validateHostStep(state, machineTypes, context);
         case NestedWizardSteps.Networks:
             return validateNetworksStep(state);
         case NestedWizardSteps.Guests:
