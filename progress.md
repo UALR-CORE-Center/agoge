@@ -169,7 +169,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V13** Build monitor — spec + done-when at PRD.md:1685
 - [x] **V14** Finalize handshake — spec + done-when at PRD.md:1687 (also merge the finalize-watcher bootstrap into `startup-script` on both check-out paths in `ImageTemplateManager._prepare_nested_check_out`; V11 left the re-check-out path with only `enable-guest-attributes`)
 - [x] **V15** Media uploads — spec + done-when at PRD.md:1689
-- [ ] **V16** Frontend service layer — spec + done-when at PRD.md:1691
+- [x] **V16** Frontend service layer — spec + done-when at PRD.md:1691
 - [ ] **V17** Wizard shell and Host step — spec + done-when at PRD.md:1693 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **V18** Networks step — spec + done-when at PRD.md:1695 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **V19** Guests step — spec + done-when at PRD.md:1697 (code and vitest here; the browser check is carried by HUMAN)
@@ -1857,3 +1857,20 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - CTF ESLint gate: exit 0. CTF tsc gate: 0 CTF matches (repo-wide tsc exits 2 on pre-existing errors).
   - Group V ESLint gate: exit 0. Group V tsc gate: 0 matches.
 - **Reopened:** none.
+
+### Iteration 106 — 2026-10-17
+- **Completed:** V16.
+  - `frontend/src/services/Server/nested.model.ts` mirrors the Nested* models. `NestedHostSpecInput` holds the client fields, and `NestedHostSpec` adds the derived `exposures`/`console_ports`/`vnc_passwords`.
+  - `utilities/transformers/nested.transform.ts` has the response transformers. `transformToNestedBuildStatus` drops `finalize_nonce`. `toNestedImageCreateRequest` rebuilds `nested` from client fields only, trims the name, username and key, and drops blank product keys.
+  - `services/Server/nested.service.ts` (`nestedService`) has `list_machine_types` (`?nested=true`), `list_catalog`, `create`, `get_build_status`, `create_media`, `list_media`, `complete_media`, `delete_media`, and `upload_media(file, {osId, onProgress, signal})`.
+  - `upload_media` POSTs `upload_url` with exactly `upload_headers` (raw axios, no auth header), PUTs the file to the `Location` session URI, then completes. A storage failure deletes the record (best effort). A completion failure keeps it, so `complete_media` can retry.
+  - URL constants in `router/urls.ts`: `URL_COMPUTE_IMAGE_API_MACHINE_TYPES`, `_NESTED`, `_NESTED_CATALOG`, `_NESTED_MEDIA`, `_NESTED_MEDIA_ITEM`, `_NESTED_BUILD`. V14 added no route: Check In still goes through `imageService.post_action` with CHECK_IN, and the API turns it into NESTED_FINALIZE.
+- **Learned:** a 422 from the media POST (the API's filename pattern is `^[A-Za-z0-9][A-Za-z0-9._ ()+-]{0,199}$`) carries a FastAPI `detail` array, so `HttpError.message` is not readable text. V19's `MediaUpload` should pre-validate `file.name` against that pattern.
+- **Tests:** `nested.service.test.ts` (12) checks each function's URL, body and headers, plus the upload chain: success, session refused, missing Location, byte failure with a failed cleanup, cancel, and a completion failure that keeps the record. `nested.transform.test.ts` (5) covers the round trip from stored spec to create request and back, the sparse-spec defaults, and the catalog, media and upload normalization.
+- **Gate results:**
+  - frontend `npm test`: 36 files and 469 tests passed.
+  - Group V ESLint gate (plus the two test files and `urls.ts`): exit 0.
+  - Group V tsc gate: 0 matches.
+  - No Python files changed, so the Python suites were not rerun (last run: 1636 / 819 / 327).
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V17, the wizard shell and Host step. Use `nestedService.list_machine_types()` for the build and lab machine types.
