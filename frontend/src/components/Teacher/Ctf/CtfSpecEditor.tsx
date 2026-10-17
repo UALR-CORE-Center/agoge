@@ -2,6 +2,7 @@ import FlagIcon from "@mui/icons-material/Flag";
 import {LoadingButton} from "@mui/lab";
 import {
     Alert,
+    Autocomplete,
     Box,
     Button,
     Checkbox,
@@ -12,15 +13,21 @@ import {
     FormControlLabel,
     MenuItem,
     Stack,
+    styled,
     TextField,
     Typography,
 } from "@mui/material";
 import {GridColDef} from "@mui/x-data-grid";
 import React, {useEffect, useId, useState} from "react";
-import {CtfFlagSpec, CtfSpec, CtfStates, LocationType, OperatingSystem} from "../../../services/Ctf/ctf.model";
+import {CtfFlagSpec, CtfSpec, CtfStates, LocationType, OperatingSystem, WindowsAccess} from "../../../services/Ctf/ctf.model";
 import {ctfService} from "../../../services/Ctf/ctf.service";
 import StyledDataGrid from "../../Common/DataGrid/StyledDataGrid";
 import HttpError from "../../Common/Errors/HttpError";
+
+/** A required TextField whose label asterisk is red, matching the template editor's required marks. */
+const RequiredTextField = styled(TextField)(({theme}) => ({
+    '& .MuiFormLabel-asterisk': {color: theme.palette.error.main},
+}));
 
 // CtfSetup.update_spec runs only in DRAFT: once arming starts the planted flags are fixed.
 export const SPEC_EDIT_STATES: readonly number[] = [CtfStates.DRAFT];
@@ -32,8 +39,38 @@ const LOCATION_TYPES: {value: LocationType; label: string; example: string}[] = 
     {value: 'ads', label: 'Alternate data stream (Windows)', example: 'C:\\Windows\\Temp\\notes.txt:hidden'},
 ];
 
+// Common CTF categories offered in the flag dialog; any other text is accepted as a custom category.
+export const STANDARD_CATEGORIES: readonly string[] = [
+    'Web',
+    'Crypto',
+    'Forensics',
+    'Reverse Engineering',
+    'Binary Exploitation',
+    'Privilege Escalation',
+    'Linux',
+    'Windows',
+    'Active Directory',
+    'Network',
+    'OSINT',
+    'Steganography',
+    'Miscellaneous',
+];
+
 // CtfFlagSpecModel.id in common/models/agoge.py.
 const FLAG_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,31}$/;
+// CtfFlagSpecModel.windows_user in common/models/agoge.py.
+const WINDOWS_USER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$/;
+
+const WINDOWS_ACCESS_OPTIONS: {value: WindowsAccess | ''; label: string}[] = [
+    {value: '', label: "Inherit from folder (default)"},
+    {value: 'administrators', label: "Administrators only"},
+    {value: 'user', label: "Administrators and one user"},
+    {value: 'everyone', label: "Everyone can read"},
+];
+
+/** Windows access and Hidden apply to Windows file flags and to the host file of an ADS flag. */
+export const isWindowsFile = (flag: CtfFlagSpec): boolean =>
+    flag.operating_system === 'windows' && (flag.location_type === 'file' || flag.location_type === 'ads');
 
 export const blankFlag = (server: string): CtfFlagSpec => ({
     id: '',
@@ -51,6 +88,9 @@ export const blankFlag = (server: string): CtfFlagSpec => ({
     unlocks_after: null,
     file_mode: null,
     file_owner: null,
+    windows_access: null,
+    windows_user: null,
+    hidden: false,
 });
 
 /** Client-side checks that catch the common mistakes; the API re-validates every field and path. */
@@ -69,6 +109,9 @@ export const flagProblems = (flag: CtfFlagSpec, others: CtfFlagSpec[]): string[]
     if (!flag.decoy && flag.points <= 0) problems.push("Points must be greater than 0 (only a decoy may be 0 or negative).");
     if ((flag.location_type === 'registry' || flag.location_type === 'ads') && flag.operating_system !== 'windows') {
         problems.push("Registry and ADS flags must be on Windows.");
+    }
+    if (isWindowsFile(flag) && flag.windows_access === 'user' && !WINDOWS_USER_PATTERN.test(flag.windows_user?.trim() ?? '')) {
+        problems.push("Windows user: 1-20 letters, digits, '.', '_' or '-' (the local account name).");
     }
     if (others.some((other) => other.server === flag.server && other.operating_system !== flag.operating_system)) {
         problems.push(`Every flag on ${flag.server} must use the same operating system.`);
@@ -90,7 +133,13 @@ const FlagDialog: React.FC<FlagDialogProps> = ({initial, others, serverNames, on
     const set = <K extends keyof CtfFlagSpec>(key: K, value: CtfFlagSpec[K]) => setFlag((prev) => ({...prev, [key]: value}));
     const problems = flagProblems(flag, others);
     const linuxFile = flag.location_type === 'file' && flag.operating_system === 'linux';
+    const windowsFile = isWindowsFile(flag);
     const example = LOCATION_TYPES.find((type) => type.value === flag.location_type)?.example;
+    // Custom categories already used in this spec are offered too, so teams see one consistent spelling.
+    const categoryOptions = Array.from(new Set([
+        ...STANDARD_CATEGORIES,
+        ...others.map((other) => other.category?.trim()).filter((category): category is string => !!category),
+    ]));
 
     const handleSave = () => {
         onSave({
@@ -102,6 +151,10 @@ const FlagDialog: React.FC<FlagDialogProps> = ({initial, others, serverNames, on
             // Only Linux file placements take a mode and owner.
             file_mode: linuxFile ? flag.file_mode?.trim() || null : null,
             file_owner: linuxFile ? flag.file_owner?.trim() || null : null,
+            // Only Windows file and ADS placements take access and Hidden; the user only with 'user' access.
+            windows_access: windowsFile ? flag.windows_access || null : null,
+            windows_user: windowsFile && flag.windows_access === 'user' ? flag.windows_user?.trim() || null : null,
+            hidden: windowsFile ? !!flag.hidden : false,
         });
     };
 
@@ -110,36 +163,45 @@ const FlagDialog: React.FC<FlagDialogProps> = ({initial, others, serverNames, on
             <DialogTitle id={titleId}>{initial.id ? `Edit flag ${initial.id}` : "Add flag"}</DialogTitle>
             <DialogContent>
                 <Box sx={{display: 'grid', gridTemplateColumns: {xs: '1fr', sm: '1fr 1fr'}, gap: 2, mt: 1}}>
-                    <TextField label="Id" value={flag.id} onChange={(e) => set('id', e.target.value.toLowerCase())}
+                    <RequiredTextField required label="Id" value={flag.id} onChange={(e) => set('id', e.target.value.toLowerCase())}
                                helperText="Appears inside the flag value" />
-                    <TextField label="Category" value={flag.category ?? ''} onChange={(e) => set('category', e.target.value)}
-                               inputProps={{maxLength: 32}} />
-                    <TextField select label="Server" value={flag.server} onChange={(e) => set('server', e.target.value)}>
+                    <Autocomplete
+                        freeSolo
+                        options={categoryOptions}
+                        inputValue={flag.category ?? ''}
+                        onInputChange={(_event, value) => set('category', value)}
+                        renderInput={(params) => (
+                            <TextField {...params} label="Category"
+                                       inputProps={{...params.inputProps, maxLength: 32}}
+                                       helperText="Pick one or type your own" />
+                        )}
+                    />
+                    <RequiredTextField required select label="Server" value={flag.server} onChange={(e) => set('server', e.target.value)}>
                         {serverNames.map((name) => <MenuItem key={name} value={name}>{name}</MenuItem>)}
-                    </TextField>
-                    <TextField label="Slot" type="number" value={flag.slot}
+                    </RequiredTextField>
+                    <RequiredTextField required label="Slot" type="number" value={flag.slot}
                                onChange={(e) => set('slot', Number(e.target.value))}
                                inputProps={{min: 1, max: 9}} helperText="1-9, unique per server; slot 1 is the foothold" />
-                    <TextField select label="Operating system" value={flag.operating_system}
+                    <RequiredTextField required select label="Operating system" value={flag.operating_system}
                                onChange={(e) => set('operating_system', e.target.value as OperatingSystem)}>
                         <MenuItem value="linux">Linux</MenuItem>
                         <MenuItem value="windows">Windows</MenuItem>
-                    </TextField>
-                    <TextField select label="Location type" value={flag.location_type}
+                    </RequiredTextField>
+                    <RequiredTextField required select label="Location type" value={flag.location_type}
                                onChange={(e) => set('location_type', e.target.value as LocationType)}>
                         {LOCATION_TYPES.map((type) => <MenuItem key={type.value} value={type.value}>{type.label}</MenuItem>)}
-                    </TextField>
-                    <TextField label="Path" value={flag.path} onChange={(e) => set('path', e.target.value)}
+                    </RequiredTextField>
+                    <RequiredTextField required label="Path" value={flag.path} onChange={(e) => set('path', e.target.value)}
                                helperText={example ? `e.g. ${example}` : undefined} sx={{gridColumn: {sm: '1 / -1'}}} />
-                    <TextField label="Points" type="number" value={flag.points}
+                    <RequiredTextField required label="Points" type="number" value={flag.points}
                                onChange={(e) => set('points', Number(e.target.value))} />
-                    <TextField select label="Access level" value={flag.access_level}
+                    <RequiredTextField required select label="Access level" value={flag.access_level}
                                onChange={(e) => set('access_level', e.target.value as CtfFlagSpec['access_level'])}
                                helperText="Documentation only">
                         <MenuItem value="user">User</MenuItem>
                         <MenuItem value="root">Root</MenuItem>
                         <MenuItem value="admin">Admin</MenuItem>
-                    </TextField>
+                    </RequiredTextField>
                     <TextField label="Hint" value={flag.hint ?? ''} onChange={(e) => set('hint', e.target.value)}
                                multiline inputProps={{maxLength: 1000}} sx={{gridColumn: {sm: '1 / -1'}}} />
                     <TextField label="Hint cost" type="number" value={flag.hint_cost}
@@ -167,6 +229,29 @@ const FlagDialog: React.FC<FlagDialogProps> = ({initial, others, serverNames, on
                                        onChange={(e) => set('file_owner', e.target.value)} />
                         </>
                     )}
+                    {windowsFile && (
+                        <>
+                            <TextField select label="Windows access" value={flag.windows_access ?? ''}
+                                       onChange={(e) => set('windows_access', (e.target.value || null) as WindowsAccess | null)}
+                                       helperText={flag.location_type === 'ads'
+                                           ? "Applied to the file that holds the stream"
+                                           : "Who can read the file; SYSTEM and Administrators always can"}>
+                                {WINDOWS_ACCESS_OPTIONS.map((option) => (
+                                    <MenuItem key={option.value || 'inherit'} value={option.value}>{option.label}</MenuItem>
+                                ))}
+                            </TextField>
+                            {flag.windows_access === 'user' ? (
+                                <RequiredTextField required label="Windows user" value={flag.windows_user ?? ''} placeholder="student"
+                                           onChange={(e) => set('windows_user', e.target.value)}
+                                           helperText="Local account given read access; it must exist on the image" />
+                            ) : <Box />}
+                            <FormControlLabel
+                                control={<Checkbox checked={!!flag.hidden} onChange={(e) => set('hidden', e.target.checked)} />}
+                                label="Hidden file (set the Windows Hidden attribute)"
+                                sx={{gridColumn: {sm: '1 / -1'}}}
+                            />
+                        </>
+                    )}
                     <FormControlLabel
                         control={<Checkbox checked={flag.decoy} onChange={(e) => set('decoy', e.target.checked)} />}
                         label="Decoy (out of scope; never listed; submitting it applies its points)"
@@ -185,35 +270,58 @@ const FlagDialog: React.FC<FlagDialogProps> = ({initial, others, serverNames, on
     );
 };
 
-interface CtfSpecEditorProps {
-    ctfId: string;
-    state: number;
-    spec: CtfSpec;
+// CtfScoringSpecModel.flag_prefix in common/models/agoge.py.
+const FLAG_PREFIX_PATTERN = /^[a-z][a-z0-9]{1,15}$/;
+
+export const blankCtfSpec = (name = ''): CtfSpec => ({
+    name,
+    description: null,
+    rules_url: null,
+    flags: [],
+    scoring: {flag_prefix: 'agoge', submission_rate_limit: 10, reveal_decoy_penalty: false},
+});
+
+/** Whole-spec checks mirroring CtfSpecModel and CtfValidator; the API re-validates on save. */
+export const ctfSpecProblems = (spec: CtfSpec, serverNames: string[]): string[] => {
+    const problems: string[] = [];
+    if (!spec.name.trim()) problems.push("Event name is required.");
+    if (!FLAG_PREFIX_PATTERN.test(spec.scoring.flag_prefix)) {
+        problems.push("Flag prefix: 2-16 lowercase letters or digits, starting with a letter.");
+    }
+    const rate = spec.scoring.submission_rate_limit;
+    if (!Number.isInteger(rate) || rate < 1 || rate > 100) {
+        problems.push("Submissions per flag per minute must be between 1 and 100.");
+    }
+    if (spec.flags.length === 0) problems.push("Add at least one flag.");
+    spec.flags.forEach((flag, index) => {
+        const label = flag.id || `#${index + 1}`;
+        if (!serverNames.includes(flag.server)) {
+            problems.push(`Flag ${label}: server "${flag.server}" is not in this lab.`);
+        }
+        flagProblems(flag, spec.flags.filter((_other, i) => i !== index))
+            .forEach((problem) => problems.push(`Flag ${label}: ${problem}`));
+    });
+    return problems;
+};
+
+interface CtfSpecFieldsProps {
+    value: CtfSpec;
+    onChange: (spec: CtfSpec) => void;
     serverNames: string[];
-    onSaved: () => void | Promise<void>;
+    editable?: boolean;
 }
 
-const CtfSpecEditor: React.FC<CtfSpecEditorProps> = ({ctfId, state, spec, serverNames, onSaved}) => {
-    const [draft, setDraft] = useState<CtfSpec>(spec);
+/** The ctf block's settings and flag table, shared by the event Setup tab and the lab template editor. */
+export const CtfSpecFields: React.FC<CtfSpecFieldsProps> = ({value, onChange, serverNames, editable = true}) => {
     const [editingIndex, setEditingIndex] = useState<number | null>(null);
-    const [saving, setSaving] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    const [saved, setSaved] = useState(false);
 
-    // A fresh event read replaces an unchanged draft; local edits are kept until saved or reset.
-    useEffect(() => setDraft(spec), [spec]);
-
-    const editable = SPEC_EDIT_STATES.includes(state);
-    const dirty = JSON.stringify(draft) !== JSON.stringify(spec);
-    const setField = <K extends keyof CtfSpec>(key: K, value: CtfSpec[K]) => {
-        setSaved(false);
-        setDraft((prev) => ({...prev, [key]: value}));
-    };
-    const setScoring = <K extends keyof CtfSpec['scoring']>(key: K, value: CtfSpec['scoring'][K]) =>
-        setField('scoring', {...draft.scoring, [key]: value});
+    const setField = <K extends keyof CtfSpec>(key: K, fieldValue: CtfSpec[K]) =>
+        onChange({...value, [key]: fieldValue});
+    const setScoring = <K extends keyof CtfSpec['scoring']>(key: K, scoringValue: CtfSpec['scoring'][K]) =>
+        setField('scoring', {...value.scoring, [key]: scoringValue});
 
     const saveFlag = (flag: CtfFlagSpec) => {
-        const flags = [...draft.flags];
+        const flags = [...value.flags];
         if (editingIndex === null || editingIndex >= flags.length) {
             flags.push(flag);
         } else {
@@ -233,34 +341,14 @@ const CtfSpecEditor: React.FC<CtfSpecEditorProps> = ({ctfId, state, spec, server
     };
 
     const deleteFlag = (index: number) => {
-        const removed = draft.flags[index].id;
-        setField('flags', draft.flags
+        const removed = value.flags[index].id;
+        setField('flags', value.flags
             .filter((_flag, i) => i !== index)
             .map((flag) => {
                 if (!flag.unlocks_after?.includes(removed)) return flag;
                 const remaining = flag.unlocks_after.filter((id) => id !== removed);
                 return {...flag, unlocks_after: remaining.length ? remaining : null};
             }));
-    };
-
-    const handleSave = async () => {
-        setSaving(true);
-        setError(null);
-        try {
-            await ctfService.updateSpec(ctfId, {
-                ...draft,
-                description: draft.description?.trim() || null,
-                rules_url: draft.rules_url?.trim() || null,
-            });
-            setSaved(true);
-            await onSaved();
-        } catch (err) {
-            const {status, message} = (err ?? {}) as Partial<HttpError>;
-            setError(`${status || "Unknown Status"}: ${message || "Could not save the flags."}`);
-            console.error(err);
-        } finally {
-            setSaving(false);
-        }
     };
 
     const columns: GridColDef<CtfFlagSpec & {index: number}>[] = [
@@ -289,7 +377,7 @@ const CtfSpecEditor: React.FC<CtfSpecEditorProps> = ({ctfId, state, spec, server
                             aria-label={`Edit flag ${params.row.id}`}>
                         Edit
                     </Button>
-                    <Button size="small" color="error" disabled={!editable || draft.flags.length <= 1}
+                    <Button size="small" color="error" disabled={!editable || value.flags.length <= 1}
                             onClick={() => deleteFlag(params.row.index)}
                             aria-label={`Delete flag ${params.row.id}`}>
                         Delete
@@ -300,35 +388,32 @@ const CtfSpecEditor: React.FC<CtfSpecEditorProps> = ({ctfId, state, spec, server
     ];
 
     const editingFlag = editingIndex === null ? null
-        : editingIndex >= draft.flags.length ? blankFlag(serverNames[0] ?? '') : draft.flags[editingIndex];
+        : editingIndex >= value.flags.length ? blankFlag(serverNames[0] ?? '') : value.flags[editingIndex];
 
     return (
         <Box sx={{width: '100%', minWidth: 0}}>
-            {!editable && (
-                <Alert severity="info" sx={{mb: 2}}>Flags are fixed once the event has been armed.</Alert>
-            )}
             <Box sx={{display: 'grid', gridTemplateColumns: {xs: '1fr', md: '1fr 1fr'}, gap: 2, mb: 2}}>
-                <TextField label="Event name" value={draft.name} disabled={!editable}
+                <RequiredTextField required label="Event name" value={value.name} disabled={!editable}
                            onChange={(e) => setField('name', e.target.value)} inputProps={{maxLength: 100}} />
-                <TextField label="Rules of engagement URL" value={draft.rules_url ?? ''} disabled={!editable}
+                <TextField label="Rules of engagement URL" value={value.rules_url ?? ''} disabled={!editable}
                            onChange={(e) => setField('rules_url', e.target.value)} />
-                <TextField label="Description" value={draft.description ?? ''} disabled={!editable}
+                <TextField label="Description" value={value.description ?? ''} disabled={!editable}
                            onChange={(e) => setField('description', e.target.value)} multiline
                            inputProps={{maxLength: 2000}} sx={{gridColumn: {md: '1 / -1'}}} />
-                <TextField label="Flag prefix" value={draft.scoring.flag_prefix} disabled={!editable}
+                <RequiredTextField required label="Flag prefix" value={value.scoring.flag_prefix} disabled={!editable}
                            onChange={(e) => setScoring('flag_prefix', e.target.value.toLowerCase())}
                            helperText="2-16 lowercase letters or digits, starting with a letter" />
-                <TextField label="Submissions per flag per minute" type="number" disabled={!editable}
-                           value={draft.scoring.submission_rate_limit} inputProps={{min: 1, max: 100}}
+                <RequiredTextField required label="Submissions per flag per minute" type="number" disabled={!editable}
+                           value={value.scoring.submission_rate_limit} inputProps={{min: 1, max: 100}}
                            onChange={(e) => setScoring('submission_rate_limit', Number(e.target.value))} />
                 <FormControlLabel
-                    control={<Checkbox checked={draft.scoring.reveal_decoy_penalty} disabled={!editable}
+                    control={<Checkbox checked={value.scoring.reveal_decoy_penalty} disabled={!editable}
                                        onChange={(e) => setScoring('reveal_decoy_penalty', e.target.checked)} />}
                     label="Show decoy penalties to students"
                 />
             </Box>
             <StyledDataGrid
-                data={draft.flags.map((flag, index) => ({...flag, index}))}
+                data={value.flags.map((flag, index) => ({...flag, index}))}
                 columns={columns}
                 getRowId={(row: CtfFlagSpec & {index: number}) => `${row.index}-${row.id}`}
                 disableCheckBoxes={true}
@@ -337,11 +422,75 @@ const CtfSpecEditor: React.FC<CtfSpecEditorProps> = ({ctfId, state, spec, server
                 labelProps={{text: "Flags", icon: <FlagIcon fontSize={"large"} />}}
                 density={"comfortable"}
             />
+            <Button variant="outlined" sx={{mt: 2}} disabled={!editable || serverNames.length === 0}
+                    onClick={() => setEditingIndex(value.flags.length)}>
+                Add flag
+            </Button>
+            {editingFlag && (
+                <FlagDialog
+                    initial={editingFlag}
+                    others={value.flags.filter((_flag, index) => index !== editingIndex)}
+                    serverNames={serverNames}
+                    onSave={saveFlag}
+                    onClose={() => setEditingIndex(null)}
+                />
+            )}
+        </Box>
+    );
+};
+
+interface CtfSpecEditorProps {
+    ctfId: string;
+    state: number;
+    spec: CtfSpec;
+    serverNames: string[];
+    onSaved: () => void | Promise<void>;
+}
+
+const CtfSpecEditor: React.FC<CtfSpecEditorProps> = ({ctfId, state, spec, serverNames, onSaved}) => {
+    const [draft, setDraft] = useState<CtfSpec>(spec);
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [saved, setSaved] = useState(false);
+
+    // A fresh event read replaces an unchanged draft; local edits are kept until saved or reset.
+    useEffect(() => setDraft(spec), [spec]);
+
+    const editable = SPEC_EDIT_STATES.includes(state);
+    const dirty = JSON.stringify(draft) !== JSON.stringify(spec);
+
+    const handleChange = (next: CtfSpec) => {
+        setSaved(false);
+        setDraft(next);
+    };
+
+    const handleSave = async () => {
+        setSaving(true);
+        setError(null);
+        try {
+            await ctfService.updateSpec(ctfId, {
+                ...draft,
+                description: draft.description?.trim() || null,
+                rules_url: draft.rules_url?.trim() || null,
+            });
+            setSaved(true);
+            await onSaved();
+        } catch (err) {
+            const {status, message} = (err ?? {}) as Partial<HttpError>;
+            setError(`${status || "Unknown Status"}: ${message || "Could not save the flags."}`);
+            console.error(err);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <Box sx={{width: '100%', minWidth: 0}}>
+            {!editable && (
+                <Alert severity="info" sx={{mb: 2}}>Flags are fixed once the event has been armed.</Alert>
+            )}
+            <CtfSpecFields value={draft} onChange={handleChange} serverNames={serverNames} editable={editable} />
             <Stack direction="row" spacing={1} sx={{mt: 2}} flexWrap="wrap" useFlexGap>
-                <Button variant="outlined" disabled={!editable || serverNames.length === 0}
-                        onClick={() => setEditingIndex(draft.flags.length)}>
-                    Add flag
-                </Button>
                 <LoadingButton variant="contained" disabled={!editable || !dirty} loading={saving} onClick={handleSave}>
                     Save flags
                 </LoadingButton>
@@ -354,15 +503,6 @@ const CtfSpecEditor: React.FC<CtfSpecEditorProps> = ({ctfId, state, spec, server
             )}
             {error && <Alert severity="error" sx={{mt: 2}} onClose={() => setError(null)}>{error}</Alert>}
             {saved && !dirty && <Alert severity="success" sx={{mt: 2}} onClose={() => setSaved(false)}>Flags saved.</Alert>}
-            {editingFlag && (
-                <FlagDialog
-                    initial={editingFlag}
-                    others={draft.flags.filter((_flag, index) => index !== editingIndex)}
-                    serverNames={serverNames}
-                    onSave={saveFlag}
-                    onClose={() => setEditingIndex(null)}
-                />
-            )}
         </Box>
     );
 };

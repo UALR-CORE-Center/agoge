@@ -159,3 +159,42 @@ def test_unlocks_after_diamond_is_not_a_cycle():
         _flag(id='dd', slot=4, path='/d', unlocks_after=['bb', 'cc']),
     ]
     CtfValidator(_spec(flags)).load()
+
+
+def _windows_file(**overrides) -> dict:
+    return _flag(**{'id': 'dc-file', 'server': 'dc', 'operating_system': 'windows',
+                    'path': 'C:\\Secrets\\flag.txt', **overrides})
+
+
+@pytest.mark.parametrize('options', [
+    {'windows_access': 'administrators'},
+    {'windows_access': 'everyone', 'hidden': True},
+    {'windows_access': 'user', 'windows_user': 'student'},
+    {'hidden': True},
+])
+def test_windows_file_access_and_hidden_allowed(options):
+    CtfValidator(_spec([_windows_file(**options)])).load()
+
+
+def test_windows_access_allowed_on_ads_host_file():
+    flag = _windows_file(location_type='ads', path='C:\\Windows\\Temp\\notes.txt:hidden',
+                         windows_access='administrators', hidden=True)
+    CtfValidator(_spec([flag])).load()
+
+
+@pytest.mark.parametrize('flag', [
+    _flag(windows_access='administrators'),
+    _flag(hidden=True),
+    _flag(id='dc-reg', server='dc', operating_system='windows', location_type='registry',
+          path='HKLM\\SOFTWARE\\Agoge Lab:Flag', hidden=True),
+])
+def test_windows_file_options_rejected_elsewhere(flag):
+    _rejects([flag], flag['id'], 'apply only to Windows file and ads flags')
+
+
+def test_windows_user_access_requires_a_user():
+    _rejects([_windows_file(windows_access='user')], 'dc-file', 'requires windows_user')
+
+
+def test_windows_user_without_user_access_rejected():
+    _rejects([_windows_file(windows_access='everyone', windows_user='student')], 'dc-file', 'only with windows_access')

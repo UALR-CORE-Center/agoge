@@ -6,7 +6,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {CtfEvent, CtfFlagSpec, CtfSpec, CtfStates} from "../../../services/Ctf/ctf.model";
 import {ctfService} from "../../../services/Ctf/ctf.service";
 import HttpError from "../../Common/Errors/HttpError";
-import CtfSpecEditor, {blankFlag, flagProblems, SPEC_EDIT_STATES} from "./CtfSpecEditor";
+import CtfSpecEditor, {blankFlag, flagProblems, SPEC_EDIT_STATES, STANDARD_CATEGORIES} from "./CtfSpecEditor";
 
 vi.mock("../../../services/Ctf/ctf.service", () => ({
     ctfService: {updateSpec: vi.fn()},
@@ -115,7 +115,7 @@ describe("CtfSpecEditor", () => {
         renderEditor({state});
 
         expect(screen.getByText("Flags are fixed once the event has been armed.")).toBeInTheDocument();
-        expect(screen.getByLabelText("Event name")).toBeDisabled();
+        expect(screen.getByLabelText(/^Event name/)).toBeDisabled();
         expect(screen.getByRole("button", {name: "Add flag"})).toBeDisabled();
         expect(screen.getByRole("button", {name: "Edit flag web-user"})).toBeDisabled();
         expect(screen.getByRole("button", {name: "Delete flag web-user"})).toBeDisabled();
@@ -134,9 +134,9 @@ describe("CtfSpecEditor", () => {
         fireEvent.click(screen.getByRole("button", {name: "Add flag"}));
         const dialog = screen.getByRole("dialog", {name: "Add flag"});
         expect(within(dialog).getByRole("button", {name: "Done"})).toBeDisabled();
-        fireEvent.change(within(dialog).getByLabelText("Id"), {target: {value: "WEB-Three"}});
-        fireEvent.change(within(dialog).getByLabelText("Slot"), {target: {value: "3"}});
-        fireEvent.change(within(dialog).getByLabelText("Path"), {target: {value: "  /root/flag.txt  "}});
+        fireEvent.change(within(dialog).getByLabelText(/^Id/), {target: {value: "WEB-Three"}});
+        fireEvent.change(within(dialog).getByLabelText(/^Slot/), {target: {value: "3"}});
+        fireEvent.change(within(dialog).getByLabelText(/^Path/), {target: {value: "  /root/flag.txt  "}});
         fireEvent.change(within(dialog).getByLabelText("Category"), {target: {value: "  web  "}});
         fireEvent.click(within(dialog).getByRole("button", {name: "Done"}));
 
@@ -160,7 +160,7 @@ describe("CtfSpecEditor", () => {
         vi.mocked(ctfService.updateSpec).mockResolvedValue({} as CtfEvent);
         const {rerender} = renderEditor();
 
-        fireEvent.change(screen.getByLabelText("Event name"), {target: {value: "Renamed"}});
+        fireEvent.change(screen.getByLabelText(/^Event name/), {target: {value: "Renamed"}});
         fireEvent.click(saveButton());
         await waitFor(() => expect(ctfService.updateSpec).toHaveBeenCalled());
         rerender(
@@ -176,8 +176,8 @@ describe("CtfSpecEditor", () => {
         renderEditor();
         fireEvent.click(screen.getByRole("button", {name: "Add flag"}));
         const dialog = screen.getByRole("dialog");
-        fireEvent.change(within(dialog).getByLabelText("Id"), {target: {value: "fresh"}});
-        fireEvent.change(within(dialog).getByLabelText("Path"), {target: {value: "/x"}});
+        fireEvent.change(within(dialog).getByLabelText(/^Id/), {target: {value: "fresh"}});
+        fireEvent.change(within(dialog).getByLabelText(/^Path/), {target: {value: "/x"}});
 
         expect(within(dialog).getByText("Slot 1 is already used on web.")).toBeInTheDocument();
         expect(within(dialog).getByRole("button", {name: "Done"})).toBeDisabled();
@@ -187,7 +187,7 @@ describe("CtfSpecEditor", () => {
         renderEditor();
         fireEvent.click(screen.getByRole("button", {name: "Edit flag web-root"}));
         const dialog = screen.getByRole("dialog", {name: "Edit flag web-root"});
-        fireEvent.change(within(dialog).getByLabelText("Points"), {target: {value: "350"}});
+        fireEvent.change(within(dialog).getByLabelText(/^Points/), {target: {value: "350"}});
         fireEvent.click(within(dialog).getByRole("button", {name: "Done"}));
 
         expect(screen.getByRole("gridcell", {name: "350"})).toBeInTheDocument();
@@ -200,7 +200,7 @@ describe("CtfSpecEditor", () => {
 
         fireEvent.click(screen.getByRole("button", {name: "Edit flag web-user"}));
         const dialog = screen.getByRole("dialog");
-        fireEvent.change(within(dialog).getByLabelText("Id"), {target: {value: "web-foothold"}});
+        fireEvent.change(within(dialog).getByLabelText(/^Id/), {target: {value: "web-foothold"}});
         fireEvent.click(within(dialog).getByRole("button", {name: "Done"}));
         fireEvent.click(saveButton());
 
@@ -234,7 +234,7 @@ describe("CtfSpecEditor", () => {
 
         fireEvent.change(screen.getByLabelText("Description"), {target: {value: "   "}});
         fireEvent.change(screen.getByLabelText("Rules of engagement URL"), {target: {value: " https://x.io/rules "}});
-        fireEvent.change(screen.getByLabelText("Flag prefix"), {target: {value: "CTF"}});
+        fireEvent.change(screen.getByLabelText(/^Flag prefix/), {target: {value: "CTF"}});
         fireEvent.click(saveButton());
 
         await waitFor(() => expect(ctfService.updateSpec).toHaveBeenCalled());
@@ -249,23 +249,23 @@ describe("CtfSpecEditor", () => {
         vi.mocked(ctfService.updateSpec).mockRejectedValue(new HttpError(422, "Bad flag path."));
         const {onSaved} = renderEditor();
 
-        fireEvent.change(screen.getByLabelText("Event name"), {target: {value: "Renamed"}});
+        fireEvent.change(screen.getByLabelText(/^Event name/), {target: {value: "Renamed"}});
         fireEvent.click(saveButton());
 
         expect(await screen.findByText("422: Bad flag path.")).toBeInTheDocument();
         expect(onSaved).not.toHaveBeenCalled();
-        expect(screen.getByLabelText("Event name")).toHaveValue("Renamed");
+        expect(screen.getByLabelText(/^Event name/)).toHaveValue("Renamed");
         await waitFor(() => expect(saveButton()).toBeEnabled());
     });
 
     it("discards local edits back to the saved spec", () => {
         renderEditor();
-        fireEvent.change(screen.getByLabelText("Event name"), {target: {value: "Renamed"}});
+        fireEvent.change(screen.getByLabelText(/^Event name/), {target: {value: "Renamed"}});
         expect(saveButton()).toBeEnabled();
 
         fireEvent.click(screen.getByRole("button", {name: "Discard changes"}));
 
-        expect(screen.getByLabelText("Event name")).toHaveValue("Spring CTF");
+        expect(screen.getByLabelText(/^Event name/)).toHaveValue("Spring CTF");
         expect(saveButton()).toBeDisabled();
     });
 
@@ -275,6 +275,127 @@ describe("CtfSpecEditor", () => {
             <CtfSpecEditor ctfId={CTF_ID} state={CtfStates.DRAFT} spec={{...makeSpec(), name: "From server"}}
                            serverNames={["web", "db"]} onSaved={vi.fn()} />
         );
-        expect(screen.getByLabelText("Event name")).toHaveValue("From server");
+        expect(screen.getByLabelText(/^Event name/)).toHaveValue("From server");
+    });
+});
+
+describe("flag dialog category", () => {
+    afterEach(cleanup);
+
+    const openAddDialog = (spec?: CtfSpec) => {
+        renderEditor(spec ? {spec} : {});
+        fireEvent.click(screen.getByRole("button", {name: "Add flag"}));
+        return screen.getByRole("dialog", {name: "Add flag"});
+    };
+
+    it("offers the standard CTF categories", () => {
+        const dialog = openAddDialog();
+        fireEvent.mouseDown(within(dialog).getByLabelText("Category"));
+
+        const options = screen.getAllByRole("option").map((option) => option.textContent);
+        expect(options).toEqual([...STANDARD_CATEGORIES]);
+    });
+
+    it("also offers custom categories already used by other flags, once each", () => {
+        const dialog = openAddDialog(makeSpec([
+            flag({category: "Badge Hunt"}),
+            flag({id: "web-root", slot: 2, category: "Badge Hunt"}),
+            flag({id: "web-env", slot: 3, category: "Web"}),
+        ]));
+        fireEvent.mouseDown(within(dialog).getByLabelText("Category"));
+
+        const options = screen.getAllByRole("option").map((option) => option.textContent);
+        expect(options.filter((option) => option === "Badge Hunt")).toHaveLength(1);
+        expect(options.filter((option) => option === "Web")).toHaveLength(1);
+    });
+
+    it("keeps a typed custom category", async () => {
+        vi.mocked(ctfService.updateSpec).mockResolvedValue({} as CtfEvent);
+        const dialog = openAddDialog();
+        fireEvent.change(within(dialog).getByLabelText(/^Id/), {target: {value: "web-three"}});
+        fireEvent.change(within(dialog).getByLabelText(/^Slot/), {target: {value: "3"}});
+        fireEvent.change(within(dialog).getByLabelText(/^Path/), {target: {value: "/root/flag.txt"}});
+        fireEvent.change(within(dialog).getByLabelText("Category"), {target: {value: "Badge Hunt"}});
+        fireEvent.click(within(dialog).getByRole("button", {name: "Done"}));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+        fireEvent.click(saveButton());
+        await waitFor(() => expect(ctfService.updateSpec).toHaveBeenCalled());
+        expect(vi.mocked(ctfService.updateSpec).mock.calls[0][1].flags[2].category).toBe("Badge Hunt");
+    });
+});
+
+describe("flag dialog Windows access", () => {
+    beforeEach(() => vi.mocked(ctfService.updateSpec).mockReset());
+    afterEach(cleanup);
+
+    const windowsFlag = (overrides: Partial<CtfFlagSpec> = {}) => flag({
+        id: "dc-file", server: "dc", operating_system: "windows", path: "C:\\Secrets\\flag.txt", ...overrides,
+    });
+
+    const openEditDialog = (target: CtfFlagSpec) => {
+        renderEditor({spec: makeSpec([target])});
+        fireEvent.click(screen.getByRole("button", {name: `Edit flag ${target.id}`}));
+        return screen.getByRole("dialog", {name: `Edit flag ${target.id}`});
+    };
+
+    const saveDialog = async (dialog: HTMLElement) => {
+        vi.mocked(ctfService.updateSpec).mockResolvedValue({} as CtfEvent);
+        fireEvent.click(within(dialog).getByRole("button", {name: "Done"}));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        fireEvent.click(saveButton());
+        await waitFor(() => expect(ctfService.updateSpec).toHaveBeenCalled());
+        return vi.mocked(ctfService.updateSpec).mock.calls[0][1].flags[0];
+    };
+
+    it("is offered for Windows file flags but not Linux ones", () => {
+        const dialog = openEditDialog(windowsFlag());
+        expect(within(dialog).getByRole("combobox", {name: "Windows access"})).toBeInTheDocument();
+        expect(within(dialog).getByLabelText(/Hidden file/)).toBeInTheDocument();
+        expect(within(dialog).queryByLabelText("File mode")).not.toBeInTheDocument();
+        cleanup();
+
+        const linux = openEditDialog(flag());
+        expect(within(linux).queryByRole("combobox", {name: "Windows access"})).not.toBeInTheDocument();
+        expect(within(linux).queryByLabelText(/Hidden file/)).not.toBeInTheDocument();
+    });
+
+    it("asks for a user only with user access, and requires a valid one", () => {
+        const dialog = openEditDialog(windowsFlag());
+        expect(within(dialog).queryByLabelText(/^Windows user/)).not.toBeInTheDocument();
+
+        fireEvent.mouseDown(within(dialog).getByRole("combobox", {name: "Windows access"}));
+        fireEvent.click(screen.getByRole("option", {name: "Administrators and one user"}));
+
+        expect(within(dialog).getByRole("button", {name: "Done"})).toBeDisabled();
+        fireEvent.change(within(dialog).getByLabelText(/^Windows user/), {target: {value: "student"}});
+        expect(within(dialog).getByRole("button", {name: "Done"})).toBeEnabled();
+    });
+
+    it("saves access, user and hidden for a Windows file flag", async () => {
+        const dialog = openEditDialog(windowsFlag({windows_access: "user", windows_user: "student"}));
+        fireEvent.click(within(dialog).getByLabelText(/Hidden file/));
+
+        expect(await saveDialog(dialog)).toMatchObject({windows_access: "user", windows_user: "student", hidden: true});
+    });
+
+    it("drops the user when access is not 'user', and every Windows option on a Linux flag", async () => {
+        const dialog = openEditDialog(windowsFlag({windows_access: "everyone", windows_user: "stale"}));
+        expect(await saveDialog(dialog)).toMatchObject({windows_access: "everyone", windows_user: null});
+        cleanup();
+        vi.mocked(ctfService.updateSpec).mockReset();
+
+        const linux = openEditDialog(flag({windows_access: "administrators", hidden: true}));
+        expect(await saveDialog(linux)).toMatchObject({windows_access: null, windows_user: null, hidden: false});
+    });
+});
+
+describe("flagProblems Windows user", () => {
+    it("requires a valid user name only for user access on a Windows file", () => {
+        const base = {...blankFlag("dc"), id: "dc-file", operating_system: "windows" as const, path: "C:\\flag.txt"};
+        expect(flagProblems({...base, windows_access: "user", windows_user: null}, [])[0]).toMatch(/^Windows user/);
+        expect(flagProblems({...base, windows_access: "user", windows_user: "bad name!"}, [])[0]).toMatch(/^Windows user/);
+        expect(flagProblems({...base, windows_access: "user", windows_user: "student"}, [])).toEqual([]);
+        expect(flagProblems({...base, windows_access: "everyone"}, [])).toEqual([]);
     });
 });

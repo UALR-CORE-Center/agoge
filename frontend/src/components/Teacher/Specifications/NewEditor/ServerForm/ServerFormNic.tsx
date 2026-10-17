@@ -16,7 +16,8 @@ import {
     FormGroup, FormGroupOutline,
     FormMuliTextField,
     FormTextField,
-    StyledFormFieldLabel
+    RequiredMark,
+    StyledFormFieldLabel,
 } from "../utils/FormFields";
 import {Clear, ErrorOutline} from "@mui/icons-material";
 import {Network} from "../../../../../services/Specification/specification.model";
@@ -97,8 +98,9 @@ const ServerFormNic: React.FC<Props> = ({
             <Collapse in={opened}>
                 <FormFields gap={3} sx={{paddingX: 1, paddingY: 2}}>
                     <FormGroup>
-                        <StyledFormFieldLabel>Network</StyledFormFieldLabel>
+                        <StyledFormFieldLabel>Network<RequiredMark/></StyledFormFieldLabel>
                         <FormAutocompleteField
+                            required
                             options={remoteNetworkInterfaces}
                             isOptionEqualToValue={(option, value) => {
                                 return option?.name == value;

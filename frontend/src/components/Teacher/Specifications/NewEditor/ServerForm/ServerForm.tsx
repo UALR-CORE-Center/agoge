@@ -28,6 +28,7 @@ import {
     FormGroup,
     FormGroupOutline,
     FormTextField,
+    RequiredMark,
     StyledFormFieldLabel,
     TableSelectField,
 } from "../utils/FormFields";
@@ -268,8 +269,9 @@ const ServerForm: React.FC<Props> = ({
                                         <FormFields>
                                             <FormGroupOutline showOverlay={disableForm}>
                                                 <FormGroup>
-                                                    <StyledFormFieldLabel>Name</StyledFormFieldLabel>
+                                                    <StyledFormFieldLabel>Name<RequiredMark/></StyledFormFieldLabel>
                                                     <FormTextField
+                                                        required
                                                         helpText={'Lowercase letters, numbers, hyphens allowed up to 52 characters'}
                                                         formKey={ServerFormKeys.serverName}
                                                         fieldFn={(key) => serverForm.getField(key, index)}

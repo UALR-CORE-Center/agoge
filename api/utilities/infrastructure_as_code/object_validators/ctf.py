@@ -73,6 +73,8 @@ class CtfValidator:
                     f"{location_type} format for {operating_system} ({pattern})"
                 )
 
+            self._validate_windows_file_options(flag)
+
             if not flag.get('decoy', False) and not (isinstance(flag.get('points'), int) and flag['points'] > 0):
                 raise AgogeValidationError(
                     f"Invalid CTF flag {flag_id}: points must be greater than 0 unless the flag is a decoy"
@@ -86,6 +88,24 @@ class CtfValidator:
                         f"Invalid CTF flag {flag_id}: unlocks_after names unknown flag '{prerequisite}'"
                     )
         self._validate_no_cycles(unlocks)
+
+    WINDOWS_FILE_LOCATIONS = ('file', 'ads')
+
+    @classmethod
+    def _validate_windows_file_options(cls, flag: dict) -> None:
+        flag_id = flag.get('id')
+        access = flag.get('windows_access')
+        user = flag.get('windows_user')
+        windows_file = flag.get('operating_system') == 'windows' and flag.get('location_type') in cls.WINDOWS_FILE_LOCATIONS
+        if (access or user or flag.get('hidden')) and not windows_file:
+            raise AgogeValidationError(
+                f"Invalid CTF flag {flag_id}: windows_access, windows_user and hidden apply only to Windows "
+                f"file and ads flags"
+            )
+        if access == 'user' and not user:
+            raise AgogeValidationError(f"Invalid CTF flag {flag_id}: windows_access 'user' requires windows_user")
+        if user and access != 'user':
+            raise AgogeValidationError(f"Invalid CTF flag {flag_id}: windows_user is used only with windows_access 'user'")
 
     @staticmethod
     def _validate_no_cycles(unlocks: dict) -> None:

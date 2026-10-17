@@ -7,6 +7,7 @@ import {
     FormMuliTextField,
     FormRadioBtns,
     FormTextField,
+    RequiredMark,
     StyledFormFieldLabel
 } from "../utils/FormFields";
 import {
@@ -20,6 +21,8 @@ interface Props extends AssessmentFormCommonChildrenProps {
 }
 
 const AssessmentQuestionForm: React.FC<Props> = ({assessmentFormHook, question, qIndex, disableForm}: Props) => {
+    const isInputQuestion =
+        assessmentFormHook.getFormField(AssessmentFormKeys.assessmentQuestionType, qIndex)!.value === AssessmentQuestionType.input;
     return (
         <React.Fragment>
 
@@ -59,8 +62,11 @@ const AssessmentQuestionForm: React.FC<Props> = ({assessmentFormHook, question, 
 
 
             <FormGroupOutline showOverlay={disableForm}> <FormGroup>
-                <StyledFormFieldLabel>Question Text</StyledFormFieldLabel>
+                <StyledFormFieldLabel>
+                    Question Text{isInputQuestion && <RequiredMark/>}
+                </StyledFormFieldLabel>
                 <FormMuliTextField
+                    required={isInputQuestion}
                     placeholder={"Question Text"}
                     rows={3}
                     disabled={disableForm}
@@ -71,11 +77,12 @@ const AssessmentQuestionForm: React.FC<Props> = ({assessmentFormHook, question, 
             </FormGroupOutline>
 
             {
-                assessmentFormHook.getFormField(AssessmentFormKeys.assessmentQuestionType, qIndex)!.value === AssessmentQuestionType.input &&
+                isInputQuestion &&
                 <FormGroupOutline showOverlay={disableForm}>
                     <FormGroup>
-                        <StyledFormFieldLabel>Question Answer</StyledFormFieldLabel>
+                        <StyledFormFieldLabel>Question Answer<RequiredMark/></StyledFormFieldLabel>
                         <FormTextField
+                            required
                             placeholder={"Question Answer"}
                             disabled={disableForm}
                             onInputChange={(field: AssessmentFormKeys, value) => assessmentFormHook.updateQuestionField(qIndex, field, value)}

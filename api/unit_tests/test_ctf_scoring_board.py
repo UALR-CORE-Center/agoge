@@ -6,6 +6,7 @@ import pytest
 
 from common.constants.database import DbCollections
 from common.constants.states import CtfStates
+from common.models.agoge import CtfBoardModel
 from common.models.response import CtfStudentBoardResponse
 from core.ctf import scoring as scoring_module
 from core.ctf.scoring import CtfScoring
@@ -238,3 +239,33 @@ def test_remaining_seconds_zero_once_ended(db):
     seed(db, state=CtfStates.ENDED, ends_at=NOW + 400)
 
     assert CtfScoring(db=db).board(A).remaining_seconds == 0
+
+
+def test_board_score_excludes_decoy_points_unless_the_penalty_is_revealed(db):
+    seed(db, score=25)
+    db.col(DbCollections.CTF_BOARD)[f"{CTF_ID}-{A}"]["decoy_points"] = -50
+
+    assert CtfScoring(db=db).board(A).score == 75
+
+
+def test_board_score_is_raw_when_the_decoy_penalty_is_revealed(db):
+    seed(db, score=25)
+    db.col(DbCollections.CTF)[CTF_ID]["spec"]["scoring"]["reveal_decoy_penalty"] = True
+    db.col(DbCollections.CTF_BOARD)[f"{CTF_ID}-{A}"]["decoy_points"] = -50
+
+    assert CtfScoring(db=db).board(A).score == 25
+
+
+def test_board_without_a_decoy_points_key_shows_its_score_unchanged(db):
+    seed(db, score=40)
+    assert "decoy_points" not in db.col(DbCollections.CTF_BOARD)[f"{CTF_ID}-{A}"]
+
+    assert CtfScoring(db=db).board(A).score == 40
+
+
+def test_board_model_defaults_decoy_points_to_zero(db):
+    seed(db)
+
+    model = CtfBoardModel(**db.col(DbCollections.CTF_BOARD)[f"{CTF_ID}-{A}"])
+
+    assert model.decoy_points == 0

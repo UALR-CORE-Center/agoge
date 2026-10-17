@@ -7,6 +7,7 @@ from cloud_deployment.utilities.menu_options import (
     SetupCategories,
     display_main_menu,
     display_sub_menu,
+    get_main_menu_categories,
     get_user_selection,
     category_menu
 )
@@ -110,7 +111,9 @@ def main():
     while True:
         # 1. Display the main category menu (top-level)
         display_main_menu()
-        category_choice = get_user_selection(len(SetupCategories))
+        category_choice = get_user_selection(
+            valid_choices=[category.value for category in get_main_menu_categories()]
+        )
         selected_category = SetupCategories(category_choice)
 
         if selected_category == SetupCategories.EXIT:

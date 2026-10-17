@@ -105,10 +105,18 @@ class CtfScoring:
             state_name=CtfStates(event.state).name,
             remaining_seconds=self._remaining_seconds(event),
             flag_format=f"{event.spec.scoring.flag_prefix}{{<challenge>_<20 hex characters>}}",
-            score=board.score,
+            score=self._student_score(event, board.score, board.decoy_points),
             challenges=challenges,
             public_scoreboard_enabled=event.public_scoreboard_enabled,
         )
+
+    @staticmethod
+    def _student_score(event: CtfEventModel, score: int, decoy_points: int) -> int:
+        """A score as a student may see it. Unless reveal_decoy_penalty is set, decoy points are taken
+        back out, so a team's own score cannot reveal that a submission hit a decoy."""
+        if event.spec.scoring.reveal_decoy_penalty:
+            return score
+        return score - decoy_points
 
     @staticmethod
     def _is_locked(spec_flag: CtfFlagSpecModel, solved: AbstractSet[str]) -> bool:
@@ -156,6 +164,11 @@ class CtfScoring:
         boards = self.events._boards(event)
         points = {flag.id: flag.points for flag in event.spec.flags}
         standings = [self._frozen_standing(b, points, event.scoreboard_frozen_at) for b in boards]
+        # Ranked on the shown score too, or a team's position would still give its decoy penalty away.
+        standings = [
+            (self._student_score(event, score, b.decoy_points), solve_count, last_solve_at)
+            for b, (score, solve_count, last_solve_at) in zip(boards, standings)
+        ]
         ranked = self._rank([(score, last_solve_at) for score, _, last_solve_at in standings])
         # Numbered by board_ids index, not list position, so a skipped invalid board can't shift other labels.
         numbers = {wid: n for n, wid in enumerate(event.board_ids, start=1)}
@@ -328,7 +341,7 @@ class CtfScoring:
         self, transaction, event: CtfEventModel, board_id: str, spec_flag: CtfFlagSpecModel
     ) -> Tuple[bool, int]:
         """Mark the hint taken and deduct its cost, decided from the board as read inside the transaction,
-        so two concurrent requests deduct once. Returns (taken by this call, board score)."""
+        so two concurrent requests deduct once. Returns (taken by this call, the score as the team sees it)."""
         board_ref = self.db.db.collection(DbCollections.CTF_BOARD.value).document(board_id)
         snapshot = board_ref.get(transaction=transaction)
         if not snapshot.exists:
@@ -339,7 +352,7 @@ class CtfScoring:
             raise NotFound(message=HINT_NOT_FOUND_MESSAGE)
         if state.hint_taken:
             # Already paid for: returned in any event state, without a write.
-            return False, board.score
+            return False, self._student_score(event, board.score, board.decoy_points)
         if self._is_locked(spec_flag, {f.flag_id for f in board.flags if f.solved}):
             # A locked flag is not listed to the team (H5), so its hint is not reachable either.
             raise NotFound(message=HINT_NOT_FOUND_MESSAGE)
@@ -350,7 +363,7 @@ class CtfScoring:
         state.hint_taken_at = time.time()
         score = board.score - spec_flag.hint_cost
         transaction.update(board_ref, {'flags': [f.model_dump() for f in board.flags], 'score': score})
-        return True, score
+        return True, self._student_score(event, score, board.decoy_points)
 
     def _rate_limit_in_transaction(
         self, transaction, ctf_id: str, workout_id: str, bucket: str, limit: int
@@ -404,6 +417,7 @@ class CtfScoring:
             verdict, points = 'decoy', spec_flag.points
             updates['score'] = board.score + points
             updates['decoy_count'] = board.decoy_count + 1
+            updates['decoy_points'] = board.decoy_points + points
         else:
             verdict, points = 'correct', spec_flag.points
             state.solved = True

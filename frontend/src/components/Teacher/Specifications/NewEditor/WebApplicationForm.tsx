@@ -27,6 +27,7 @@ import {
     FormFields,
     FormGroup, FormGroupOutline,
     FormTextField,
+    RequiredMark,
     StyledFormFieldLabel,
 } from "./utils/FormFields";
 
@@ -197,8 +198,9 @@ const WebApplicationForm: React.FC<Props> = ({formHooks, disableForm, specificat
                                     >
                                         <FormFields>
                                             <FormGroupOutline showOverlay={disableForm}> <FormGroup>
-                                                <StyledFormFieldLabel>Name</StyledFormFieldLabel>
+                                                <StyledFormFieldLabel>Name<RequiredMark/></StyledFormFieldLabel>
                                                 <FormTextField
+                                                    required
                                                     helpText={'Display name of the container'}
                                                     placeholder={'Example Application'}
                                                     formKey={WebApplicationFormKeys.webAppName}
@@ -212,8 +214,9 @@ const WebApplicationForm: React.FC<Props> = ({formHooks, disableForm, specificat
                                             </FormGroupOutline>
 
                                             <FormGroupOutline showOverlay={disableForm}> <FormGroup>
-                                                <StyledFormFieldLabel>Host Name</StyledFormFieldLabel>
+                                                <StyledFormFieldLabel>Host Name<RequiredMark/></StyledFormFieldLabel>
                                                 <FormTextField
+                                                    required
                                                     helpText={'Host name for the URL'}
                                                     placeholder={'http://example-com'}
                                                     disabled={disableForm}

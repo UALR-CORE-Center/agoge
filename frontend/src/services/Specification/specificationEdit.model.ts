@@ -1,4 +1,5 @@
 import {AssessmentScriptLanguages, Firewalls, UnitType} from "../../types/BuildConstants";
+import {CtfSpec} from "../Ctf/ctf.model";
 // TODO: Some of these objects are duplicates of what already exists in /types.
 //  Revisit these models to ensure that they need to exist here
 
@@ -185,6 +186,7 @@ export interface SpecificationEdit {
     assessment?: Assessment,
     rubric_support?: boolean;
     lms_quiz?: LMSQuiz;
+    ctf?: CtfSpec | null;
 
     build_type: string;
     creation_timestamp: number;

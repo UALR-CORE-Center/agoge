@@ -117,7 +117,7 @@ The `server` values must match `name` entries in the same specification's `serve
 | `flags` | Yes | 1 to 200 flags. |
 | `scoring.flag_prefix` | No | Default `agoge`. 2 to 16 lowercase letters or digits, starting with a letter. |
 | `scoring.submission_rate_limit` | No | Default 10, range 1 to 100. The maximum number of submissions per board, per flag id, in each 60-second window. |
-| `scoring.reveal_decoy_penalty` | No | Default false. When it is false, a student who submits a decoy sees 0 points even though the penalty is applied. |
+| `scoring.reveal_decoy_penalty` | No | Default false. When it is false, the penalty is applied but students never see it: the decoy response shows 0 points, and the team score and public scoreboard leave decoy points out. Your own **Scoreboard** tab always shows the full score. |
 
 ### Flag fields
 
@@ -130,7 +130,7 @@ The `server` values must match `name` entries in the same specification's `serve
 | `location_type` | Yes | `file`, `registry`, `env`, or `ads`. See the table below. |
 | `path` | Yes | Must match the pattern for its location type and operating system. |
 | `operating_system` | Yes | `linux` or `windows`. All flags on one server must use the same value. |
-| `access_level` | No | `user` (default), `root`, or `admin`. For documentation only: the planter always writes as the boot account, so set file permissions with `file_mode` and `file_owner`. |
+| `access_level` | No | `user` (default), `root`, or `admin`. For documentation only: the planter always writes as the boot account, so set file permissions with `file_mode` and `file_owner` on Linux, or `windows_access` on Windows. |
 | `points` | Yes | Must be greater than 0, except on a decoy, which may be 0 or negative. |
 | `decoy` | No | Default false. A decoy is never listed to students. Submitting one is recorded as a scope violation and adds its `points` (normally negative). |
 | `hint` | No | Up to 1,000 characters. |
@@ -138,6 +138,16 @@ The `server` values must match `name` entries in the same specification's `serve
 | `unlocks_after` | No | Flag ids that must be solved before this flag is listed to the team. They must exist, and they must not form a cycle. |
 | `file_mode` | No | Linux `file` flags only. An octal mode such as `0600`. |
 | `file_owner` | No | Linux `file` flags only. `user:group`. |
+| `windows_access` | No | Windows `file` and `ads` flags only. `administrators`, `user`, or `everyone`. Replaces the file's inherited permissions so that SYSTEM and Administrators have full control, plus read access for `windows_user` (`user`) or for every account (`everyone`). When it is omitted, the file keeps the permissions of the folder it is in. For an `ads` flag, it applies to the file that holds the stream. |
+| `windows_user` | With `windows_access: user` | The local account given read access: 1 to 20 letters, digits, `.`, `_`, or `-`. The account must exist on the image, or the plant fails with "could not set file access". |
+| `hidden` | No | Windows `file` and `ads` flags only. Default false. Sets the file's Hidden attribute. |
+
+Notes on `windows_access`:
+
+- **Administrators** always keep full control, so a student account that is in the local Administrators group can read any of these files. Give students a standard account when a flag should require privilege escalation.
+- **Permissions you set in the image are left alone** when `windows_access` is omitted. The planter overwrites the file's contents but keeps its existing access list, so you can still lock a file down by hand in the image.
+- **Changing `windows_access` back to omitted** does not restore the folder's permissions on a replant, because the planter no longer touches the access list. Rebuild the server, then replant.
+- **Two `ads` flags in the same host file** share that file's permissions and Hidden attribute. If their settings differ, the last flag planted wins, so give them the same settings.
 
 ### Flag locations
 
@@ -246,9 +256,9 @@ An admin can delete an event in `DRAFT` or `ARCHIVED`. Deleting removes the even
 These controls change scoring:
 
 - **Public scoreboard** lets students see standings on their workout page. Teams appear as anonymous "Team n", and the student's own row is highlighted.
-- **Freeze scoreboard** hides solves made after the freeze time from the public standings only. Hint costs, decoy penalties, and manual adjustments still show. Your own **Scoreboard** tab is never frozen.
+- **Freeze scoreboard** hides solves made after the freeze time from the public standings only. Hint costs and manual adjustments still show, and so do decoy penalties when `reveal_decoy_penalty` is true. Your own **Scoreboard** tab is never frozen.
 
-A team's score is its solved points, plus decoy points, minus hint costs, plus manual adjustments. Teams are ranked by score. Ties go to the team that reached that score first, and a team with no solves ranks below a team on the same score that has solves.
+A team's score is its solved points, plus decoy points, minus hint costs, plus manual adjustments. Unless `reveal_decoy_penalty` is true, students see that score without the decoy points, and the public scoreboard ranks on that figure. Teams are ranked by score. Ties go to the team that reached that score first, and a team with no solves ranks below a team on the same score that has solves.
 
 How submissions are judged:
 

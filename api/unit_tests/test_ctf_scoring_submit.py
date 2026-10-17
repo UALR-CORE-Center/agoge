@@ -448,3 +448,32 @@ def test_rate_limit_is_one_transaction_per_submission(db, clock):
     submit(db, A, "guess")
 
     assert db.rate_limit_transactions == 3
+
+
+def test_decoy_points_accumulate_across_decoys_of_different_values(monkeypatch):
+    trap2 = {"id": "trap2", "server": "web", "slot": 2, "points": -30, "decoy": True,
+             "location_type": "file", "path": "/root/t2.txt", "operating_system": "linux"}
+    monkeypatch.setitem(globals(), "FLAGS", FLAGS + [trap2])
+    db = FakeDb()
+    seed_event(db)
+
+    submit(db, A, flag(A, "trap"))
+    assert board(db)["decoy_points"] == -50
+    submit(db, A, flag(A, "trap2"))
+
+    assert board(db)["decoy_points"] == -80
+    assert board(db)["score"] == -80 and board(db)["decoy_count"] == 2
+
+
+def test_decoy_points_stay_out_of_correct_submissions_and_survive_them(db):
+    submit(db, A, flag(A, "trap"))
+    submit(db, A, flag(A, "web1"))
+
+    assert board(db)["decoy_points"] == -50
+    assert board(db)["score"] == 50
+
+
+def test_correct_submission_does_not_write_decoy_points(db):
+    submit(db, A, flag(A, "web1"))
+
+    assert board(db).get("decoy_points", 0) == 0

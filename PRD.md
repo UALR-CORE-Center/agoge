@@ -452,6 +452,7 @@ class CtfBoardModel(BaseModel):
     score: int = Field(default=0, description="Solved points + decoy points − hint costs + manual adjustments")
     solve_count: int = Field(default=0)
     decoy_count: int = Field(default=0)
+    decoy_points: int = Field(default=0, description="Sum of decoy points in `score`; student views subtract it unless reveal_decoy_penalty")
     last_solve_at: Optional[float] = Field(default=None, description="Ranking tiebreaker")
     arm_status: ArmStatus = Field(default='pending')
     arm_error: Optional[str] = Field(default=None)
@@ -918,7 +919,7 @@ single objects use `data = <object>`.
 4. No document, or a different `ctf_id` → `incorrect`.
 5. Different `workout_id` in this event → `cross_submission` with `matched_workout_id`.
 6. Same board → in one transaction on the board: already solved → `duplicate`;
-   decoy → add its points, `decoy_count += 1`, `decoy`; else set `solved`,
+   decoy → add its points to `score` and `decoy_points`, `decoy_count += 1`, `decoy`; else set `solved`,
    `solved_at`, add points, `solve_count += 1`, `last_solve_at`, `correct`.
    Also increment `attempts` on the parsed flag, if it exists.
 7. Append one `CtfSubmissionModel`.
@@ -1193,7 +1194,8 @@ costs money, takes many minutes, and asserts the active project is in
 - Student responses contain no `path`, `server`, `location_type`, `digest`, or
   `access_level`, and never list a decoy.
 - A decoy verdict's response names neither the host nor the penalty unless
-  `reveal_decoy_penalty` is true.
+  `reveal_decoy_penalty` is true. Without it, every score a student can read
+  (board, hint response, public scoreboard score and rank) excludes `decoy_points`.
 - Every game-master control route that reaches core writes exactly one
   `CtfLogModel`, including when core denies it. Rejections by `teacher_required`
   or `admin_required` happen before core and are not logged.
