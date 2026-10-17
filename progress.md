@@ -2070,3 +2070,44 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** docs only, so no code gates apply.
 - **Blockers:** V6 is still BLOCKED on Open Question V-5. V25 and HUMAN need a person.
 - **Next:** none the loop can do. V6 waits on V-5's answers; V25 and HUMAN are human-only.
+
+### Verification — 2026-10-17 — PASS
+- **Checked:** V21, V22, V23 and V24, which are every task ticked since the last verification (`9a16242`). HEAD is `ebfa508` and the tree was clean before this entry. Two read-only agents checked the four commits against PRD.md:1701-1707. I also checked these myself:
+  - I scanned the lines added in `9a16242..HEAD` for TODO/FIXME/NotImplemented/placeholder/stub. The only hit is a test comment saying `UnitValidator` is stubbed so the nested rules are what is under test. That is a test mock, not a stub in shipped code.
+  - I grepped every `CtfValidator(` call outside tests. All four (`file_manager.py:70`, `edit_manager.py:309`, `ctf/setup.py:130,281`) pass `image_loader`.
+  - The three Guacamole SQL templates use `'{port}'` (`guacamole_configuration.py:78,89,98`), and each `.format()` passes `port=conn["port"]`.
+  - V21:
+    - `ImageListTable` polls `nestedService.get_build_status` (`…/nested-build/`) for rows with an active build.
+    - Check In is disabled through `isNestedCheckInBlocked`.
+    - `NestedGuestDetails` renders in `ImageDetailsDialog` when the image has `nested`.
+    - `ServerConnectButton` renders `NestedTunnelHints` with `ssh -L` commands for each console and each exposed guest.
+  - V22:
+    - `DisplayProxy` passes `nics[0].ip_aliases`.
+    - `alias_index` resolves to the alias with any CIDR suffix stripped, and an out-of-range index raises.
+    - `port` falls back to 3389, 22 or 5901 by protocol.
+    - `NestedServersValidator` checks the N1/N2 machine type, the alias count and the `alias_index` range. It runs on both save paths.
+    - The tests cover an alias target, a console target and an ordinary target. The three bad cases are tested on both `file_manager` and `edit_manager`.
+  - V23:
+    - `NestedGuestsPanel` renders only for a nested image.
+    - The machine-type picker is filtered to `^n[12]-` for a nested image.
+    - **Add connections** writes `serverHumanInteraction`, which `render()` saves. The shapes match `HumanInteractionModel` (`alias_index`/`port`/`nested_guest`).
+    - N5 accepts a parent whose image has `nested`, with a test covering 3 image-ref forms.
+    - The N13 pre-fill sets `domain` to the guest name and `driver` from the catalog `agent`.
+    - Vitest covers alias filling and connection generation.
+  - V24:
+    - `docs/guides/nested-lab-hosts.md` covers every topic the PRD lists.
+    - The paths and messages it cites match the code: `/var/log/agoge-nested-builder.log` and `agoge-nested/message` (`builder.sh`), the stall and upload limits (`common/constants/nested.py`), and `agoge-pristine`.
+  - Notes, not reopened:
+    - No test renders `ImageListTable` itself. The polling and Check In wiring was confirmed by reading the code, and the pure logic behind it is unit-tested.
+    - A guest with several exposed NICs gets one RDP/SSH connection, on its first slot, as its doc comment says.
+    - `_has_nested_image` reloads the image for each guest with no cache. That only costs time.
+    - The "verified in browser" done-whens for V21 and V23 are still carried by HUMAN, which stays `[ ]`.
+    - V6 is still BLOCKED on V-5, and V25 is human-only.
+- **Gate results:**
+  - api/unit_tests: 1654 passed, coverage 97.67%, exit 0.
+  - cloud_functions/tests: 827 passed, coverage 94.28%, exit 0.
+  - build_files/cloud_deployment/tests: 327 passed, exit 0.
+  - frontend `npm test`: 47 files and 572 tests passed, exit 0.
+  - CTF ESLint gate: exit 0. CTF tsc gate: 0 CTF matches (repo-wide tsc exits 2 on pre-existing errors).
+  - Group V ESLint gate: exit 0. Group V tsc gate: 0 matches.
+- **Reopened:** none.
