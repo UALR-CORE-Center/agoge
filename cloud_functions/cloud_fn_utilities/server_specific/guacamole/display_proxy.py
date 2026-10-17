@@ -97,12 +97,15 @@ class DisplayProxy:
             if human_interaction is not None:
                 for connection in human_interaction:
                     if connection.display:
-                        server_ip = server.nics[0].internal_ip
-                        proxy_config = self.guac.prepare_guac_connection(connection=connection, server_ip=server_ip)
+                        nic = server.nics[0]
+                        # alias_index connections (nested guests) target an alias IP on NIC 0
+                        proxy_config = self.guac.prepare_guac_connection(
+                            connection=connection, server_ip=nic.internal_ip, ip_aliases=nic.ip_aliases
+                        )
                         proxy_configs.append(proxy_config)
                         proxy_connection = ProxyConnectionModel(
                             server=server.name,
-                            internal_ip_address=server_ip,
+                            internal_ip_address=proxy_config['ip'],
                             username=proxy_config['workspace_username'],
                             password=proxy_config['workspace_password'],
                         )

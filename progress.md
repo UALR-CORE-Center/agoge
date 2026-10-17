@@ -175,7 +175,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V19** Guests step — spec + done-when at PRD.md:1697 (code and vitest here; the browser check is carried by HUMAN)
 - [x] **V20** Access and Review steps — spec + done-when at PRD.md:1699 (code and vitest here; the browser check is carried by HUMAN)
 - [x] **V21** Image list and details for nested images — spec + done-when at PRD.md:1701 (code and vitest here; the browser check is carried by HUMAN)
-- [ ] **V22** Guacamole targets for guests — spec + done-when at PRD.md:1703
+- [x] **V22** Guacamole targets for guests — spec + done-when at PRD.md:1703
 - [ ] **V23** Spec editor and CTF integration — spec + done-when at PRD.md:1705 (needs N3, N5, N13; the browser check is carried by HUMAN)
 - [ ] **V24** Nested image guide — spec + done-when at PRD.md:1707
 - [ ] **V25** Live acceptance — spec + done-when at PRD.md:1708 — **HUMAN ONLY.** Builds real VMs on the development project; the loop must not attempt it. Carried by HUMAN.
@@ -2010,3 +2010,27 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No Python files changed.
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V22, Guacamole `alias_index`/`port` targets in `DisplayProxy` and `GuacamoleConfiguration.prepare_guac_connection`, plus the lab spec validation for nested images on both save paths.
+
+### Iteration 112 — 2026-10-17
+- **Completed:** V22.
+  - `GuacamoleConfiguration.prepare_guac_connection` takes `ip_aliases`. A connection with `alias_index` targets `ip_aliases[alias_index]`; a CIDR suffix is stripped, and an out-of-range index raises `ValueError`. `port` overrides the per-protocol default in `DEFAULT_PORTS` (rdp 3389, ssh 22, vnc 5901). The three SQL templates now take `{port}` and no longer hardcode it. The returned dict carries the resolved `ip` and `port`.
+  - `DisplayProxy.prepare_server_record` passes NIC 0's `ip_aliases`, and it records the resolved IP in `ProxyConnectionModel.internal_ip_address`.
+  - New `object_validators/nested_servers.py` `NestedServersValidator(config, image_loader)`:
+    - A server whose image doc has `nested` needs an n1/n2 machine type and at least `len(nested.exposures)` NIC 0 aliases.
+    - Every `alias_index` must be in range on any server.
+    - Public image paths (containing `/`) and image-less servers are skipped.
+  - The validator runs on both save paths: after `ServersValidator` in `SpecEditManager._validate_spec`, and after `UnitValidator` in `SpecFileManager._validate_spec`. Both use the new `LabSpecBase._get_image_record`.
+- **Learned:**
+  - The image loader result is used only when it is a `dict`. Existing spec tests use a bare `MagicMock` db, and its `.get('nested')` would otherwise look truthy.
+  - The nested checks run on partial editor saves too, unlike the WireGuard listener check. Every field they read comes from the servers form itself.
+  - Pre-existing ruff F541 at `lab_spec_base.py:111`; not touched.
+- **Tests:**
+  - `cloud_functions/tests/test_guacamole_nested_targets.py` (8): an alias target, an alias with a CIDR suffix, a console target with a port override, ordinary rdp/ssh/vnc targets (unchanged), an out-of-range index, and DisplayProxy end to end.
+  - `api/unit_tests/test_nested_server_spec_validation.py` (11): a valid spec, and the three bad cases (an E2 machine type, too few aliases, an alias_index out of range) on both save paths. It also covers a plain server, alias_index on a plain server, and the lookup skipping.
+- **Gate results:**
+  - api/unit_tests: 1647 passed, coverage 97.75%.
+  - cloud_functions/tests: 827 passed, coverage 94.28%.
+  - build_files: 327 passed.
+  - No frontend files changed.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V23 (the spec editor's Nested guests panel, alias filling, connection generation, and N5 accepting a nested-image parent). Its connection generator should emit `alias_index`/`port`/`nested_guest` in the shape this validator accepts.

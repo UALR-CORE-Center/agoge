@@ -55,6 +55,10 @@ class LabSpecBase(ABC):
             discriminator=discriminator,
         )
 
+    def _get_image_record(self, image_id: str):
+        """Image document for a spec server's image; NestedServersValidator's loader on both save paths."""
+        return self.db.get(collection_name=DbCollections.IMAGE, doc_id=image_id)
+
     @staticmethod
     def generate_discriminator() -> str:
         return IdGenerator.discriminator()
