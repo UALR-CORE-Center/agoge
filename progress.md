@@ -141,7 +141,7 @@ See `### Nested Guest Contract` in PRD.md.
 - [x] **N4** Nested contract constants — spec + done-when at PRD.md:1630
 - [x] **N5** Nested guest validator — spec + done-when at PRD.md:1632
 - [x] **N6** Guest payload builder — spec + done-when at PRD.md:1634
-- [ ] **N7** qemu-agent relay section — spec + done-when at PRD.md:1636
+- [x] **N7** qemu-agent relay section — spec + done-when at PRD.md:1636
 - [ ] **N8** Plant watcher installer — spec + done-when at PRD.md:1638
 - [ ] **N9** Nested plant procedure — spec + done-when at PRD.md:1640
 - [ ] **N10** Guest host reset publish — spec + done-when at PRD.md:1642
@@ -1216,3 +1216,25 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** api/unit_tests 1440 passed; cloud_functions/tests 525 passed; build_files/cloud_deployment/tests 319 passed; ruff clean on changed files. No frontend files changed.
 - **Blockers:** none.
 - **Next:** N7 (qemu-agent relay section in `build_payload`).
+
+### Iteration 82 — 2026-10-17
+- **Completed:** N7. `build_payload` routes a server with `nested_guests` to `_nested_host_payload`. The parent body covers only `flag.guest is None`, which must be linux. Each targeted `qemu-agent` guest with board flags gets a background `agoge_ctf_relay_qemu` section (`_LINUX_RELAY`):
+  1. `virsh -q domstate`, called with argv that holds no values.
+  2. `guest-ping` every 5 s within `RELAY_BUDGET_SECONDS`.
+  3. `guest-exec` with `build_guest_payload` as base64 `input-data`. Linux runs `/bin/bash -s`. Windows runs `powershell.exe -EncodedCommand <_WINDOWS_GUEST_BOOTSTRAP>`, which writes stdin under the loader's SYSTEM-only ACL, runs it with `-File`, then deletes it.
+  4. `guest-exec-status` until the process has exited.
+  5. The decoded first line, accepted only if it fits the `ok:/error:<nonce>` grammar, is written to `plant-result-<guest>`.
+
+  After the sections, `wait`, then `plant-result` last. The prologue's new `{ack}` slot writes `plant-ack` = nonce right after the redirect. That happens on nested hosts only; plain payloads are byte-for-byte unchanged. Payloads over `PLANT_PAYLOAD_MAX_BYTES` (new, 256 KB, in `ctf_plant_contract.py`) raise BadRequest. New `cloud_functions/tests/test_flag_planter_relay.py` (20 tests) runs the parent payload against fake virsh/curl/timeout/sleep. The tests cover:
+  - no virsh/curl/timeout argv holds `input-data` or a flag value;
+  - each guest's result key is written;
+  - the ack is first and `plant-result` is last;
+  - errors for a stopped guest, a silent agent and bad out-data;
+  - `bash -n`, and a pwsh parse of the bootstrap.
+- **Learned:**
+  - Agent JSON must be single-quoted on the virsh shell line, because virsh's tokenizer strips the double quotes from an unquoted one. The reviewer caught this on the ping.
+  - The fake virsh only matches single-quoted JSON, so that regression now fails. A mutation check confirmed it (8 tests failed). It fails slowly: the ping loop spins until each test's 60 s subprocess timeout.
+  - Offline-driver guests are skipped here. If a board's only flags on a server are offline-guest flags, `_nested_host_payload` raises "no flags on server"; N12 must relax that.
+- **Gate results:** api/unit_tests 1440 passed; cloud_functions/tests 545 passed; build_files/cloud_deployment/tests 319 passed; ruff clean on changed files. No frontend files changed.
+- **Blockers:** none.
+- **Next:** N8 (plant watcher installer in `LabServerManager._add_metadata`; loader stub takes the run lock and writes `/run/agoge-ctf/last`).
