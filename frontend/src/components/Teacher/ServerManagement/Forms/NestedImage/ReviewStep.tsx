@@ -36,7 +36,8 @@ interface ReviewStepProps {
 
 const ReviewStep: React.FC<ReviewStepProps> = ({state, errors, machineTypes, catalog, media}) => {
     const [showPasswords, setShowPasswords] = useState(false);
-    const meters = capacityMeters(state, machineTypes);
+    const context = {catalog, media};
+    const meters = capacityMeters(state, machineTypes, context);
     const mediaNames = Object.fromEntries(media.map(item => [item.id, item.filename]));
     const warnings = reviewWarnings(state, catalog, mediaNames);
     const consolePorts = Object.fromEntries(deriveConsoles(state.guests).map(console => [console.guest, console.port]));
@@ -50,7 +51,7 @@ const ReviewStep: React.FC<ReviewStepProps> = ({state, errors, machineTypes, cat
                 <Typography variant="subtitle1" component="h3">Host</Typography>
                 <Typography variant="body2">
                     {state.server_name || "—"} on {state.parent_os}; build {state.build_machine_type || "—"},
-                    lab {state.machine_type || "—"}; {effectiveDiskSize(state)} GB disk; {state.guests.length} guest
+                    lab {state.machine_type || "—"}; {effectiveDiskSize(state, context)} GB disk; {state.guests.length} guest
                     {state.guests.length === 1 ? "" : "s"} on {state.networks.length} network
                     {state.networks.length === 1 ? "" : "s"}.
                 </Typography>

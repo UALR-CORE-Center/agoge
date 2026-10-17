@@ -5,7 +5,13 @@ import {
     NestedOsCatalogEntry,
 } from "../../../../../services/Server/nested.model";
 import {ServerMachineTypes} from "../../../../../services/Specification/specificationEdit.model";
-import {catalogEntry, isWindows, NESTED_PARENT_OVERHEAD_MB, requiresProductKey} from "./guestRules";
+import {
+    catalogEntry,
+    GuestRuleContext,
+    isWindows,
+    NESTED_PARENT_OVERHEAD_MB,
+    requiresProductKey,
+} from "./guestRules";
 import {effectiveDiskSize, nestedMinDiskSize, NestedWizardState} from "./nestedWizardState";
 
 // Mirrors common/constants/nested.py.
@@ -75,7 +81,11 @@ const meter = (label: string, used: number, available: number, unit: string): Ca
     ({label, used, available, unit});
 
 // The checks of NestedHostValidator._validate_capacity and min_disk_size, as used/available pairs.
-export const capacityMeters = (state: NestedWizardState, machineTypes: ServerMachineTypes[]): CapacityMeter[] => {
+export const capacityMeters = (
+    state: NestedWizardState,
+    machineTypes: ServerMachineTypes[],
+    context: GuestRuleContext,
+): CapacityMeter[] => {
     const memory = state.guests.reduce((total, guest) => total + guest.memory_mb, 0) + NESTED_PARENT_OVERHEAD_MB;
     const vcpus = state.guests.reduce((total, guest) => total + guest.vcpus, 0);
     const meters: CapacityMeter[] = [];
@@ -88,7 +98,7 @@ export const capacityMeters = (state: NestedWizardState, machineTypes: ServerMac
         meters.push(meter(`${role} RAM (${name})`, memory, type.memory_mb, "MB"));
         meters.push(meter(`${role} vCPU (${name})`, vcpus, 2 * type.guest_cpus, "vCPU"));
     }
-    meters.push(meter("Disk", nestedMinDiskSize(state.guests), effectiveDiskSize(state), "GB"));
+    meters.push(meter("Disk", nestedMinDiskSize(state.guests, context), effectiveDiskSize(state, context), "GB"));
     return meters;
 };
 
