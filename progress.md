@@ -166,7 +166,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V10** Runtime service — spec + done-when at PRD.md:1679 (done before V9, which installs it: `render_runtime()`/`render_runtime_unit()` in `cloud_fn_utilities/server_specific/nested_scripts.py`)
 - [x] **V11** Nested template server provisioning — spec + done-when at PRD.md:1681
 - [x] **V12** Create route — spec + done-when at PRD.md:1683 (`ImageTemplateManager.check_out(product_keys=...)` takes the never-persisted keys; V12 must carry them in the CHECK_OUT message and `ControlHandler._check_out` must pass them through)
-- [ ] **V13** Build monitor — spec + done-when at PRD.md:1685
+- [x] **V13** Build monitor — spec + done-when at PRD.md:1685
 - [ ] **V14** Finalize handshake — spec + done-when at PRD.md:1687 (also merge the finalize-watcher bootstrap into `startup-script` on both check-out paths in `ImageTemplateManager._prepare_nested_check_out`; V11 left the re-check-out path with only `enable-guest-attributes`)
 - [ ] **V15** Media uploads — spec + done-when at PRD.md:1689
 - [ ] **V16** Frontend service layer — spec + done-when at PRD.md:1691
@@ -1703,3 +1703,31 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - Group V ESLint gate (`--no-error-on-unmatched-pattern`): exit 0.
   - Group V tsc gate: 0 matches (passes).
 - **Reopened:** none.
+
+### Iteration 101 — 2026-10-17
+- **Completed:** V13.
+  - `common/utilities/nested_build_monitor.py` defines `NestedBuildMonitor.refresh(image, now=None)`:
+    - It polls `agoge-nested/` only while the phase is `provisioning`/`building`. Every other phase is returned as stored.
+    - It maps the builder's `phase` values (`building`/`ready`/`failed`), the `guest-<name>` statuses (`failed:<msg>` → `failed`; unknown values ignored), `message` (cut to 200), and `heartbeat` (epoch → ISO).
+    - It writes only `{'nested_build': …}`, and only when something changed.
+    - On a move to `ready`/`failed`, it removes `agoge-nested-secrets` *before* the write. A failed removal leaves the record active, so the next refresh retries; after that, the terminal phase is never polled again (exactly once).
+    - Stall (heartbeat, or `started_at` before the first heartbeat, older than 45 min) and timeout (`started_at` older than 240 min) fail the build and publish the existing CONTROL/STOP/TEMPLATE_SERVER.
+    - A `NotFound` instance counts as "no attributes"; the stall clock still runs. Any other Compute error returns the stored build unjudged. A missing `started_at` is stamped.
+  - `refresh_active()` queries CHECKED_OUT images with `nested_build.phase` IN active phases, isolating per-image errors. `QuarterHourlyMaintenance._refresh_nested_builds` calls it.
+  - `GET /compute/images/{name}/nested-build/` (teacher, sync def) → `NestedImage.build_status`: 404 missing, 400 not nested.
+  - Midnight exemption:
+    - `ImageTemplateManager.stop_all_running` skips `is_active_nested_build` records.
+    - `ProjectServerManager.stop_everything(exempt_names=)` skips those instances by exact name, plus their STOPPED state sync.
+    - `DailyMaintenance._nested_build_names()` supplies the names.
+- **Learned:** `stop_everything` exempts by prefix, which is unsafe for image-named template servers (`foo` would exempt `foobar`), hence the separate `exempt_names`.
+- **Tests:**
+  - `cloud_functions/tests/test_nested_build_monitor.py` (31): each phase mapping, guests/message/heartbeat, field mask, secrets once (+ retry, + deleted server), stall, never-reported stall, timeout, inactive phases, unreadable attributes, quarter-hourly wiring, and the three daily exemption paths.
+  - `api/unit_tests/test_nested_build_route.py` (4): 200, 404, 400, 403.
+  - `test_ctf_overnight_exemption.py` assertions now include `exempt_names=[]`.
+- **Gate results:**
+  - api/unit_tests: 1571 passed (97.75%).
+  - cloud_functions/tests: 790 passed (94.28%).
+  - build_files: 319 passed.
+  - No frontend files changed.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V14 (finalize handshake). The monitor leaves `ready`/`finalizing` alone, so V14 owns those transitions.

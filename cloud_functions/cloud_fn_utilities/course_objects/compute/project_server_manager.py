@@ -21,13 +21,15 @@ class ProjectServerManager(BaseComputeManager):
     def load(self, server_name: str, **kwargs) -> None:
         pass
 
-    def stop_everything(self, exempt_prefixes: Iterable[str] = ()) -> None:
-        """Stops every instance in the project except those whose name starts with one of exempt_prefixes"""
+    def stop_everything(self, exempt_prefixes: Iterable[str] = (), exempt_names: Iterable[str] = ()) -> None:
+        """Stops every instance in the project except those named in exempt_names or whose name starts
+        with one of exempt_prefixes"""
         exempt_prefixes = tuple(exempt_prefixes)
+        exempt_names = set(exempt_names)
         instances = self.compute_instance.list(project=self.env.project, zone=self.env.zone, wait=False)
         if instances:
             for instance in instances:
-                if exempt_prefixes and instance.name.startswith(exempt_prefixes):
+                if instance.name in exempt_names or (exempt_prefixes and instance.name.startswith(exempt_prefixes)):
                     continue
                 try:
                     self.compute_instance.stop(resource_name=instance.name, wait=False)
@@ -44,6 +46,8 @@ class ProjectServerManager(BaseComputeManager):
         images = self.db.query(collection_name=self.collection.IMAGE, filters=filters)
         operations = []
         for image in images:
+            if image.get('name') in exempt_names:
+                continue
             image['state'] = ServerStates.STOPPED.value
             if validated := self.validate(AgogeImageModel, log_location=self.log_name).load(image):
                 operations.append(

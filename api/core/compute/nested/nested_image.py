@@ -8,10 +8,12 @@ from common.constants.database import DbCollections
 from common.constants.google import ImageProjects
 from common.constants.pub_sub import PubSub
 from common.constants.states import ImageStatus
-from common.exceptions import Conflict
+from common.exceptions import BadRequest, Conflict, NotFound
 from common.models.agoge import AgogeImageModel, NestedBuildStatusModel, NestedImageCreateRequest, NestedOsCatalogModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.models.users import AgogeUser
+from common.utilities.gcp.cloud_logger import LoggerNames
+from common.utilities.nested_build_monitor import NestedBuildMonitor
 
 from core.compute.image import ComputeImage
 from core.compute.nested.validator import NestedHostValidator
@@ -38,6 +40,22 @@ class NestedImage(ComputeImage):
         entries = self.catalog_validator.load(records, halt_on_error=False) or []
         enabled = [entry for entry in entries if entry and entry.is_enabled]
         return sorted(enabled, key=lambda entry: (entry.group, entry.display_name))
+
+    def build_status(self, image_name: str) -> NestedBuildStatusModel:
+        """Refresh the build from the parent's guest attributes, then return it.
+
+        Raises:
+            NotFound: No image record has this name
+            BadRequest: The image is not a nested host
+        """
+        if not (image := self.db.get(collection_name=self.collection, doc_id=image_name)):
+            raise NotFound(message=f'No image found for ID: {image_name}')
+        monitor = NestedBuildMonitor(
+            env_dict=self.env_dict, log_name=LoggerNames.API, db=self.db, pubsub_manager=self.pubsub_manager
+        )
+        if (status := monitor.refresh(image)) is None:
+            raise BadRequest(f'Image {image_name} is not a nested host.')
+        return status
 
     def create(self, user: AgogeUser, request: NestedImageCreateRequest) -> AgogeImageModel:
         """Validate, derive, write image/<name>, then publish CHECK_OUT.
