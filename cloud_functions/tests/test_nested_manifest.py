@@ -188,7 +188,9 @@ def test_manifest_downloads_each_seeded_appliance_disk_by_its_pinned_url(entry):
     guest = json.loads(render_manifest(spec, {entry.id: entry}, {}))['guests'][0]
     assert guest['media'] == {'source': 'url', 'url': entry.media_url, 'sha256': entry.media_sha256,
                               'format': entry.media_formats[0]}
-    assert entry.media_formats[0] in {'qcow2', 'raw', 'img.xz', 'img.bz2'}
+    # The disk formats prepare_disk's case handles; iso is not a disk image.
+    assert entry.media_formats[0] in {'qcow2', 'raw', 'vmdk', 'vhd', 'vhdx', 'img.xz', 'img.bz2', 'tar.xz', 'ova',
+                                      'zip', '7z'}
     assert guest['catalog']['install_method'] == 'disk_image'
     assert guest['catalog']['net_config'] == 'none'
 

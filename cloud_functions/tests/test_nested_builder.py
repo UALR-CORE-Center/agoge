@@ -12,7 +12,9 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import textwrap
+import zipfile
 
 import pytest
 
@@ -147,6 +149,13 @@ FAKE_GENISOIMAGE = textwrap.dedent("""\
 FAKE_LOGGER = '#!/bin/bash\necho "$(basename "$0") $*" >> "$FAKE_LOG"\n'
 FAKE_SLEEP = '#!/bin/bash\necho "sleep $*" >> "$FAKE_LOG"\n/bin/sleep 0.01\n'
 FAKE_SHA256SUM = '#!/bin/bash\necho "sha256sum $*" >> "$FAKE_LOG"\nexec shasum -a 256 "$@"\n'
+# p7zip is rarely installed on a dev machine; zipfile extracts `7z x -y -o<dir> <archive>` the same way, paths kept.
+FAKE_7Z = textwrap.dedent(f"""\
+    #!/bin/bash
+    echo "7z $*" >> "$FAKE_LOG"
+    for arg in "$@"; do case "$arg" in -o*) out=${{arg#-o}} ;; esac; done
+    exec {sys.executable} -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[2]).extractall(sys.argv[1])' "$out" "${{@: -1}}"
+""")
 
 
 def _sha(content):
@@ -224,7 +233,7 @@ def builder(tmp_path):
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
     fakes = {'curl': FAKE_CURL, 'gcloud': FAKE_GCLOUD, 'virsh': FAKE_VIRSH, 'virt-install': FAKE_VIRT_INSTALL, 'qemu-img': FAKE_QEMU_IMG,
-             'genisoimage': FAKE_GENISOIMAGE, 'sleep': FAKE_SLEEP, 'sha256sum': FAKE_SHA256SUM,
+             'genisoimage': FAKE_GENISOIMAGE, 'sleep': FAKE_SLEEP, 'sha256sum': FAKE_SHA256SUM, '7z': FAKE_7Z,
              'jq': f'#!/bin/bash\necho "jq $*" >> "$FAKE_LOG"\nexec {REAL_JQ} "$@"\n'}
     for name in ('virt-customize', 'apt-get', 'systemctl', 'chgrp'):
         fakes[name] = FAKE_LOGGER
@@ -848,6 +857,59 @@ def test_an_xz_disk_image_that_will_not_expand_fails_only_that_guest(builder):
     last, _ = _attributes(builder.fake)
     assert result.returncode == 0, result.stderr
     assert last['guest-fw'] == 'failed:could not expand the img.xz media'
+    assert '--name fw' not in log
+    assert not (builder.root / MEDIA_DIR.lstrip('/') / 'work-fw').exists()
+    assert last['guest-deb'] == 'ready'
+
+
+def _zip_firewall_catalog(content):
+    # The opnsense fixture, re-pointed at a zip medium (the Metasploitable 2 shape) with content's hash.
+    entry = CATALOG['opnsense'].model_copy(update={
+        'media_url': 'https://pkg.opnsense.example/vm.zip', 'media_sha256': _sha(content), 'media_formats': ['zip']})
+    return dict(CATALOG, opnsense=entry)
+
+
+def _zip(tmp_path, members):
+    path = tmp_path / 'vm.zip'
+    with zipfile.ZipFile(path, 'w') as archive:
+        for name, data in members.items():
+            archive.writestr(name, data)
+    return path.read_bytes()
+
+
+@needs_tools
+def test_a_zip_disk_image_converts_its_largest_disk_file(builder, tmp_path):
+    # Metasploitable 2 ships a VMware folder: the vmdk next to its vmx and nvram.
+    vm = _zip(tmp_path, {'Metasploitable2-Linux/Metasploitable.vmdk': b'KDMV' + b'\0' * 4096,
+                         'Metasploitable2-Linux/Metasploitable.vmx': b'scsi0.virtualDev = "lsilogic"\n',
+                         'Metasploitable2-Linux/Metasploitable.nvram': b'\0' * 64})
+    (builder.fake / 'web' / 'vm.zip').write_bytes(vm)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(globals(), 'CATALOG', _zip_firewall_catalog(vm))
+        result, log = builder(spec=_spec(fw={'os_id': 'opnsense', 'media_id': None}))
+
+    last, _ = _attributes(builder.fake)
+    work = builder.root / MEDIA_DIR.lstrip('/') / 'work-fw'
+    assert result.returncode == 0, result.stderr
+    # No -f: qemu-img probes the vmdk's own header rather than being told a format.
+    assert f'qemu-img convert -O qcow2 {work}/Metasploitable2-Linux/Metasploitable.vmdk ' in log
+    assert not work.exists()
+    assert last['guest-fw'] == 'ready'
+
+
+@needs_tools
+def test_a_zip_without_a_disk_file_fails_only_that_guest(builder, tmp_path):
+    vm = _zip(tmp_path, {'Metasploitable2-Linux/Metasploitable.vmx': b'memsize = "512"\n'})
+    (builder.fake / 'web' / 'vm.zip').write_bytes(vm)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(globals(), 'CATALOG', _zip_firewall_catalog(vm))
+        result, log = builder(spec=_spec(fw={'os_id': 'opnsense', 'media_id': None}))
+
+    last, _ = _attributes(builder.fake)
+    assert result.returncode == 0, result.stderr
+    assert last['guest-fw'] == 'failed:no disk image found in the zip media'
     assert '--name fw' not in log
     assert not (builder.root / MEDIA_DIR.lstrip('/') / 'work-fw').exists()
     assert last['guest-deb'] == 'ready'
