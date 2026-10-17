@@ -16,6 +16,8 @@ import {
     Link,
     Paper,
     TextField,
+    ToggleButton,
+    ToggleButtonGroup,
 } from "@mui/material";
 import Button from "@mui/material/Button";
 import Typography from "@mui/material/Typography";
@@ -29,6 +31,7 @@ import InputTags from "../../../../Common/FormInputs/InputTags";
 import NumberInputField from "../../../../Common/FormInputs/NumberInputField";
 import TextAreaField from "../../../../Common/FormInputs/TextAreaField";
 import SimpleSnackbar from "../../../../Common/SnackBar/SnackBar";
+import NestedImageWizard from "../NestedImage/NestedImageWizard";
 import ServerValidationDialog from "../ServerValidationDialog";
 import {ImageSelectTable} from "./ImageTemplateSelector/ImageSelectTable";
 import MachineTypeSelector from "./MachineTypeSelector";
@@ -37,8 +40,10 @@ import {absoluteUrl} from "../../../../../utilities/appContext";
 import {serverImageArchitectureError} from "../../../../../utilities/imageArchitecture";
 
 
+type ImageType = 'standard' | 'nested';
 
 const ServerCreatorForm: React.FC = () => {
+    const [imageType, setImageType] = useState<ImageType>('standard');
     const [selectedImageName, setSelectedImageName] = useState("");
     const [selectedImageFamily, setSelectedImageFamily] = useState("");
     const [os, setOs] = useState('');
@@ -142,7 +147,8 @@ const ServerCreatorForm: React.FC = () => {
             // Process remaining fields before creating formObject
             formData.set('image_template', selectedImageRow.id);
             formData.set('image_scope', imageScope);
-            formData.set('enable_display', enableDisplay.toString());
+            // ComputeImage._generate_human_interaction reads `display`; the old `enable_display` key was ignored.
+            formData.set('display', enableDisplay.toString());
             formData.set('disk_size', diskSize.toString());
             formData.set('server_name', serverName);
             formData.set('os', os);
@@ -195,15 +201,31 @@ const ServerCreatorForm: React.FC = () => {
                     gutterBottom={true}
                     marginTop={2}
                 >
-                    Edit Server
+                    Create Server
                 </Typography>
                 <Typography
                     variant={"subtitle1"}
                     gutterBottom={true}
                 >
-                    Edit your custom compute instance
+                    {imageType === 'nested'
+                        ? "Build a Debian host that runs up to eight guest VMs on networks you define"
+                        : "Create a custom compute instance"}
                 </Typography>
+                <ToggleButtonGroup
+                    exclusive
+                    color="primary"
+                    size="small"
+                    aria-label="Image type"
+                    sx={{mt: 1}}
+                    value={imageType}
+                    onChange={(_event, value: ImageType | null) => value && setImageType(value)}
+                >
+                    <ToggleButton value="standard">Standard VM</ToggleButton>
+                    <ToggleButton value="nested">Nested lab host</ToggleButton>
+                </ToggleButtonGroup>
             </Box>
+
+            {imageType === 'nested' ? <NestedImageWizard /> : (
 
 
             <Paper
@@ -338,7 +360,7 @@ const ServerCreatorForm: React.FC = () => {
                                 label="Enable display"
                                 control={
                                     <Checkbox
-                                        name={"enable_display"}
+                                        name={"display"}
                                         checked={enableDisplay}
                                         onChange={handleCheckboxChange}
                                     />
@@ -473,6 +495,7 @@ const ServerCreatorForm: React.FC = () => {
                     horizontal="center"
                 />
             </Paper>
+            )}
         </Container>
     )
 }

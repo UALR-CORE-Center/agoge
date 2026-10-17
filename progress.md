@@ -170,7 +170,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V14** Finalize handshake — spec + done-when at PRD.md:1687 (also merge the finalize-watcher bootstrap into `startup-script` on both check-out paths in `ImageTemplateManager._prepare_nested_check_out`; V11 left the re-check-out path with only `enable-guest-attributes`)
 - [x] **V15** Media uploads — spec + done-when at PRD.md:1689
 - [x] **V16** Frontend service layer — spec + done-when at PRD.md:1691
-- [ ] **V17** Wizard shell and Host step — spec + done-when at PRD.md:1693 (code and vitest here; the browser check is carried by HUMAN)
+- [x] **V17** Wizard shell and Host step — spec + done-when at PRD.md:1693 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **V18** Networks step — spec + done-when at PRD.md:1695 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **V19** Guests step — spec + done-when at PRD.md:1697 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **V20** Access and Review steps — spec + done-when at PRD.md:1699 (code and vitest here; the browser check is carried by HUMAN)
@@ -1874,3 +1874,27 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No Python files changed, so the Python suites were not rerun (last run: 1636 / 819 / 327).
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V17, the wizard shell and Host step. Use `nestedService.list_machine_types()` for the build and lab machine types.
+
+### Iteration 107 — 2026-10-17
+- **Completed:** V17 (code and vitest; the browser check is still carried by HUMAN).
+  - `ServerCreatorForm` has a Standard VM / Nested lab host `ToggleButtonGroup`. Standard keeps the old form, now headed "Create Server", and sends `display` instead of `enable_display` (the checkbox `name` and the `formData.set` both changed).
+  - `Forms/NestedImage/nestedWizardState.ts` holds `NestedWizardState` (Host fields, plus `networks` pre-filled with the `lab` NAT network, `guests`, and `product_keys`), the mirrored disk constants, `nestedMinDiskSize`/`effectiveDiskSize`, `validateHostStep`, per-step `validateStep`, and `resolveNavigation`. Back is always allowed. Forward lands on the first invalid step before the target, and that can be an earlier step: a guest change can break the Host disk size.
+  - `NestedImageWizard.tsx` is a non-linear `Stepper` (Host, Networks, Guests, Access, Review) modeled on `NewEditor/Editor.tsx`. A step shows its errors only after a forward move has submitted it. Machine types come from `nestedService.list_machine_types()`, and the `n2-standard-8` build default is cleared when the list lacks it.
+  - `HostStep.tsx` has name, description, labels, parent OS, build and lab machine types, disk size (shows the computed minimum and keeps a local string while typing), username (the API's `_validate_username` regex), and SSH key (OpenSSH format).
+  - Networks, Guests, Access and Review currently render read-only `StepSummary` views. Networks and Guests validate only "at least one". There is no submit button yet.
+- **Learned:**
+  - react-router `<Form>` needs a data router in tests (`createMemoryRouter` + `RouterProvider`).
+  - A real data-router `navigate` throws `RequestInit: Expected signal ... AbortSignal` under jsdom/undici, so `ServerCreatorForm.test.tsx` mocks `useNavigate`.
+  - MUI `TextField`'s `aria-label` lands on the FormControl root, not the input. Query by label.
+- **Tests:** `nestedWizardState.test.ts` (21), `NestedImageWizard.test.tsx` (6), and `ServerCreatorForm.test.tsx` (2). The last asserts the exact Standard body with `display: "true"`.
+- **Gate results:**
+  - frontend `npm test`: 39 files and 498 tests passed, rerun after the disk-input fix.
+  - Group V ESLint gate (plus `NestedImage/`): exit 0.
+  - Group V tsc gate (plus `ServerCreatorForm`): 0 matches.
+  - `ServerCreatorForm.tsx` has the same 6 lint problems it had before this change.
+  - No Python files changed.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:**
+  - V18: replace the Networks `StepSummary` with the editor, and extend `validateNetworksStep` with the client-side network rules.
+  - V19: guests. It must also flag the Host disk size when guest disks grow, which `resolveNavigation` already routes back to Host.
+  - V20: submit via `toNestedImageCreateRequest`. Wizard state is lost when the toggle switches back to Standard; lift it if that matters.
