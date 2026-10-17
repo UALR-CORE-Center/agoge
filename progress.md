@@ -171,7 +171,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V15** Media uploads — spec + done-when at PRD.md:1689
 - [x] **V16** Frontend service layer — spec + done-when at PRD.md:1691
 - [x] **V17** Wizard shell and Host step — spec + done-when at PRD.md:1693 (code and vitest here; the browser check is carried by HUMAN)
-- [ ] **V18** Networks step — spec + done-when at PRD.md:1695 (code and vitest here; the browser check is carried by HUMAN)
+- [x] **V18** Networks step — spec + done-when at PRD.md:1695 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **V19** Guests step — spec + done-when at PRD.md:1697 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **V20** Access and Review steps — spec + done-when at PRD.md:1699 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **V21** Image list and details for nested images — spec + done-when at PRD.md:1701 (code and vitest here; the browser check is carried by HUMAN)
@@ -1898,3 +1898,19 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - V18: replace the Networks `StepSummary` with the editor, and extend `validateNetworksStep` with the client-side network rules.
   - V19: guests. It must also flag the Host disk size when guest disks grow, which `resolveNavigation` already routes back to Host.
   - V20: submit via `toNestedImageCreateRequest`. Wizard state is lost when the toggle switches back to Standard; lift it if that matters.
+
+### Iteration 108 — 2026-10-17
+- **Completed:** V18 (code and vitest; the browser check is still carried by HUMAN).
+  - `Forms/NestedImage/networkRules.ts` mirrors `NestedHostValidator._validate_networks`: 1–8 networks, SLUG15 unique names, a strict RFC 1918 CIDR from /16 to /29, no overlap with the reserved ranges (169.254/16, 192.168.122/24) or an earlier network, addresses inside the range and not the network or broadcast address, NAT and DHCP need `parent_address`, `dhcp_start <= dhcp_end`, and the range must exclude the parent. Errors are keyed `networks.<index>.<field>` (`networkErrorKey`), with `networks` for list-level errors. `validateNetworksStep` now calls it.
+  - `NetworksStep.tsx` has one outlined section per network (name, CIDR, mode, parent address, DHCP switch and range), plus **Add network** (`nextNestedNetwork`: `netN` on the first free 192.168.x.0/24 from .101, isolated, valid as-is). Remove is disabled for the last network and for a network a guest NIC uses. Renaming a network carries guest NICs along (`renameNetworkInGuests`), but only while the old name is unique.
+  - `NetworkTopology.tsx` is the inline-SVG preview. Rails are networks (NAT ones in the primary colour). Boxes are the parent and the guests, with a drop line per parent address or NIC, labelled with the IP or "DHCP". NICs on a missing network are skipped.
+  - The wizard renders `NetworksStep`, and `StepSummary` no longer has a Networks branch.
+- **Learned:** the API checks `dhcp_start`/`dhcp_end` as host addresses even when `dhcp` is false, because the transformer still sends them. The client does the same, and `NetworksStep` shows those errors in an Alert while the range fields are hidden.
+- **Tests:** `networkRules.test.ts` (15) covers parsing, overlap (with another network and with the reserved ranges), prefix bounds, the address and DHCP range rules, the suggestions, and rename. `NetworkTopology.test.tsx` (1). `NestedImageWizard.test.tsx` has a new Networks flow test (7 tests in total).
+- **Gate results:**
+  - frontend `npm test`: 41 files and 515 tests passed.
+  - Group V ESLint gate: exit 0.
+  - Group V tsc gate: 0 matches.
+  - No Python files changed.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V19, the Guests step. Validate each NIC's network against `state.networks` and each static IP with `parseIpv4`/`parseCidr` from `networkRules.ts`: inside the CIDR, not the parent address, not inside the DHCP range. `resolveNavigation` already sends the instructor back to Guests when a network edit breaks a NIC.
