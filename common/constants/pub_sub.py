@@ -37,6 +37,7 @@ class PubSub:
         CTF_ARM_BOARD = 18   # plant every flag on one board, then aggregate
         CTF_PLANT = 19       # plant one board's flags on one server (or all its servers)
         CTF_HOST_RESET = 20  # reset one server of one board in a ResetMode
+        NESTED_FINALIZE = 21  # shut a nested template server's guests down and snapshot them, then CHECK_IN
 
     class CourseObjects(Enum):
         """Course Lab objects"""

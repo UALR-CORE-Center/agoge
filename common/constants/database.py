@@ -72,3 +72,5 @@ class DbCollections(str, Enum):
     CTF_RATE_LIMIT = 'agoge-ctf-rate-limit'
     CTF_SUBMISSION = 'agoge-ctf-submission'
     CTF_LOG = 'agoge-ctf-log'
+    NESTED_OS_CATALOG = 'nested-os-catalog'
+    NESTED_MEDIA = 'nested-media'

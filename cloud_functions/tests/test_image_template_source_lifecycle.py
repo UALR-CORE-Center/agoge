@@ -492,8 +492,17 @@ def _image_api_with_mock_client(project):
     return api
 
 
+# A complete NestedHostSpecModel: check-in revalidates the record against AgogeImageModel, which types `nested`.
+NESTED_SPEC = {
+    'parent_os': 'debian-12',
+    'networks': [{'name': 'lab', 'cidr': '10.10.0.0/24', 'mode': 'nat', 'parent_address': '10.10.0.1'}],
+    'guests': [{'name': 'linux-guest', 'os_id': 'debian-12', 'nics': [{'network': 'lab'}],
+                'admin_username': 'agoge', 'admin_password': 'Passw0rd!'}],
+}
+
+
 @pytest.mark.parametrize('nested, expected_licenses', [
-    ({'parent_os': 'debian-12'}, [ENABLE_VMX_LICENSE]),
+    (NESTED_SPEC, [ENABLE_VMX_LICENSE]),
     (None, []),
 ], ids=['nested-record', 'standard-record'])
 def test_check_in_licenses_only_nested_images_for_vmx(template, nested, expected_licenses):

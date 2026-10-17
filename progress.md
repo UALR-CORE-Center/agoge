@@ -158,7 +158,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V2** Nested machine types — spec + done-when at PRD.md:1663
 - [x] **V3** License on check-in — spec + done-when at PRD.md:1665
 - [x] **V4** Template startup-script merge — spec + done-when at PRD.md:1667
-- [ ] **V5** Models and constants — spec + done-when at PRD.md:1669 (`common/constants/nested.py` already exists from V2 with `NESTED_MACHINE_FAMILIES`, `NESTED_MAX_MACHINE_MEMORY_MB`, `STANDARD_MAX_MACHINE_MEMORY_MB`; extend it)
+- [x] **V5** Models and constants — spec + done-when at PRD.md:1669 (`common/constants/nested.py` already exists from V2 with `NESTED_MACHINE_FAMILIES`, `NESTED_MAX_MACHINE_MEMORY_MB`, `STANDARD_MAX_MACHINE_MEMORY_MB`; extend it)
 - [ ] **V6** OS catalog and seeding — spec + done-when at PRD.md:1671
 - [ ] **V7** Nested host validator — spec + done-when at PRD.md:1673
 - [ ] **V8** Manifest and unattend rendering — spec + done-when at PRD.md:1675
@@ -1474,3 +1474,29 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** api/unit_tests 1461 passed; cloud_functions/tests 641 passed; build_files 319 passed. No frontend files changed.
 - **Blockers:** none.
 - **Next:** V5 (models and constants).
+
+### Iteration 94 — 2026-10-17
+- **Completed:** V5.
+  - Models in `common/models/agoge.py`, just above `AgogeImageModel`: `NestedOsCatalogModel`, `NestedMediaModel`, `NestedNetworkModel`, `NestedGuestNicModel`, `NestedGuestModel`, `NestedHostSpecModel`, `NestedBuildStatusModel`, and `NestedImageCreateRequest`, plus the value-set Literals and `SLUG15`.
+  - `AgogeImageModel` gains `nested` and `nested_build`, and `base_family` now defaults to `None` instead of `(None,)`.
+  - `HumanInteractionModel` gains `nested_guest`, `alias_index` (≥ 0), and `port` (1–65535).
+  - New `DbCollections.NESTED_OS_CATALOG` and `NESTED_MEDIA`, and `PubSub.Actions.NESTED_FINALIZE = 21`.
+  - `common/constants/nested.py` now holds every value in the contract's constants table.
+  - Additions beyond the contract text:
+    - The catalog model rejects a non-https `media_url`.
+    - It rejects an entry with no URL unless `requires_upload` is set.
+    - It rejects a Windows entry with a blank `license_note`.
+    - `NestedImageCreateRequest` rejects client-sent `exposures`, `console_ports`, and `vnc_passwords`, because the API derives them.
+- **Tests:** `api/unit_tests/test_nested_models.py` (33).
+- **Learned:**
+  - `nested` is now typed, so a record holding a partial dict fails `AgogeImageModel` validation. Check-in revalidates the record, so the V3 test fixture now uses a complete spec (`NESTED_SPEC`).
+  - `test_nested_virtualization.py` still uses partial dicts. That works only because those paths never validate the record.
+  - The hand-built `image/nested-hv-debian12` doc has no `nested` field, so it still validates as a standard image.
+  - `common/tests` (235 passed) is not in any gate. Run it with `PYTHONPATH=.:api:cloud_functions`.
+- **Gate results:**
+  - api/unit_tests: 1494 passed.
+  - cloud_functions/tests: 641 passed.
+  - build_files: 319 passed.
+  - No frontend files changed.
+- **Blockers:** none.
+- **Next:** V6 (OS catalog and seeding). Open Question V-5 must be answered first.
