@@ -165,7 +165,8 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
     - [x] **V6b1** (iteration 116) Ubuntu 20.04, 22.04, 24.04 and 26.04 cloud images, pinned to dated `cloud-images.ubuntu.com/releases/<codename>/release-YYYYMMDD/` files with the SHA-256s from each release's published `SHA256SUMS`.
     - [x] **V6b2a** (iteration 119) Rocky Linux 8.10/9.8/10.2 and AlmaLinux 8.10/9.8/10.2 GenericCloud images (`nm-keyfile`), pinned to dated files under each publisher's versioned (not major-only) directory, with SHA-256s from the published `CHECKSUM` files.
     - [x] **V6b2b** (iteration 120) Fedora 43 (build 1.6) and Fedora 44 (build 1.7) Cloud Base Generic images (`nm-keyfile`), pinned under `dl.fedoraproject.org/pub/fedora/linux/releases/<n>/Cloud/x86_64/images/` with SHA-256s from each release's signed `CHECKSUM`. Also makes `builder.sh`'s firstboot root grow handle Fedora's btrfs root.
-    - [ ] **V6b2** The rest of V6b (Kali, Debian, CentOS, openSUSE/Arch/Alpine, Metasploitable 2, Microsoft evals, appliances). Microsoft and Kali stay BLOCKED on V-5. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file. Debian publishes only SHA512SUMS, so its SHA-256 must come from another source or V-5.
+    - [x] **V6b2c** (iteration 121) CentOS Stream 10 GenericCloud image (`nm-keyfile`, osinfo `centos-stream10`), pinned to the dated `10-stream/.../CentOS-Stream-GenericCloud-x86_64-10-20260728.1.x86_64.qcow2` with the SHA-256 from its published `.SHA256SUM` and `CHECKSUM`.
+    - [ ] **V6b2** The rest of V6b (Kali, Debian, CentOS Stream 9, openSUSE/Arch/Alpine, Metasploitable 2, Microsoft evals, appliances). Microsoft and Kali stay BLOCKED on V-5. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file. Debian publishes only SHA512SUMS, so its SHA-256 must come from another source or V-5.
 - [x] **V6c** (found in iteration 116; done in iteration 118) Ubuntu 16.04's cloud image needs `net_config: ifupdown`. But its `/etc/network/interfaces` sources only `interfaces.d/*.cfg`, so `builder.sh` `write_network_config` must write `interfaces.d/agoge.cfg`, not `interfaces.d/agoge` (Debian sources `*`, so the rename is safe there). Then add `ubuntu-16.04` (`xenial/release-20211001/ubuntu-16.04-server-cloudimg-amd64-disk1.img`, sha256 `fff2494a70bcaffb59f26f71ec49e137dd87d319341c35832dbe0ea65ff15140`).
 - [x] **V6d** (found in iteration 116; done in iteration 117) Ubuntu 18.04 ships netplan.io 0.99 (`bionic/release-20230607` manifest), and `routes: [{to: default}]` needs netplan 0.103+. Make `builder.sh` write `to: 0.0.0.0/0`, which every netplan version accepts. Then add `ubuntu-18.04` (`bionic/release-20230607/ubuntu-18.04-server-cloudimg-amd64.img`, sha256 `8dd2e6b5e5aad20c3f836123b300cba9861249408cbb07c359145a65d6bab6b6`).
 - [x] **V7** Nested host validator — spec + done-when at PRD.md:1673
@@ -2232,3 +2233,18 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. V25 and HUMAN need a person.
 - **Next:** V6b2's openSUSE Leap / Arch / Alpine cloud images (each from a dated or versioned dir with a published SHA-256), or CentOS Stream 9/10 GenericCloud from its dated `cloud.centos.org` files and `CHECKSUM`.
+
+### Iteration 121 — 2026-10-17
+- **Completed:** V6b2c, split out of V6b2. `common/data/nested_os_catalog.json` has 34 entries. The new one, `centos-stream-10`, follows `fedora-44`. It is a `cloud_image` (qcow2) with `nm-keyfile`, osinfo `centos-stream10` (matches `RHEL_FAMILY`, so it gets `--selinux-relabel`), an agent, BIOS, virtio, and 1024 MB minimum memory.
+- **Learned:**
+  - The SHA-256 `c98bf5b4…1e8b` appears in both the file's `.SHA256SUM` and the directory `CHECKSUM`, fetched over https on 2026-10-17. The file starts with `QFI\xfb` (qcow2 v3), has a 10 GiB virtual size, and a HEAD returns 200 with 2411266048 bytes.
+  - CentOS Stream 9 is **not** added: its `9-stream` `CHECKSUM` lists no GenericCloud qcow2, and no dated GenericCloud file has a `.SHA256SUM` (fetching one returns a CloudFront 502). It needs a published SHA-256 from another source before it can be seeded. The loop must not hash the download itself.
+  - CentOS Stream 10, like Rocky and Alma 10, needs an x86-64-v3 CPU. `define_domain`'s `host-passthrough` covers that. cloud.centos.org prunes old dated builds, so the pinned URL will eventually 404.
+- **Tests:** no new test. The existing catalog rules (https, SHA-256, no `latest` segment, cloud-image fields, `nm-keyfile` osinfo against `RHEL_FAMILY`) and the per-entry manifest render cover the new entry.
+- **Gate results:**
+  - api/unit_tests: 1654 passed, 97.67%.
+  - cloud_functions/tests: 899 passed, 94.28%.
+  - build_files: 441 passed.
+  - No frontend files changed.
+- **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. CentOS Stream 9 has no published SHA-256 for its GenericCloud image. V25 and HUMAN need a person.
+- **Next:** V6b2's openSUSE Leap / Arch / Alpine cloud images, each from a dated or versioned dir with a published SHA-256.
