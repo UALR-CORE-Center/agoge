@@ -170,7 +170,10 @@ def test_manifest_downloads_each_seeded_appliance_iso_by_its_pinned_url(entry):
     # A downloaded manual_iso guest has no media_id; the builder fetches and verifies the pinned ISO itself.
     spec = _spec([_guest('appliance', entry.id, memory_mb=entry.default_memory_mb, disk_gb=entry.default_disk_gb)])
     guest = json.loads(render_manifest(spec, {entry.id: entry}, {}))['guests'][0]
-    assert guest['media'] == {'source': 'url', 'url': entry.media_url, 'sha256': entry.media_sha256, 'format': 'iso'}
+    assert guest['media'] == {'source': 'url', 'url': entry.media_url, 'sha256': entry.media_sha256,
+                              'format': entry.media_formats[0]}
+    # builder.sh fetch_media hands install_manual_iso an ISO only for these (it expands an iso.gz).
+    assert entry.media_formats[0] in {'iso', 'iso.gz'}
     assert guest['catalog']['install_method'] == 'manual_iso'
     assert guest['catalog']['net_config'] == 'none'
 

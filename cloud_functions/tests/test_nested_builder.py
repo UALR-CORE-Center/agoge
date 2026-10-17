@@ -4,6 +4,7 @@ Every fake (and a jq wrapper) logs its full argv, so a secret on any command lin
 """
 import base64
 import bz2
+import gzip
 import hashlib
 import json
 import lzma
@@ -912,4 +913,56 @@ def test_a_zip_without_a_disk_file_fails_only_that_guest(builder, tmp_path):
     assert last['guest-fw'] == 'failed:no disk image found in the zip media'
     assert '--name fw' not in log
     assert not (builder.root / MEDIA_DIR.lstrip('/') / 'work-fw').exists()
+    assert last['guest-deb'] == 'ready'
+
+
+def _gz_firewall_catalog(content):
+    # The pfsense fixture, re-pointed at a downloaded iso.gz medium (pfSense CE's format) with content's hash.
+    entry = CATALOG['pfsense'].model_copy(update={
+        'media_url': 'https://pfsense.example/fw.iso.gz', 'media_sha256': _sha(content), 'requires_upload': False,
+        'media_formats': ['iso.gz', 'iso']})
+    return dict(CATALOG, pfsense=entry)
+
+
+@needs_tools
+@pytest.mark.skipif(shutil.which('gzip') is None, reason='needs gzip')
+def test_an_iso_gz_is_expanded_once_and_only_the_iso_is_kept(builder):
+    packed = gzip.compress(FW_ISO)
+    (builder.fake / 'web' / 'fw.iso.gz').write_bytes(packed)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(globals(), 'CATALOG', _gz_firewall_catalog(packed))
+        result, log = builder(spec=_spec(fw={'media_id': None}))
+
+    last, _ = _attributes(builder.fake)
+    media_dir = builder.root / MEDIA_DIR.lstrip('/')
+    iso = media_dir / f'{_sha(packed)}.iso'
+    assert result.returncode == 0, result.stderr
+    assert iso.read_bytes() == FW_ISO
+    # The parent disk keeps only the ISO; the cache holds the download, whose hash is the catalog's.
+    assert not (media_dir / f'{_sha(packed)}.iso.gz').exists()
+    assert f"name=cache%2F{_sha(packed)}" in (builder.fake / 'uploads').read_text()
+    fw = [line for line in _commands(log, 'virt-install') if '--name fw' in line]
+    assert len(fw) == 1 and f'path={iso},device=cdrom' in fw[0]
+    assert last['guest-fw'] == 'manual'
+
+
+@needs_tools
+@pytest.mark.skipif(shutil.which('gzip') is None, reason='needs gzip')
+def test_an_iso_gz_that_will_not_expand_fails_only_that_guest(builder):
+    # The hash matches, so only the expansion can fail (in production: the parent disk filling up).
+    corrupt = b'\x1f\x8b not really gzip'
+    (builder.fake / 'web' / 'fw.iso.gz').write_bytes(corrupt)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(globals(), 'CATALOG', _gz_firewall_catalog(corrupt))
+        result, log = builder(spec=_spec(fw={'media_id': None}))
+
+    last, _ = _attributes(builder.fake)
+    media_dir = builder.root / MEDIA_DIR.lstrip('/')
+    assert result.returncode == 0, result.stderr
+    assert last['guest-fw'] == 'failed:could not expand the iso.gz media'
+    assert '--name fw' not in log
+    # Nothing half-expanded is left for the next run to mistake for a cached ISO.
+    assert not list(media_dir.glob(f'{_sha(corrupt)}.iso*'))
     assert last['guest-deb'] == 'ready'

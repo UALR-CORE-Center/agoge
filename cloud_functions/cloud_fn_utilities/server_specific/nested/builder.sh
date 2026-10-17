@@ -234,7 +234,7 @@ unlock() {
 
 # Sets MEDIA_PATH to a verified copy of guest $1's medium, or FAIL_MESSAGE and returns 1.
 fetch_media() {
-  local guest=$1 source sha256 format key dest part actual cache_bucket from=source
+  local guest=$1 source sha256 format key dest fetched part actual cache_bucket from=source
   source=$(guest_value "$guest" .media.source)
   sha256=$(guest_value "$guest" .media.sha256)
   format=$(guest_value "$guest" .media.format)
@@ -243,8 +243,11 @@ fetch_media() {
   else
     key="upload-$(guest_value "$guest" .media.media_id)"
   fi
-  dest="$MEDIA_DIR/$key.$format"
-  part="$dest.part"
+  fetched="$MEDIA_DIR/$key.$format"
+  # An iso.gz is expanded once and only the ISO is kept, so the cached file is the ISO.
+  dest=$fetched
+  [ "$format" = "iso.gz" ] && dest="$MEDIA_DIR/$key.iso"
+  part="$fetched.part"
   cache_bucket="${PROJECT_ID}_$MEDIA_BUCKET_SUFFIX"
   # Two guests can share a medium; only one downloads it.
   lock "$key"
@@ -278,13 +281,30 @@ fetch_media() {
     FAIL_MESSAGE="media sha256 mismatch: expected $sha256, got $actual"
     return 1
   fi
-  mv "$part" "$dest"
-  unlock "$key"
-  if [ -n "$sha256" ] && [ "$from" != "cache" ]; then
-    gcs_put "$cache_bucket" "cache/$sha256" "$dest" 2>/dev/null || log "could not cache $key in gs://$cache_bucket"
+  mv "$part" "$fetched"
+  if [ "$format" = "iso.gz" ]; then
+    # The cache holds the verified download, so it is stored before the expansion removes it.
+    cache_media "$key" "$sha256" "$from" "$fetched"
+    # A truncated expansion (parent disk full) would boot an installer that fails part way.
+    gzip -dc "$fetched" > "$dest.part" || {
+      rm -f "$fetched" "$dest.part"; unlock "$key"; FAIL_MESSAGE="could not expand the iso.gz media"; return 1; }
+    rm -f "$fetched"
+    mv "$dest.part" "$dest"
+    unlock "$key"
+  else
+    unlock "$key"
+    cache_media "$key" "$sha256" "$from" "$dest"
   fi
   log "$guest: media $dest (sha256 $actual, from $from)"
   MEDIA_PATH=$dest
+}
+
+# Copies the verified medium $4 (key $1, sha256 $2, fetched from $3) to the shared cache bucket.
+cache_media() {
+  local bucket="${PROJECT_ID}_$MEDIA_BUCKET_SUFFIX"
+  if [ -n "$2" ] && [ "$3" != "cache" ]; then
+    gcs_put "$bucket" "cache/$2" "$4" 2>/dev/null || log "could not cache $1 in gs://$bucket"
+  fi
 }
 
 # Sets VIRTIO_PATH to the pinned virtio-win ISO. The catalog pins a release, not a hash.

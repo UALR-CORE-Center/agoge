@@ -729,7 +729,7 @@ class DiskModel(BaseModel):
 NestedOsFamily = Literal['linux', 'windows', 'appliance']
 NestedOsGroup = Literal['kali', 'linux', 'windows_client', 'windows_server', 'appliance']
 NestedInstallMethod = Literal['cloud_image', 'unattended_iso', 'disk_image', 'manual_iso']
-NestedMediaFormat = Literal['qcow2', 'raw', 'img.xz', 'img.bz2', 'tar.xz', 'iso', 'vmdk', 'vhd', 'vhdx', 'ova', 'zip', '7z']
+NestedMediaFormat = Literal['qcow2', 'raw', 'img.xz', 'img.bz2', 'tar.xz', 'iso', 'iso.gz', 'vmdk', 'vhd', 'vhdx', 'ova', 'zip', '7z']
 NestedNetConfig = Literal['networkd', 'netplan', 'nm-keyfile', 'ifupdown', 'windows', 'none']
 NestedGuestStatus = Literal['pending', 'downloading', 'installing', 'post_install', 'manual', 'ready', 'failed']
 NestedBuildPhase = Literal['queued', 'provisioning', 'building', 'ready', 'finalizing', 'finalized', 'failed']
