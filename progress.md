@@ -138,7 +138,7 @@ See `### Nested Guest Contract` in PRD.md.
 - [x] **N1** Metadata forward block — spec + done-when at PRD.md:1624 (standalone security fix — ship first)
 - [x] **N2** Loader forward block — spec + done-when at PRD.md:1626
 - [x] **N3** Nested guest models — spec + done-when at PRD.md:1628
-- [ ] **N4** Nested contract constants — spec + done-when at PRD.md:1630
+- [x] **N4** Nested contract constants — spec + done-when at PRD.md:1630
 - [ ] **N5** Nested guest validator — spec + done-when at PRD.md:1632
 - [ ] **N6** Guest payload builder — spec + done-when at PRD.md:1634
 - [ ] **N7** qemu-agent relay section — spec + done-when at PRD.md:1636
@@ -1172,3 +1172,10 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** api/unit_tests 1399 passed; cloud_functions/tests 498 passed; build_files/cloud_deployment/tests 319 passed. No frontend files changed. ruff: only the pre-existing F401 (unused `HttpUrl` import, `common/models/agoge.py:5`), which is on HEAD too.
 - **Blockers:** none.
 - **Next:** N4 (nested contract constants in `ctf_plant_contract.py` and `PubSub.EventAttributes.GUEST`).
+
+### Iteration 79 — 2026-10-17
+- **Completed:** N4. `common/utilities/ctf_plant_contract.py` gains the Nested Guest Contract names: `GUEST_ATTRIBUTE_ACK_KEY`/`_PATH` (`agoge-ctf/plant-ack`), `GUEST_ATTRIBUTE_GUEST_RESULT_PREFIX` with `guest_result_key(guest)`/`guest_result_path(guest)` (raise `ValueError` unless the name matches `NESTED_GUEST_NAME_PATTERN`), `WATCHER_UNIT_NAME`, `WATCHER_SCRIPT_PATH`, `RUN_DIR`/`RUN_DIR_MODE` (0o700), `RUN_LOCK_PATH`, `LAST_PAYLOAD_PATH`, `PRISTINE_SNAPSHOT_NAME`, and `WATCHER_ACK_SECONDS=30`, `NESTED_CONFIRM_TIMEOUT_SECONDS=420`, `RELAY_BUDGET_SECONDS=360`. `PubSub.EventAttributes.GUEST = 'guest'`. Tests in `api/unit_tests/test_ctf_plant_contract.py` assert the names, `30 + 420 < 540`, relay budget < confirm window, that a guest result key never equals the parent's, bad guest slugs are rejected, and that every `EventAttributes` value (including `guest`) is distinct.
+- **Learned:** the contract module now imports `common.models.agoge` for the slug pattern; `agoge.py` does not import the contract, so there is no cycle. The 256 KB payload limit is not a constant yet — N9 should add it here.
+- **Gate results:** api/unit_tests 1411 passed; cloud_functions/tests 498 passed; build_files/cloud_deployment/tests 319 passed; ruff clean on changed files. No frontend files changed.
+- **Blockers:** none.
+- **Next:** N5 (nested guest validator in `object_validators/ctf.py`).

@@ -206,3 +206,48 @@ def test_linux_loader_inserts_the_forward_rule_once_and_before_curl(loader_env, 
     first_curl = calls.index("-sf")
     assert calls[:first_curl] == expected_calls
     assert not any(c.startswith("iptables") for c in calls[first_curl:])
+
+
+def test_nested_contract_names_match_the_prd():
+    assert contract.GUEST_ATTRIBUTE_ACK_PATH == "agoge-ctf/plant-ack"
+    assert contract.guest_result_path("win-dc") == "agoge-ctf/plant-result-win-dc"
+    assert contract.guest_result_key("web") == "plant-result-web"
+    assert contract.WATCHER_UNIT_NAME == "agoge-ctf-watcher.service"
+    assert contract.WATCHER_SCRIPT_PATH == "/usr/local/sbin/agoge-ctf-watcher"
+    assert contract.RUN_LOCK_PATH == "/run/agoge-ctf/plant.lock"
+    assert contract.LAST_PAYLOAD_PATH == "/run/agoge-ctf/last"
+    assert contract.RUN_DIR_MODE == 0o700
+    assert contract.PRISTINE_SNAPSHOT_NAME == "agoge-pristine"
+    assert contract.WATCHER_ACK_SECONDS == 30
+    assert contract.NESTED_CONFIRM_TIMEOUT_SECONDS == 420
+    assert contract.RELAY_BUDGET_SECONDS == 360
+
+
+def test_nested_timeouts_fit_inside_the_cloud_function_timeout():
+    # 540 s is the --timeout agoge_app.py deploys the Cloud Function with.
+    assert contract.WATCHER_ACK_SECONDS + contract.NESTED_CONFIRM_TIMEOUT_SECONDS < 540
+    # Relay sections run inside the confirmation window.
+    assert contract.RELAY_BUDGET_SECONDS < contract.NESTED_CONFIRM_TIMEOUT_SECONDS
+
+
+def test_guest_result_key_never_shadows_the_parent_result_key():
+    assert contract.guest_result_key("aa") != contract.GUEST_ATTRIBUTE_RESULT_KEY
+    assert contract.guest_result_path("aa") != contract.GUEST_ATTRIBUTE_PATH
+
+
+@pytest.mark.parametrize("guest", ["", "a", "Win-DC", "-dc", "dc;reboot", "dc\n", "a" * 33, None])
+def test_guest_result_key_rejects_names_outside_the_guest_slug_pattern(guest):
+    with pytest.raises(ValueError):
+        contract.guest_result_key(guest)
+
+
+def test_guest_event_attribute_collides_with_no_other_attribute():
+    from common.constants.pub_sub import PubSub
+
+    attributes = {name: value for name, value in vars(PubSub.EventAttributes).items()
+                  if not name.startswith('_')}
+    assert attributes['GUEST'] == 'guest'
+    others = [value for name, value in attributes.items() if name != 'GUEST']
+    assert 'guest' not in others
+    # Every attribute value is distinct, so no message field is read under two names.
+    assert len(set(attributes.values())) == len(attributes)
