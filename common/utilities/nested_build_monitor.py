@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from common.constants.database import DbCollections, DbOperators, DatabaseTypes, DATABASE_NAME
-from common.constants.nested import NESTED_BUILD_MAX_MINUTES, NESTED_BUILD_STALL_MINUTES
+from common.constants.nested import NESTED_BUILD_MAX_MINUTES, NESTED_BUILD_STALL_MINUTES, NESTED_FINALIZE_STALE_SECONDS
 from common.constants.pub_sub import PubSub
 from common.constants.states import ImageStatus
 from common.document_database import DocumentDatabaseFactory
@@ -194,3 +194,14 @@ def is_active_nested_build(image: dict) -> bool:
     """True while the builder runs on the image's template server, which must not be stopped."""
     return bool(image.get('nested')) and (image.get('nested_build') or {}).get('phase') in ACTIVE_PHASES
 
+
+def is_stale_finalize(build: dict, now: datetime = None) -> bool:
+    """True for a `finalizing` phase that no live invocation still owns, so Check In may finalize again.
+
+    A missing or unreadable `updated_at` counts as stale: otherwise the record could never leave `finalizing`.
+    """
+    if (build or {}).get('phase') != 'finalizing':
+        return False
+    updated = _parse_time(build.get('updated_at'))
+    now = now or datetime.now(timezone.utc)
+    return updated is None or now - updated > timedelta(seconds=NESTED_FINALIZE_STALE_SECONDS)

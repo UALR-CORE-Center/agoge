@@ -31,6 +31,7 @@ from common.utilities.gcp.compute.compute_machine_type import ComputeMachineType
 from common.utilities.gcp.compute.image_compatibility import compatible_boot_image, normalize_architecture
 from common.utilities.gcp.compute.image_ownership import image_source, image_source_project, is_shared_image
 from common.utilities.gcp.pubsub_manager import PubSubManager
+from common.utilities.nested_build_monitor import is_stale_finalize
 from common.document_database.factory import DocumentDatabaseFactory
 from common.exceptions import BadRequest, Conflict, Forbidden, NotFound, AgogeValidationError, NotReady, OperationTimeout
 
@@ -359,6 +360,9 @@ class ComputeImage:
             return str(PubSub.Actions.CHECK_IN.value)
         build = image.get('nested_build') or {}
         phase = build.get('phase')
+        # A dead invocation can strand `finalizing`; once stale, Check In finalizes again instead of 409 forever.
+        if is_stale_finalize(build):
+            return str(PubSub.Actions.NESTED_FINALIZE.value)
         if phase in ('provisioning', 'building', 'finalizing'):
             raise Conflict(f'Nested image {name} cannot be checked in while its build phase is {phase}.')
         # A failed finalize keeps its nonce, so Check In retries the finalize rather than imaging unfinalized guests.

@@ -1,5 +1,6 @@
 """POST /compute/images/ with CHECK_IN publishes NESTED_FINALIZE for a nested host (PRD V14)."""
 import copy
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -8,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import dependencies
+from common.constants.nested import NESTED_FINALIZE_STALE_SECONDS
 from common.constants.pub_sub import PubSub
 from common.constants.states import ImageStatus
 from core.compute import image as image_module
@@ -18,7 +20,13 @@ CHECK_IN = str(PubSub.Actions.CHECK_IN.value)
 NESTED_FINALIZE = str(PubSub.Actions.NESTED_FINALIZE.value)
 
 
+def _ago(seconds):
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+
+
 def _nested(name, phase, **build):
+    # A live finalize: `finalizing` is refused only while its updated_at is recent.
+    build.setdefault('updated_at', _ago(5))
     return {'name': name, 'status': ImageStatus.CHECKED_OUT.value, 'nested': {'parent_os': 'debian-12'},
             'nested_build': {'phase': phase, **build}}
 
@@ -109,3 +117,27 @@ def test_other_actions_on_a_nested_host_are_unchanged(world):
 
     assert response.status_code == 200
     assert _actions(pubsub) == [('nestlab', str(PubSub.Actions.STOP.value))]
+
+
+def test_a_stale_finalizing_phase_is_finalized_again(world):
+    # The finalize or CHECK_IN invocation died after writing finalizing; without this Check In 409s forever.
+    client, pubsub = world(_nested('nestlab', 'finalizing', finalize_nonce='dead',
+                                   updated_at=_ago(NESTED_FINALIZE_STALE_SECONDS + 60)))
+
+    assert _check_in(client, 'nestlab').status_code == 200
+    assert _actions(pubsub) == [('nestlab', NESTED_FINALIZE)]
+
+
+def test_a_finalizing_phase_inside_the_stale_window_is_still_refused(world):
+    client, pubsub = world(_nested('nestlab', 'finalizing', updated_at=_ago(NESTED_FINALIZE_STALE_SECONDS - 60)))
+
+    assert _check_in(client, 'nestlab').status_code == 409
+    pubsub.msg.assert_not_called()
+
+
+@pytest.mark.parametrize('updated_at', [None, 'not-a-time'])
+def test_a_finalizing_phase_with_no_readable_timestamp_counts_as_stale(world, updated_at):
+    client, pubsub = world(_nested('nestlab', 'finalizing', updated_at=updated_at))
+
+    assert _check_in(client, 'nestlab').status_code == 200
+    assert _actions(pubsub) == [('nestlab', NESTED_FINALIZE)]

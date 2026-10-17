@@ -19,7 +19,7 @@ from common.utilities.gcp.compute.image_compatibility import compatible_boot_ima
 from common.utilities.gcp.compute.image_ownership import image_source, image_source_project, is_shared_image
 from common.utilities.gcp.compute.resources.network_interface_resource import NetworkInterfaceResource
 from common.utilities.gcp.compute.resources.image_resource import ImageResource
-from common.utilities.nested_build_monitor import is_active_nested_build
+from common.utilities.nested_build_monitor import is_active_nested_build, is_stale_finalize
 from common.utilities.nested_manifest import render_manifest, render_secrets
 
 from cloud_fn_utilities.gcp.dns_manager import DnsManager
@@ -203,8 +203,10 @@ class ImageTemplateManager(BaseComputeManager):
         if not record or not record.get('nested'):
             raise BadRequest(f'Image {self.image_name} is not a nested host.')
         if record.get('status') != ImageStatus.CHECKED_OUT.value or not (
-                phase in FINALIZABLE_PHASES or (phase == 'failed' and build.get('finalize_nonce'))):
+                phase in FINALIZABLE_PHASES or (phase == 'failed' and build.get('finalize_nonce'))
+                or is_stale_finalize(build)):
             # Also what a duplicate delivery sees: a second nonce would race the first one's answer.
+            # A stale `finalizing` was left by a dead invocation, so nothing is racing it any more.
             raise Conflict(f'Nested image {self.image_name} cannot be finalized in build phase {phase}.')
 
         nonce = token_hex(16)

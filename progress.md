@@ -180,7 +180,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [ ] **V24** Nested image guide — spec + done-when at PRD.md:1707
 - [ ] **V25** Live acceptance — spec + done-when at PRD.md:1708 — **HUMAN ONLY.** Builds real VMs on the development project; the loop must not attempt it. Carried by HUMAN.
 
-- [ ] **V14b** (found in iteration 102) If the Cloud Function dies hard after `finalize_nested` writes phase `finalizing` (or the CHECK_IN delivery fails before `create_production_image`, e.g. in `load()`), the phase stays `finalizing`: a redelivered NESTED_FINALIZE hits `Conflict`, and the API refuses Check In with 409 forever. Treat a `finalizing` phase whose `updated_at` is older than `NESTED_FINALIZE_TIMEOUT_SECONDS` plus a margin as finalizable, in both `ImageTemplateManager.finalize_nested` and `ComputeImage._check_in_action`, with tests.
+- [x] **V14b** (found in iteration 102) If the Cloud Function dies hard after `finalize_nested` writes phase `finalizing` (or the CHECK_IN delivery fails before `create_production_image`, e.g. in `load()`), the phase stays `finalizing`: a redelivered NESTED_FINALIZE hits `Conflict`, and the API refuses Check In with 409 forever. Treat a `finalizing` phase whose `updated_at` is older than `NESTED_FINALIZE_TIMEOUT_SECONDS` plus a margin as finalizable, in both `ImageTemplateManager.finalize_nested` and `ComputeImage._check_in_action`, with tests.
 - [ ] **V12b** (found in iteration 100) `ComputeImage.create_image_server` and `NestedImage.create` write the CHECKED_OUT record before publishing CHECK_OUT, so a failed publish leaves a record no build will ever pick up, and a retry with the same name gets 409. Delete the record (or mark nested phase `failed`) when the publish raises.
 
 ### Human checks
@@ -1757,3 +1757,20 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V14b (stale `finalizing` recovery, found by the reviewer), then V15 (media uploads).
+
+### Iteration 103 — 2026-10-17
+- **Completed:** V14b.
+  - `is_stale_finalize(build)` in `common/utilities/nested_build_monitor.py` is true for a `finalizing` phase whose `updated_at` is older than `NESTED_FINALIZE_STALE_SECONDS`. That constant is `NESTED_FINALIZE_TIMEOUT_SECONDS + 900` (1260 s), which covers the rest of the finalize invocation plus one whole CHECK_IN invocation, so a live check-in is never raced. A missing or unparseable `updated_at` also counts as stale.
+  - `ComputeImage._check_in_action` publishes NESTED_FINALIZE for a stale `finalizing` phase instead of returning 409. `ImageTemplateManager.finalize_nested` accepts it with a fresh nonce. A fresh `finalizing` phase is still refused in both places.
+- **Learned:** every `nested_build` write goes through `_write_nested_build`, which stamps `updated_at`. That makes it a reliable staleness clock for `finalizing`.
+- **Tests:**
+  - `api/unit_tests/test_nested_finalize_route.py` (+4): stale → NESTED_FINALIZE, inside the window → 409, None or unparseable timestamp → stale. `_nested()` now defaults to a fresh `updated_at`.
+  - `cloud_functions/tests/test_nested_finalize.py` (+3): stale and no-timestamp records are finalized again with a new nonce, and a record inside the window is refused. The duplicate-delivery case now carries a fresh `updated_at`.
+- **Reviewer note (not fixed, harmless):** `finalize_nested` reads the phase and then writes it outside a transaction. Two simultaneous stale recoveries could each issue a nonce. The watcher answers each nonce once and the last write wins.
+- **Gate results:**
+  - api/unit_tests: 1584 passed (97.75%).
+  - cloud_functions/tests: 819 passed (94.28%).
+  - build_files: 319 passed.
+  - No frontend files changed.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V12b (clean up the CHECKED_OUT record when the CHECK_OUT publish fails), then V15 (media uploads).
