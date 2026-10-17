@@ -107,6 +107,11 @@ def loader_env(tmp_path):
     return tmp_path, work, env
 
 
+def _local(script: str, tmp_path) -> str:
+    # The loader's run lock and dedupe file live in /run/agoge-ctf, which only root can create.
+    return script.replace(contract.RUN_DIR, str(tmp_path / "run"))
+
+
 def _run(script: str, env: dict) -> subprocess.CompletedProcess:
     return subprocess.run([bash, "-c", script], env=env, capture_output=True, text=True, timeout=30)
 
@@ -122,7 +127,7 @@ def test_linux_loader_runs_the_payload_silently_and_deletes_it(loader_env):
     """))
     env["FAKE_PAYLOAD"] = str(payload)
 
-    result = _run(contract.LINUX_LOADER, env)
+    result = _run(_local(contract.LINUX_LOADER, tmp_path), env)
 
     assert result.returncode == 0
     assert result.stdout == "" and result.stderr == ""

@@ -226,6 +226,8 @@ class BaseComputeManager:
         self.server_spec.min_cpu_platform = server_spec.get('min_cpu_platform', None)
         self.server_spec.network_prefix = network_prefix if network_prefix else server_spec['parent_id']
         self.server_spec.nics = server_spec.get('nics', [])
+        # Server records carry the OS under details (ServerModel); the top-level key is the compute form
+        self.server_spec.os = (server_spec.get('details') or {}).get('os') or server_spec.get('os')
         self.server_spec.parent_build_type = server_spec.get('parent_build_type', None)
         self.server_spec.parent_id = server_spec.get('parent_id', None)
         self.server_spec.service_accounts = server_spec.get('serviceAccounts', None)

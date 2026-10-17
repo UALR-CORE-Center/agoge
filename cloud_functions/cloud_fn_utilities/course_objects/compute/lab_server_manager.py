@@ -18,6 +18,7 @@ from common.services.wireguard_endpoint import WireGuardEndpointRegistry
 from common.utilities.ctf_plant_contract import (
     LINUX_LOADER,
     LINUX_LOADER_METADATA_KEY,
+    WATCHER_INSTALLER,
     WINDOWS_LOADER,
     WINDOWS_LOADER_METADATA_KEY,
 )
@@ -344,8 +345,28 @@ class LabServerManager(BaseComputeManager):
         assessment_startup_script = self.assessment.get_startup_scripts(server_name=self.server_spec.name)
         if assessment_startup_script:
             self._merge_metadata_item(metadata['items'], assessment_startup_script)
+        if self._is_linux_nested_host():
+            self._add_ctf_watcher(metadata['items'])
         self._add_ctf_loaders(metadata['items'])
         self.server_spec.metadata = metadata
+
+    def _is_linux_nested_host(self) -> bool:
+        """A Linux server with an ip_aliases NIC: the only kind that may run nested guests (N5)."""
+        # Reads the spec, not self.ip_aliases, because _add_nics sets that after _add_metadata runs
+        if getattr(self.server_spec, 'os', None) != 'linux':
+            return False
+        return any(isinstance(nic, dict) and nic.get('ip_aliases') for nic in getattr(self.server_spec, 'nics', None) or [])
+
+    @classmethod
+    def _add_ctf_watcher(cls, items: list) -> None:
+        """Merge the plant watcher installer into startup-script, so a nested host is planted without a reset."""
+        # Spec metadata copied from an already-built server may carry the installer; one copy only.
+        if any(
+            item.get('key') == LINUX_LOADER_METADATA_KEY and WATCHER_INSTALLER in (item.get('value') or '')
+            for item in items
+        ):
+            return
+        cls._merge_metadata_item(items, {'key': LINUX_LOADER_METADATA_KEY, 'value': WATCHER_INSTALLER})
 
     _CONCATENATED_SCRIPT_KEYS = frozenset({'startup-script', 'windows-startup-script-ps1'})
 
