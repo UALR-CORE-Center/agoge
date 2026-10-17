@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Union, Any
 
 from common.constants.google import ImageSource
+from common.constants.nested import ENABLE_VMX_LICENSE
 from common.constants.states import ImageStatus, ServerStates
 from common.constants.pub_sub import PubSub
 from common.constants.database import DbCollections, DATABASE_NAME, DatabaseTypes, DbOperators
@@ -450,7 +451,9 @@ class ImageTemplateManager(BaseComputeManager):
             project=image_project,
             description=description,
             source_type=ImageSource.SNAPSHOT,
-            source=snapshot_source
+            source=snapshot_source,
+            # nested_host comes from the record's `nested` block (_load_template_server).
+            licenses=[ENABLE_VMX_LICENSE] if getattr(self, 'nested_host', False) else None,
         )
 
     def _add_disks(self):
