@@ -3,7 +3,7 @@ import json
 import re
 import shlex
 import time
-from typing import Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections
 from common.exceptions import BadRequest, NotFound
@@ -460,13 +460,22 @@ class FlagPlanter:
         return [fid for groups in targets.values() for ids in groups.values() for fid in ids]
 
     def _fail_unfinished(self, board: CtfBoardModel, targets: Dict[str, Dict[str, List[str]]]) -> None:
-        """Best effort on an unexpected error: no flag is left `planting` with nothing to finish it."""
+        """
+        Best effort on an unexpected error: no flag is left `planting` with nothing to finish it. Statuses are
+        read from the stored board inside the transaction, not from `board`: the await helpers rebind their own
+        board, so flags they already recorded planted/failed would still read `planting` here (BUG5).
+        """
         target_ids = set(self._target_ids(targets))
-        unfinished = [f.flag_id for f in board.flags if f.flag_id in target_ids and f.plant_status == 'planting']
-        if not unfinished:
-            return
+        failed = self._failed(self.MSG_ABORTED)
+
+        def apply(flags: list) -> list:
+            for flag in flags:
+                if flag.get('flag_id') in target_ids and flag.get('plant_status') == 'planting':
+                    flag.update(failed)
+            return flags
+
         try:
-            self._record(board, {fid: self._failed(self.MSG_ABORTED) for fid in unfinished})
+            self._write_flags(board, apply)
         except Exception as e:
             self.logger.error(f"{self.class_name}:{board.id} - could not mark aborted flags failed", error=type(e).__name__)
 
@@ -630,13 +639,20 @@ class FlagPlanter:
         Writes plant fields for the given flag ids onto the board document in a transaction, touching only
         those flags' plant_* fields, so a concurrent solve or hint on the same board is never overwritten.
         """
-        doc_ref = self.db.db.collection(DbCollections.CTF_BOARD.value).document(board.id)
-
         def apply(flags: list) -> list:
             for flag in flags:
                 if flag.get('flag_id') in updates:
                     flag.update(updates[flag['flag_id']])
             return flags
+
+        flags = self._write_flags(board, apply)
+        stored = board.model_dump()
+        stored['flags'] = flags
+        return ModelValidator(model=CtfBoardModel, log_location=LoggerNames.CLOUD_FN).load(data=stored)
+
+    def _write_flags(self, board: CtfBoardModel, apply: Callable[[list], list]) -> list:
+        """Rewrites the stored board's flags list through `apply` in one transaction; returns the written list."""
+        doc_ref = self.db.db.collection(DbCollections.CTF_BOARD.value).document(board.id)
 
         def operation(transaction):
             snapshot = doc_ref.get(transaction=transaction)
@@ -646,10 +662,7 @@ class FlagPlanter:
             transaction.update(doc_ref, {'flags': flags})
             return flags
 
-        flags = self.db.transaction(operation)
-        stored = board.model_dump()
-        stored['flags'] = flags
-        return ModelValidator(model=CtfBoardModel, log_location=LoggerNames.CLOUD_FN).load(data=stored)
+        return self.db.transaction(operation)
 
     def build_payload(
         self,
