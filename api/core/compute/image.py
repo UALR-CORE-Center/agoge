@@ -332,6 +332,8 @@ class ComputeImage:
                 )
                 msg_args[self.pubsub_keys.IMAGE_NAME] = name
                 msg_args['shared_edit_authorized'] = 'true' if shared else 'false'
+                msg_args[self.pubsub_keys.ACTION] = self._check_in_action(image, name) \
+                    if action == str(PubSub.Actions.CHECK_IN.value) else str(action)
                 # Only checkout boots from the saved image. Check-in must be
                 # retryable if the previous image was deleted before a failed
                 # replacement; start/stop/cancel operate on the working VM.
@@ -349,6 +351,20 @@ class ComputeImage:
                 self.pubsub_manager.msg(**message)
             return
         raise BadRequest(message="Invalid or missing data")
+
+    @staticmethod
+    def _check_in_action(image: dict, name: str) -> str:
+        """CHECK_IN, or NESTED_FINALIZE for a nested host whose guests must be snapshotted first."""
+        if not image.get('nested'):
+            return str(PubSub.Actions.CHECK_IN.value)
+        build = image.get('nested_build') or {}
+        phase = build.get('phase')
+        if phase in ('provisioning', 'building', 'finalizing'):
+            raise Conflict(f'Nested image {name} cannot be checked in while its build phase is {phase}.')
+        # A failed finalize keeps its nonce, so Check In retries the finalize rather than imaging unfinalized guests.
+        if phase in ('ready', 'finalized') or (phase == 'failed' and build.get('finalize_nonce')):
+            return str(PubSub.Actions.NESTED_FINALIZE.value)
+        return str(PubSub.Actions.CHECK_IN.value)
 
     def process_action_on_image(
         self,

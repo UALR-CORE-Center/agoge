@@ -1,9 +1,10 @@
+from secrets import token_hex
 import time
 from datetime import datetime, timezone
 from typing import Union, Any
 
 from common.constants.google import ImageProjects, ImageSource
-from common.constants.nested import ENABLE_VMX_LICENSE
+from common.constants.nested import ENABLE_VMX_LICENSE, NESTED_FINALIZE_TIMEOUT_SECONDS
 from common.constants.states import ImageStatus, ServerStates
 from common.constants.pub_sub import PubSub
 from common.constants.database import DbCollections, DATABASE_NAME, DatabaseTypes, DbOperators
@@ -23,11 +24,22 @@ from common.utilities.nested_manifest import render_manifest, render_secrets
 
 from cloud_fn_utilities.gcp.dns_manager import DnsManager
 from cloud_fn_utilities.server_specific.agoge_user_startup_script import AgogeUserStartupScript, MetadataKey
-from cloud_fn_utilities.server_specific.nested_scripts import render_builder_bootstrap
+from cloud_fn_utilities.server_specific.nested_scripts import render_builder_bootstrap, render_finalize_bootstrap
 
 from .base_compute_manager import BaseComputeManager
 from .snapshot_manager import SnapshotManager
 from ...state_managers import ImageStateManager
+
+
+FINALIZE_METADATA_KEY = 'agoge-nested-finalize'
+FINALIZE_ATTRIBUTE_PATH = 'agoge-nested/'
+FINALIZE_RESULT_ATTRIBUTE = 'finalize-result'
+FINALIZE_POLL_SECONDS = 10
+# Phases a Check In finalizes from; `failed` qualifies only when a finalize failed (finalize_nonce kept).
+FINALIZABLE_PHASES = ('ready', 'finalized')
+MSG_FINALIZE_TIMEOUT = (f'The host did not answer the finalize within {NESTED_FINALIZE_TIMEOUT_SECONDS} seconds. '
+                        'Check In again to retry.')
+MSG_CHECK_IN_FAILED = 'The image could not be created after the finalize. Check In again to retry.'
 
 
 class ImageTemplateManager(BaseComputeManager):
@@ -154,8 +166,13 @@ class ImageTemplateManager(BaseComputeManager):
         deleting the instance and associated DNS records.
         """
         self._require_image_management()
-        if not self.create_production_image():
-            raise OperationTimeout(f'Could not create image {self.image_name}. The server remains checked out.')
+        try:
+            if not self.create_production_image():
+                raise OperationTimeout(f'Could not create image {self.image_name}. The server remains checked out.')
+        except Exception:
+            # The API refuses Check In while `finalizing`, so a failed image must not leave it there.
+            self._reset_finalizing_phase()
+            raise
 
         if self.debug:
             self.delete_server()
@@ -170,6 +187,102 @@ class ImageTemplateManager(BaseComputeManager):
 
         # Publish the new source only after image creation and verification.
         self._update_record_status(ImageStatus.CHECKED_IN, image_created=True)
+
+    def finalize_nested(self) -> bool:
+        """Have the nested host's finalize watcher snapshot its guests, then publish CHECK_IN.
+
+        Writes a fresh nonce to `agoge-nested-finalize` and waits up to NESTED_FINALIZE_TIMEOUT_SECONDS
+        for `agoge-nested/finalize-result` to answer that nonce. `ok` publishes the existing CHECK_IN;
+        an error records phase `failed` with the watcher's message; no answer returns the phase to
+        `ready`. On failure the server stays checked out and running. Returns True when CHECK_IN was published.
+        """
+        self._require_image_management()
+        record = self.db.get(collection_name=self.collection, doc_id=self.server_name)
+        build = (record or {}).get('nested_build') or {}
+        phase = build.get('phase')
+        if not record or not record.get('nested'):
+            raise BadRequest(f'Image {self.image_name} is not a nested host.')
+        if record.get('status') != ImageStatus.CHECKED_OUT.value or not (
+                phase in FINALIZABLE_PHASES or (phase == 'failed' and build.get('finalize_nonce'))):
+            # Also what a duplicate delivery sees: a second nonce would race the first one's answer.
+            raise Conflict(f'Nested image {self.image_name} cannot be finalized in build phase {phase}.')
+
+        nonce = token_hex(16)
+        self._write_nested_build(phase='finalizing', finalize_nonce=nonce, message=None)
+        self.logger.info(f'{self.class_name}:{self.server_name} - Finalizing the nested host', image=self.server_name)
+        try:
+            self.compute_instance.set_metadata(self.server_name, items={FINALIZE_METADATA_KEY: nonce})
+        except Exception as error:
+            self.logger.error(f'{self.class_name}:{self.server_name} - Could not request the finalize: {error}')
+            self._write_nested_build(phase='ready', finalize_nonce=None,
+                                     message='The finalize could not be requested. Check In again to retry.')
+            raise
+        try:
+            result = self._await_finalize_result(nonce)
+        finally:
+            try:
+                self.compute_instance.set_metadata(self.server_name, remove=[FINALIZE_METADATA_KEY], wait=False)
+            except Exception as error:
+                # A leftover nonce is harmless: the watcher never answers a nonce twice.
+                self.logger.warning(f'{self.class_name}:{self.server_name} - Could not remove the finalize key: '
+                                    f'{error}')
+
+        if result is None:
+            self.logger.warning(f'{self.class_name}:{self.server_name} - {MSG_FINALIZE_TIMEOUT}')
+            self._write_nested_build(phase='ready', finalize_nonce=None, message=MSG_FINALIZE_TIMEOUT)
+            return False
+        ok, message = result
+        if not ok:
+            self.logger.warning(f'{self.class_name}:{self.server_name} - Finalize failed: {message}')
+            # finalize_nonce stays: it marks the failure as a finalize's, so the next Check In finalizes again.
+            self._write_nested_build(phase='failed', message=message[:200])
+            return False
+        try:
+            self.pubsub_manager.msg(
+                handler=str(PubSub.Handlers.CONTROL.value),
+                action=str(PubSub.Actions.CHECK_IN.value),
+                course_object=str(PubSub.CourseObjects.TEMPLATE_SERVER.value),
+                image_name=str(self.image_name),
+                shared_edit_authorized=str(self.shared_edit_authorized).lower(),
+            )
+        except Exception:
+            # The API refuses Check In while `finalizing`; finalizing again is safe (host.json lives in /etc).
+            self._write_nested_build(phase='ready', finalize_nonce=None, message=MSG_CHECK_IN_FAILED)
+            raise
+        return True
+
+    def _await_finalize_result(self, nonce: str) -> tuple[bool, str] | None:
+        """Poll for the watcher's answer to `nonce`: (True, '') ok, (False, message) error, None on timeout."""
+        deadline = time.monotonic() + NESTED_FINALIZE_TIMEOUT_SECONDS
+        while True:
+            try:
+                attributes = self.compute_instance.get_guest_attributes(
+                    self.server_name, query_path=FINALIZE_ATTRIBUTE_PATH)
+            except Exception as error:
+                # Keep waiting: one failed read is not an answer.
+                self.logger.warning(f'{self.class_name}:{self.server_name} - Guest attributes unreadable: {error}')
+                attributes = {}
+            answer = attributes.get(FINALIZE_RESULT_ATTRIBUTE) or ''
+            # An answer to another nonce is a stale one from an earlier finalize of this server.
+            if answer == f'ok:{nonce}':
+                return True, ''
+            if answer.startswith(f'error:{nonce}:'):
+                return False, answer.removeprefix(f'error:{nonce}:') or 'The finalize failed.'
+            if time.monotonic() + FINALIZE_POLL_SECONDS > deadline:
+                return None
+            time.sleep(FINALIZE_POLL_SECONDS)
+
+    def _write_nested_build(self, **fields) -> None:
+        """Merge `fields` into the record's nested_build through a field mask."""
+        record = self.db.get(collection_name=self.collection, doc_id=self.server_name) or {}
+        build = {**(record.get('nested_build') or {}), **fields,
+                 'updated_at': datetime.now(timezone.utc).isoformat()}
+        self.db.update(collection_name=self.collection, doc_id=self.server_name, data={'nested_build': build})
+
+    def _reset_finalizing_phase(self) -> None:
+        record = self.db.get(collection_name=self.collection, doc_id=self.server_name) or {}
+        if record.get('nested') and (record.get('nested_build') or {}).get('phase') == 'finalizing':
+            self._write_nested_build(phase='ready', finalize_nonce=None, message=MSG_CHECK_IN_FAILED)
 
     def check_out(self, product_keys: dict = None) -> None:
         """
@@ -483,6 +596,8 @@ class ImageTemplateManager(BaseComputeManager):
         if phase == 'finalized':
             # The image already holds the installed guests, so nothing is rebuilt: the record's
             # self_link (image-<name> since check-in) and machine_type stand, and no manifest is sent.
+            # Only the finalize watcher is installed, so Check In finalizes again.
+            self.nested_bootstrap = render_finalize_bootstrap()
             return phase
         # provisioning too: a duplicate Pub/Sub delivery of the first check-out must reconcile, not fail.
         if phase not in ('queued', 'provisioning'):
@@ -505,7 +620,7 @@ class ImageTemplateManager(BaseComputeManager):
             {'key': 'agoge-nested-manifest', 'value': manifest},
             {'key': 'agoge-nested-secrets', 'value': secrets},
         ]
-        self.nested_bootstrap = render_builder_bootstrap()
+        self.nested_bootstrap = render_builder_bootstrap() + render_finalize_bootstrap()
         return 'provisioning'
 
     def _nested_sources(
@@ -719,6 +834,12 @@ class ImageTemplateManager(BaseComputeManager):
             db_image['state'] = ServerStates.START.value
             db_image['in_use_by'] = None
             db_image['dns_record'] = None
+            if image_created and db_image.get('nested') and \
+                    (db_image.get('nested_build') or {}).get('phase') == 'finalizing':
+                db_image['nested_build'] = {
+                    **db_image['nested_build'], 'phase': 'finalized', 'finalize_nonce': None, 'message': None,
+                    'updated_at': datetime.now(timezone.utc).isoformat(),
+                }
             if image_created:
                 image_project, image_name = self._production_image_target(db_image)
                 db_image['image_exists'] = True
