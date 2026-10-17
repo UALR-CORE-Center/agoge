@@ -523,6 +523,46 @@ def test_ifupdown_config_is_a_cfg_file_ubuntu_16_04_sources(builder):
     assert 'iface agoge0 inet static\n  address 10.10.0.10/24\n  gateway 10.10.0.1\n' in interfaces
 
 
+def _grow_root_command():
+    """The cloud-image firstboot command that grows the root partition and filesystem."""
+    rendered = nested_scripts.render_builder()
+    return re.search(r"--firstboot-command '(command -v growpart[^']*)'", rendered).group(1)
+
+
+# (findmnt SOURCE without --nofsroot, FSTYPE, expected resize command). Fedora's btrfs root
+# carries a subvolume suffix that lsblk and the partition-number expansion cannot parse.
+GROW_CASES = {
+    'btrfs': ('/dev/vda4[/root]', 'btrfs', 'btrfs filesystem resize max /'),
+    'xfs': ('/dev/vda4', 'xfs', 'xfs_growfs /'),
+    'ext4': ('/dev/vda1', 'ext4', 'resize2fs /dev/vda1'),
+}
+
+
+@pytest.mark.skipif(shutil.which('bash') is None, reason='needs bash')
+@pytest.mark.parametrize('fstype', GROW_CASES)
+def test_firstboot_grows_the_root_filesystem_for_its_fstype(tmp_path, fstype):
+    source, fs, expected = GROW_CASES[fstype]
+    device = source.split('[')[0]
+    log = tmp_path / 'log'
+    stubs = {
+        # Like util-linux: -v (--nofsroot) drops the [/subvolume] suffix.
+        'findmnt': f'case "$1" in -no) [ "$2" = FSTYPE ] && echo {fs} || echo "{source}" ;; '
+                   f'-nvo) echo {device} ;; *) exit 1 ;; esac',
+        'lsblk': f'[ "$3" = {device} ] && echo vda || exit 1',
+    }
+    for name in ('growpart', 'resize2fs', 'xfs_growfs', 'btrfs'):
+        stubs[name] = f'echo "{name} $*" >> {log}'
+    for name, body in stubs.items():
+        (tmp_path / name).write_text(f'#!/bin/bash\n{body}\n')
+        (tmp_path / name).chmod(0o755)
+
+    result = subprocess.run(['bash', '-c', _grow_root_command()], capture_output=True, text=True,
+                            env={'PATH': f'{tmp_path}:/usr/bin:/bin'}, timeout=30)
+
+    assert result.returncode == 0, result.stderr
+    assert log.read_text().splitlines() == [f'growpart /dev/vda {device[-1]}', expected]
+
+
 @needs_tools
 def test_post_install_runs_through_guest_exec_with_the_script_as_input(builder):
     result, _ = builder()
