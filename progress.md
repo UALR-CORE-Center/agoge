@@ -198,7 +198,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V12b** (found in iteration 100) `ComputeImage.create_image_server` and `NestedImage.create` write the CHECKED_OUT record before publishing CHECK_OUT, so a failed publish leaves a record no build will ever pick up, and a retry with the same name gets 409. Delete the record (or mark nested phase `failed`) when the publish raises.
 - [x] **V6f** (found in iteration 125; done in iteration 126) The wizard's `nestedMinDiskSize` (`nestedWizardState.ts`, used by `HostStep`, the disk check in the state validator, and `accessReview.capacityMeters`) still mirrors the old rule. It omits the media reservation that `NestedHostValidator.min_disk_size`/`media_sizes` now add, so a typed `disk_size` between the two minimums gets a 400 from the API. Add `media_size_bytes` to `NestedOsCatalogEntry` and its transformer, then pass the catalog and media (`GuestRuleContext`) into `nestedMinDiskSize`. Key media the way `media_sizes` does: `sha256`, else `upload-<id>`, else the entry; an unknown size reserves `NESTED_MEDIA_MAX_BYTES`. Add vitest coverage.
 
-- [ ] **V6g** (found in iteration 127) `builder.sh` `prepare_disk`'s `img.xz` branch ignores a failed `xz -dc` (for example, the parent disk filling up). The truncated raw image still converts, so the guest gets a disk it cannot boot from. Fail the guest the way the `img.bz2` branch does, and add a test.
+- [x] **V6g** (found in iteration 127; done in iteration 128) `builder.sh` `prepare_disk`'s `img.xz` branch ignores a failed `xz -dc` (for example, the parent disk filling up). The truncated raw image still converts, so the guest gets a disk it cannot boot from. Fail the guest the way the `img.bz2` branch does, and add a test.
 
 ### Human checks
 - [ ] **HUMAN** Browser and live checks the loop cannot do: N13, N14, V17–V21 and V23 "verified in browser" done-whens, and V25 live acceptance (SC-35–SC-38) on the development project. Leave this for a person; do not mark it done.
@@ -2357,3 +2357,15 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - CTF eslint/tsc: pass. Group V eslint/tsc: pass.
 - **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. CentOS Stream 9 has no published SHA-256. VyOS publishes no SHA-256. V25 and HUMAN need a person.
 - **Next:** V6g (the `img.xz` expansion failure path). Then pfSense CE (`.iso.gz`/`.img.gz`; check whether a published SHA-256 and a VGA-console image exist), Metasploitable 2, or Alpine (builder work).
+
+### Iteration 128 — 2026-10-17
+- **Completed:** V6g. In `builder.sh` `prepare_disk`, the `img.xz` branch now fails the guest when `xz -dc` fails. It removes `work-<guest>` and sets `FAIL_MESSAGE="could not expand the img.xz media"`, matching the `img.bz2` branch, so a truncated raw image is never converted into a disk that cannot boot.
+- **Learned:** no catalog entry ships `img.xz` yet, so the tests point the `opnsense` fixture at an `img.xz` URL with a matching hash. A corrupt body with a correct SHA-256 reaches the expansion step, which is the only way to test that step's failure.
+- **Tests:** `test_nested_builder.py::test_an_xz_disk_image_is_expanded_to_raw_before_conversion` and `::test_an_xz_disk_image_that_will_not_expand_fails_only_that_guest` run real `xz`. The failure test fails against the unfixed script.
+- **Gate results:**
+  - api/unit_tests: 1660 passed, 97.67%.
+  - cloud_functions/tests: 910 passed, 94.28%.
+  - build_files: 490 passed.
+  - No frontend files changed.
+- **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. CentOS Stream 9 and VyOS publish no SHA-256. V25 and HUMAN need a person.
+- **Next:** the rest of V6b2: pfSense CE (check for a published SHA-256 and a VGA-console image), Metasploitable 2, or Alpine (needs builder work).

@@ -6,6 +6,7 @@ import base64
 import bz2
 import hashlib
 import json
+import lzma
 import os
 import re
 import shutil
@@ -804,4 +805,49 @@ def test_a_bz2_disk_image_that_will_not_expand_fails_only_that_guest(builder):
     assert result.returncode == 0, result.stderr
     assert last['guest-fw'] == 'failed:could not expand the img.bz2 media'
     assert '--name fw' not in log
+    assert last['guest-deb'] == 'ready'
+
+
+def _xz_firewall_catalog(content):
+    # The opnsense fixture, re-pointed at an img.xz medium with content's hash.
+    entry = CATALOG['opnsense'].model_copy(update={
+        'media_url': 'https://pkg.opnsense.example/nano.img.xz', 'media_sha256': _sha(content),
+        'media_formats': ['img.xz']})
+    return dict(CATALOG, opnsense=entry)
+
+
+@needs_tools
+@pytest.mark.skipif(shutil.which('xz') is None, reason='needs xz')
+def test_an_xz_disk_image_is_expanded_to_raw_before_conversion(builder):
+    nano = lzma.compress(b'preinstalled firewall disk bytes', format=lzma.FORMAT_XZ)
+    (builder.fake / 'web' / 'nano.img.xz').write_bytes(nano)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(globals(), 'CATALOG', _xz_firewall_catalog(nano))
+        result, log = builder(spec=_spec(fw={'os_id': 'opnsense', 'media_id': None}))
+
+    last, _ = _attributes(builder.fake)
+    work = builder.root / MEDIA_DIR.lstrip('/') / 'work-fw'
+    assert result.returncode == 0, result.stderr
+    assert f'qemu-img convert -f raw -O qcow2 {work}/disk.img ' in log
+    assert not work.exists()
+    assert last['guest-fw'] == 'ready'
+
+
+@needs_tools
+@pytest.mark.skipif(shutil.which('xz') is None, reason='needs xz')
+def test_an_xz_disk_image_that_will_not_expand_fails_only_that_guest(builder):
+    # The hash matches, so only the expansion can fail (in production: the parent disk filling up).
+    corrupt = b'\xfd7zXZ\x00 not really xz'
+    (builder.fake / 'web' / 'nano.img.xz').write_bytes(corrupt)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(globals(), 'CATALOG', _xz_firewall_catalog(corrupt))
+        result, log = builder(spec=_spec(fw={'os_id': 'opnsense', 'media_id': None}))
+
+    last, _ = _attributes(builder.fake)
+    assert result.returncode == 0, result.stderr
+    assert last['guest-fw'] == 'failed:could not expand the img.xz media'
+    assert '--name fw' not in log
+    assert not (builder.root / MEDIA_DIR.lstrip('/') / 'work-fw').exists()
     assert last['guest-deb'] == 'ready'
