@@ -177,7 +177,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [x] **V21** Image list and details for nested images — spec + done-when at PRD.md:1701 (code and vitest here; the browser check is carried by HUMAN)
 - [x] **V22** Guacamole targets for guests — spec + done-when at PRD.md:1703
 - [x] **V23** Spec editor and CTF integration — spec + done-when at PRD.md:1705 (needs N3, N5, N13; the browser check is carried by HUMAN)
-- [ ] **V24** Nested image guide — spec + done-when at PRD.md:1707
+- [x] **V24** Nested image guide — spec + done-when at PRD.md:1707
 - [ ] **V25** Live acceptance — spec + done-when at PRD.md:1708 — **HUMAN ONLY.** Builds real VMs on the development project; the loop must not attempt it. Carried by HUMAN.
 
 - [x] **V14b** (found in iteration 102) If the Cloud Function dies hard after `finalize_nested` writes phase `finalizing` (or the CHECK_IN delivery fails before `create_production_image`, e.g. in `load()`), the phase stays `finalizing`: a redelivered NESTED_FINALIZE hits `Conflict`, and the API refuses Check In with 409 forever. Treat a `finalizing` phase whose `updated_at` is older than `NESTED_FINALIZE_TIMEOUT_SECONDS` plus a margin as finalizable, in both `ImageTemplateManager.finalize_nested` and `ComputeImage._check_in_action`, with tests.
@@ -2063,3 +2063,10 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V24, the nested image guide `docs/guides/nested-lab-hosts.md`.
 
+
+### Iteration 114 — 2026-10-17
+- **Completed:** V24. Wrote `docs/guides/nested-lab-hosts.md`. It covers licensing (eval periods, `slmgr /rearm`, no Windows redistribution, upload limits), sizing, every wizard step, build time and troubleshooting (builder log, `agoge-nested/message`, failure messages), tunnels, finalize, lab use (aliases and connections), CTF use, and the root-on-parent warning. The Game Master Guide's nested section now links to it.
+- **Learned:** the OS catalog is empty until V6 is unblocked. The guide says the administrator maintains `nested-os-catalog`, and an entry without `media_sha256` fails its download. Finalize's `agoge-pristine` has no BIOS-only check in code; the guide warns that UEFI guests can fail the snapshot.
+- **Gate results:** docs only, so no code gates apply.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5. V25 and HUMAN need a person.
+- **Next:** none the loop can do. V6 waits on V-5's answers; V25 and HUMAN are human-only.
