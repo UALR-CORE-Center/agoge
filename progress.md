@@ -139,7 +139,7 @@ See `### Nested Guest Contract` in PRD.md.
 - [x] **N2** Loader forward block — spec + done-when at PRD.md:1626
 - [x] **N3** Nested guest models — spec + done-when at PRD.md:1628
 - [x] **N4** Nested contract constants — spec + done-when at PRD.md:1630
-- [ ] **N5** Nested guest validator — spec + done-when at PRD.md:1632
+- [x] **N5** Nested guest validator — spec + done-when at PRD.md:1632
 - [ ] **N6** Guest payload builder — spec + done-when at PRD.md:1634
 - [ ] **N7** qemu-agent relay section — spec + done-when at PRD.md:1636
 - [ ] **N8** Plant watcher installer — spec + done-when at PRD.md:1638
@@ -1179,3 +1179,10 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** api/unit_tests 1411 passed; cloud_functions/tests 498 passed; build_files/cloud_deployment/tests 319 passed; ruff clean on changed files. No frontend files changed.
 - **Blockers:** none.
 - **Next:** N5 (nested guest validator in `object_validators/ctf.py`).
+
+### Iteration 80 — 2026-10-17
+- **Completed:** N5. `CtfValidator` (`api/utilities/infrastructure_as_code/object_validators/ctf.py`) gains `_validate_nested_guests` (parent exists, `details.os` (fallback top-level `os`) is `linux`, some NIC has non-empty `ip_aliases`, `(server, name)` unique, ≤ 8 per server; messages name the guest) and `_validate_offline_windows` (file/registry/env only, no `windows_access`/`hidden`, registry under `HKLM\SOFTWARE\` or `HKLM\SYSTEM\`; messages name the flag). Flag loop: `guest` must be declared on `flag.server` and match its `operating_system`; slot and same-OS keys are now `(server, guest, slot)` / `(server, guest)`. New `api/unit_tests/test_ctf_nested_guest_validation.py` (29 tests) covers every table row plus a plain spec without `nested_guests`; the existing `test_ctf_spec_validation.py` passes unchanged.
+- **Learned:** spec servers carry OS under `details.os` (ServerModel); the registry path pattern already forces `HKLM\`, so the offline prefix test needs an HKLM sibling such as `HKLM\SOFTWAREX\` to reach the new rule.
+- **Gate results:** api/unit_tests 1440 passed; cloud_functions/tests 498 passed; build_files/cloud_deployment/tests 319 passed; ruff clean on changed files. No frontend files changed.
+- **Blockers:** none.
+- **Next:** N6 (`FlagPlanter.build_guest_payload`).
