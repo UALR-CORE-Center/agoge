@@ -120,9 +120,9 @@ class ComputeImage:
             raise NotFound(message="No image data found")
         raise BadRequest(message=f"List request with invalid or missing `scope`: {scope}")
 
-    def machine_types(self) -> List[MachineTypeModel]:
-        """Retrieve list of valid machine types to use in server builds"""
-        return ComputeResources(env_dict=self.env_dict).get_machine_types()
+    def machine_types(self, nested: bool = False) -> List[MachineTypeModel]:
+        """Retrieve list of valid machine types to use in server builds, or in nested host builds"""
+        return ComputeResources(env_dict=self.env_dict).get_machine_types(nested=nested)
 
     def _with_ownership(self, image: dict, requester: AgogeUser = None) -> dict:
         shared = is_shared_image(image, self.env.project)

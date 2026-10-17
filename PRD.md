@@ -1460,161 +1460,161 @@ Ordered by dependency. Each item is one iteration and includes its own tests.
 
 **Group 0 — Green baseline**
 
-- [ ] **0.1 Frontend test script** — Change `frontend/package.json` `"test"` to `vitest run --exclude "tests/**"` so vitest stops collecting the `node:test` files in `frontend/tests/`.
+- [x] **0.1 Frontend test script** — Change `frontend/package.json` `"test"` to `vitest run --exclude "tests/**"` so vitest stops collecting the `node:test` files in `frontend/tests/`.
   - Done when: `(cd frontend && npm test)` exits 0 with 23 tests passing; the two `.mjs` files are untouched.
-- [ ] **0.2 Rubric opt-in tests** — Make the four failing tests in `api/unit_tests/test_rubric_opt_in.py` pass.
+- [x] **0.2 Rubric opt-in tests** — Make the four failing tests in `api/unit_tests/test_rubric_opt_in.py` pass.
   - Done when: `api/unit_tests` reports 49 passed, 0 failed; no test is deleted or skipped; `test_storing_openai_key_does_not_enable_rubrics` no longer reaches a real `input()` call.
 
 **Group A — Contracts and constants**
 
-- [ ] **A1 CTF constants** — Add `CtfStates`, six `DbCollections` members, `Handlers.CTF`, three `Actions`, three `EventAttributes`.
+- [x] **A1 CTF constants** — Add `CtfStates`, six `DbCollections` members, `Handlers.CTF`, three `Actions`, three `EventAttributes`.
   - Done when: a unit test asserts no new `Actions` value collides with an existing one.
-- [ ] **A2 CTF specification models** — Add `CtfFlagSpecModel`, `CtfScoringSpecModel`, `CtfSpecModel` and the `Literal` aliases.
+- [x] **A2 CTF specification models** — Add `CtfFlagSpecModel`, `CtfScoringSpecModel`, `CtfSpecModel` and the `Literal` aliases.
   - Done when: tests reject a bad flag id, an unknown `location_type`, and a malformed `file_mode`.
-- [ ] **A3 CTF stored models** — Add `CtfEventModel`, `CtfFlagStateModel`, `CtfBoardModel`, `CtfDigestModel`, `CtfRateLimitModel`, `CtfSubmissionModel`, `CtfLogModel`.
-- [ ] **A4 CTF request models** — Add the seven request models.
-- [ ] **A5 CTF response models** — Add the response models to `common/models/response.py`.
-- [ ] **A6 Spec block wiring** — Add `ctf: Optional[CtfSpecModel]` to `CatalogModel`, `CatalogEditModel`, `UnitModel`.
+- [x] **A3 CTF stored models** — Add `CtfEventModel`, `CtfFlagStateModel`, `CtfBoardModel`, `CtfDigestModel`, `CtfRateLimitModel`, `CtfSubmissionModel`, `CtfLogModel`.
+- [x] **A4 CTF request models** — Add the seven request models.
+- [x] **A5 CTF response models** — Add the response models to `common/models/response.py`.
+- [x] **A6 Spec block wiring** — Add `ctf: Optional[CtfSpecModel]` to `CatalogModel`, `CatalogEditModel`, `UnitModel`.
   - Done when: a test builds `CatalogEditModel → CatalogModel → UnitModel` and the `ctf` block survives each step, matching `test_opt_in_survives_specification_models_and_lab_build`.
 
 **Group B — Flag derivation and state**
 
-- [ ] **B1 Derivation module** — Write `common/utilities/ctf_flags.py` with the five contract functions.
+- [x] **B1 Derivation module** — Write `common/utilities/ctf_flags.py` with the five contract functions.
   - Done when: tests cover determinism, per-workout uniqueness (SC-3), `seed_version` sensitivity, case/whitespace normalization, `parse_flag_id` hits and misses, and that `flags_match` calls `hmac.compare_digest`.
-- [ ] **B2 Seed property** — Add the lazy `ctf_flag_seed` property to `CloudEnv`, matching `openai_api_key`.
-- [ ] **B3 Seed provisioning** — In `environment_variables.py`, add `ctf_enabled`; when set to true, create `ctf_flag_seed` with `secrets.token_hex(32)` if absent.
+- [x] **B2 Seed property** — Add the lazy `ctf_flag_seed` property to `CloudEnv`, matching `openai_api_key`.
+- [x] **B3 Seed provisioning** — In `environment_variables.py`, add `ctf_enabled`; when set to true, create `ctf_flag_seed` with `secrets.token_hex(32)` if absent.
   - Done when: a build_files test with mocked Secret Manager shows the secret is created once and not overwritten on a second enable.
-- [ ] **B4 CTF state manager** — Write `common/utilities/ctf_state_manager.py`.
+- [x] **B4 CTF state manager** — Write `common/utilities/ctf_state_manager.py`.
   - Done when: tests accept every allowed transition, raise `Conflict` for `(RUNNING, ARMING)` and `(ENDED, RUNNING)`, and stamp `state_timestamp`.
 
 **Group C — Specification validation**
 
-- [ ] **C1 Flag validator** — Write `object_validators/ctf.py`: every `server` names a server in the spec; flag ids unique; `(server, slot)` unique; every flag on one server has the same `operating_system`; `path` matches its row in Flag Location Formats; `registry`/`ads` require `windows`; non-decoy `points > 0`; every `unlocks_after` id exists and the graph has no cycle.
+- [x] **C1 Flag validator** — Write `object_validators/ctf.py`: every `server` names a server in the spec; flag ids unique; `(server, slot)` unique; every flag on one server has the same `operating_system`; `path` matches its row in Flag Location Formats; `registry`/`ads` require `windows`; non-decoy `points > 0`; every `unlocks_after` id exists and the graph has no cycle.
   - Done when: one test per rule rejects a bad spec with a message naming the flag id.
-- [ ] **C2 Validator wiring** — Call the validator from both `edit_manager._validate_spec` and `file_manager._validate_spec` when `ctf` is present.
+- [x] **C2 Validator wiring** — Call the validator from both `edit_manager._validate_spec` and `file_manager._validate_spec` when `ctf` is present.
   - Done when: a test per save path shows an invalid `ctf` block is rejected.
 
 **Group D — Compute primitives and the loader**
 
-- [ ] **D1 `set_metadata`** — Add `ComputeInstanceAPI.set_metadata(resource_name, items: dict, remove: list = None, wait=True)`: re-reads the instance for its current `fingerprint`, merges `items` into the existing metadata, drops keys in `remove`, and leaves every other key unchanged.
+- [x] **D1 `set_metadata`** — Add `ComputeInstanceAPI.set_metadata(resource_name, items: dict, remove: list = None, wait=True)`: re-reads the instance for its current `fingerprint`, merges `items` into the existing metadata, drops keys in `remove`, and leaves every other key unchanged.
   - Done when: tests show the merge keeps unrelated keys and that a 412 (stale fingerprint) triggers one re-read and retry.
-- [ ] **D2 `get_guest_attributes`** — Add `ComputeInstanceAPI.get_guest_attributes(resource_name, query_path)` returning a `{key: value}` dict, empty when none exist.
-- [ ] **D3 Plant contract module** — Write `common/utilities/ctf_plant_contract.py` with the names and both loader stubs.
-- [ ] **D4 Loader at build** — In `LabServerManager._add_metadata`, add the Linux loader through `_merge_metadata_item` and the Windows loader as `windows-startup-script-ps1`; extend `_merge_metadata_item` to concatenate `windows-startup-script-ps1`.
+- [x] **D2 `get_guest_attributes`** — Add `ComputeInstanceAPI.get_guest_attributes(resource_name, query_path)` returning a `{key: value}` dict, empty when none exist.
+- [x] **D3 Plant contract module** — Write `common/utilities/ctf_plant_contract.py` with the names and both loader stubs.
+- [x] **D4 Loader at build** — In `LabServerManager._add_metadata`, add the Linux loader through `_merge_metadata_item` and the Windows loader as `windows-startup-script-ps1`; extend `_merge_metadata_item` to concatenate `windows-startup-script-ps1`.
   - Done when: tests show an existing `startup-script` and assessment script are kept with the loader appended, and two Windows ps1 scripts are concatenated, not overwritten.
 
 **Group E — Planting**
 
-- [ ] **E1 Payload builder** — Write `FlagPlanter.build_payload(board, server, nonce, seed)` for Linux (bash) and Windows (PowerShell), covering every row of Flag Location Formats.
+- [x] **E1 Payload builder** — Write `FlagPlanter.build_payload(board, server, nonce, seed)` for Linux (bash) and Windows (PowerShell), covering every row of Flag Location Formats.
   - Done when: tests show the payload contains only that server's flags, contains the nonce, and has no command that prints a value (`echo $FLAG`-style).
-- [ ] **E2 Plant procedure** — Write `FlagPlanter.plant(board, servers)` per the Plant procedure.
+- [x] **E2 Plant procedure** — Write `FlagPlanter.plant(board, servers)` per the Plant procedure.
   - Done when: SC-5, SC-6, and SC-7 tests pass against a mocked `ComputeInstanceAPI`.
-- [ ] **E3 CTF handler** — Write `cloud_functions/handlers/ctf_handler.py` routing the three CTF actions, and add the `Handlers.CTF` branch to `cloud_functions/main.py`.
+- [x] **E3 CTF handler** — Write `cloud_functions/handlers/ctf_handler.py` routing the three CTF actions, and add the `Handlers.CTF` branch to `cloud_functions/main.py`.
   - Done when: a test shows each action reaches its class and an unknown action raises `ValueError`.
-- [ ] **E4 Arm worker** — Write `ArmWorker.run(ctf_id, workout_id)`: workout not `WorkoutStates.RUNNING` → board `failed` with `"Workout is not running"`; else plant every flag-bearing server; then aggregate.
+- [x] **E4 Arm worker** — Write `ArmWorker.run(ctf_id, workout_id)`: workout not `WorkoutStates.RUNNING` → board `failed` with `"Workout is not running"`; else plant every flag-bearing server; then aggregate.
   - Done when: SC-15 tests pass for all-armed, mixed, and zero-armed outcomes.
-- [ ] **E5 Overnight exemption** — Make `DailyMaintenance._stop_all` skip workouts with an active board in an event in `ARMING`, `ARMED`, `RUNNING`, or `PAUSED`.
+- [x] **E5 Overnight exemption** — Make `DailyMaintenance._stop_all` skip workouts with an active board in an event in `ARMING`, `ARMED`, `RUNNING`, or `PAUSED`.
   - Done when: SC-20 test passes and non-CTF workouts are still stopped.
 
 **Group F — Event core**
 
-- [ ] **F1 Config and feature flag** — Write `api/core/ctf/config.py` `is_ctf_enabled()` reading `admin-info/project` with a 60-second in-process cache, plus the `ctf_enabled_required` dependency.
+- [x] **F1 Config and feature flag** — Write `api/core/ctf/config.py` `is_ctf_enabled()` reading `admin-info/project` with a 60-second in-process cache, plus the `ctf_enabled_required` dependency.
   - Done when: a test shows a changed flag is seen after the cache expires.
-- [ ] **F2 Error helper** — Write `api/utilities/http_errors.py` `to_http_exception(e)` using the Error Handling table.
-- [ ] **F3 Audit helper** — Write `api/core/ctf/audit.py` `CtfAudit.action(...)` context manager writing one `CtfLogModel` with `OK`, `DENIED`, or `ERROR`.
+- [x] **F2 Error helper** — Write `api/utilities/http_errors.py` `to_http_exception(e)` using the Error Handling table.
+- [x] **F3 Audit helper** — Write `api/core/ctf/audit.py` `CtfAudit.action(...)` context manager writing one `CtfLogModel` with `OK`, `DENIED`, or `ERROR`.
   - Done when: tests cover all three results and show `detail` rejects a value matching `^agoge\{`.
-- [ ] **F4 Event create** — *Superseded by L2.* Originally `CtfEvent.create(unit_id, user)` built one board per existing workout; creation now starts from a catalog template with no teams, and boards are added per team in DRAFT.
+- [x] **F4 Event create** — *Superseded by L2.* Originally `CtfEvent.create(unit_id, user)` built one board per existing workout; creation now starts from a catalog template with no teams, and boards are added per team in DRAFT.
   - Done when: SC-1, SC-2, and the SC-4 check on created documents pass.
-- [ ] **F5 Event read, update, delete** — Add `get`, `list`, `update` (applies only fields in `model_fields_set`), `delete` (per the endpoint table).
-- [ ] **F6 Event actions** — Add `process_action` per the action map.
+- [x] **F5 Event read, update, delete** — Add `get`, `list`, `update` (applies only fields in `model_fields_set`), `delete` (per the endpoint table).
+- [x] **F6 Event actions** — Add `process_action` per the action map.
   - Done when: SC-13 and SC-14 tests pass and an illegal action raises `Conflict` naming the state.
-- [ ] **F7 Event reads for panels** — Add `state()`, `boards()`, `flags()`, `log()`, `submissions()` returning the response models; `state()` reads the event and one board query.
+- [x] **F7 Event reads for panels** — Add `state()`, `boards()`, `flags()`, `log()`, `submissions()` returning the response models; `state()` reads the event and one board query.
 
 **Group G — Hosts**
 
-- [ ] **G1 Replant publish** — Write `CtfHosts.replant(ctf_id, workout_ids, servers, user)` publishing one `CTF_PLANT` per board+server.
-- [ ] **G2 Host rows** — Add `CtfHosts.hosts(ctf_id)` joining boards to their workouts' server documents.
-- [ ] **G3 Reset publish** — Add `CtfHosts.reset(ctf_id, workout_id, server, mode, user)`; `rebuild` on a WireGuard server → `BadRequest`.
-- [ ] **G4 Reset dispatcher** — Write `host_reset.py` with a mode → method map called by `CtfHandler`.
+- [x] **G1 Replant publish** — Write `CtfHosts.replant(ctf_id, workout_ids, servers, user)` publishing one `CTF_PLANT` per board+server.
+- [x] **G2 Host rows** — Add `CtfHosts.hosts(ctf_id)` joining boards to their workouts' server documents.
+- [x] **G3 Reset publish** — Add `CtfHosts.reset(ctf_id, workout_id, server, mode, user)`; `rebuild` on a WireGuard server → `BadRequest`.
+- [x] **G4 Reset dispatcher** — Write `host_reset.py` with a mode → method map called by `CtfHandler`.
   - Done when: SC-9 test passes and an unknown mode raises `ValueError`.
-- [ ] **G5 Reset `replant`** — Delegate to `FlagPlanter.plant(board, [server])`.
-- [ ] **G6 Reset `restart`** — Delegate to `ComputeManagerFactory` `stop()` then `start()`.
-- [ ] **G7 Reset `rebuild`** — Delegate to `ComputeManagerFactory` `nuke()`, then mark that server's flags `stale`.
+- [x] **G5 Reset `replant`** — Delegate to `FlagPlanter.plant(board, [server])`.
+- [x] **G6 Reset `restart`** — Delegate to `ComputeManagerFactory` `stop()` then `start()`.
+- [x] **G7 Reset `rebuild`** — Delegate to `ComputeManagerFactory` `nuke()`, then mark that server's flags `stale`.
 
 **Group H — Scoring**
 
-- [ ] **H1 Submission resolve** — Write `CtfScoring.submit` steps 1, 3, 4, 5, 7 (closed, lookup, incorrect, cross-submission, record).
+- [x] **H1 Submission resolve** — Write `CtfScoring.submit` steps 1, 3, 4, 5, 7 (closed, lookup, incorrect, cross-submission, record).
   - Done when: SC-10 test passes.
-- [ ] **H2 Solve award** — Add step 6 in a board transaction.
+- [x] **H2 Solve award** — Add step 6 in a board transaction.
   - Done when: SC-12 concurrency test passes and decoy points apply with `decoy_count`.
-- [ ] **H3 Rate limiting** — Add step 2.
+- [x] **H3 Rate limiting** — Add step 2.
   - Done when: SC-11 test passes and a new window resets the count.
-- [ ] **H4 Hints** — Add `CtfScoring.hint`: deducts `hint_cost` once; a second call returns the hint without deducting.
-- [ ] **H5 Student board read** — Add `CtfScoring.board(workout_id)` returning `CtfStudentBoardResponse`, hiding decoys and flags whose `unlocks_after` are unsolved.
+- [x] **H4 Hints** — Add `CtfScoring.hint`: deducts `hint_cost` once; a second call returns the hint without deducting.
+- [x] **H5 Student board read** — Add `CtfScoring.board(workout_id)` returning `CtfStudentBoardResponse`, hiding decoys and flags whose `unlocks_after` are unsolved.
   - Done when: SC-17 test passes on the response.
-- [ ] **H6 Scoreboards** — Add instructor ranking (score desc, then earliest `last_solve_at`) and public ranking (anonymized, `is_you`, freeze-aware).
+- [x] **H6 Scoreboards** — Add instructor ranking (score desc, then earliest `last_solve_at`) and public ranking (anonymized, `is_you`, freeze-aware).
   - Done when: SC-16 test passes.
-- [ ] **H7 Score adjustment** — Add `CtfScoring.adjust(ctf_id, workout_id, delta, reason, user)` writing `SCORE_ADJUST`.
+- [x] **H7 Score adjustment** — Add `CtfScoring.adjust(ctf_id, workout_id, delta, reason, user)` writing `SCORE_ADJUST`.
 
 **Group R — Routers**
 
-- [ ] **R1 Instructor router** — Write `api/routers/ctf.py` with every `/ctf` route, using `to_http_exception` and `CtfAudit`.
-- [ ] **R2 Student router** — Write `api/routers/ctf_board.py` with every `/ctf-board` route.
-- [ ] **R3 Router registration** — Include both routers in `api/main.py`.
-- [ ] **R4 Router auth tests** — Write `test_ctf_router_auth.py`.
+- [x] **R1 Instructor router** — Write `api/routers/ctf.py` with every `/ctf` route, using `to_http_exception` and `CtfAudit`.
+- [x] **R2 Student router** — Write `api/routers/ctf_board.py` with every `/ctf-board` route.
+- [x] **R3 Router registration** — Include both routers in `api/main.py`.
+- [x] **R4 Router auth tests** — Write `test_ctf_router_auth.py`.
   - Done when: a non-instructor gets 403 on every `/ctf` route, a non-admin gets 403 on DELETE, reveal returns 403 for an instructor, and SC-19's 404 behavior holds.
 
 **Group I — Game master UI**
 
-- [ ] **I1 CTF TypeScript models** — Write `services/Ctf/ctf.model.ts` as `export interface`s with snake_case keys mirroring every response and request model.
-- [ ] **I2 CTF transformer and service** — Write `utilities/transformers/ctf.transform.ts` and `services/Ctf/ctf.service.ts` calling each endpoint through `apiService`.
+- [x] **I1 CTF TypeScript models** — Write `services/Ctf/ctf.model.ts` as `export interface`s with snake_case keys mirroring every response and request model.
+- [x] **I2 CTF transformer and service** — Write `utilities/transformers/ctf.transform.ts` and `services/Ctf/ctf.service.ts` calling each endpoint through `apiService`.
   - Done when: `ctf.service.test.ts`, using the mock setup in `rubric.service.test.ts`, covers one GET, one PUT, and one error path.
-- [ ] **I3 Feature flag hook** — Write `hooks/useCtfEnabled.tsx` reading `GET /ctf/config/` once per session for instructors.
-- [ ] **I4 Routes and menu** — Add `URL_TEACHER_CTF_BASE` (`${URL_TEACHER_BASE}/ctf`) and the dashboard URL, two `ProtectedRoute level="instructor"` routes, and one item in the **Teachers** `AppBarMenu` that is filtered out when `useCtfEnabled` is false.
+- [x] **I3 Feature flag hook** — Write `hooks/useCtfEnabled.tsx` reading `GET /ctf/config/` once per session for instructors.
+- [x] **I4 Routes and menu** — Add `URL_TEACHER_CTF_BASE` (`${URL_TEACHER_BASE}/ctf`) and the dashboard URL, two `ProtectedRoute level="instructor"` routes, and one item in the **Teachers** `AppBarMenu` that is filtered out when `useCtfEnabled` is false.
   - Done when: verified in browser that the item appears only when enabled.
-- [ ] **I5 Events list page** — Write `CtfEventList.tsx`: `StyledDataGrid` with Active / Archived `Tabs` (same `sx` as `ActiveExpiredUnitTable`), rows link to the dashboard.
+- [x] **I5 Events list page** — Write `CtfEventList.tsx`: `StyledDataGrid` with Active / Archived `Tabs` (same `sx` as `ActiveExpiredUnitTable`), rows link to the dashboard.
   - Done when: verified in browser.
-- [ ] **I6 Create from unit** — Write `CreateCtfButton.tsx` and render it in `TeacherUnit`'s left column only when the unit has a `ctf` block, as `UnitRubricEditor` is gated; on success navigate to the dashboard.
+- [x] **I6 Create from unit** — Write `CreateCtfButton.tsx` and render it in `TeacherUnit`'s left column only when the unit has a `ctf` block, as `UnitRubricEditor` is gated; on success navigate to the dashboard.
   - Done when: verified in browser that the button is absent on a non-CTF unit.
-- [ ] **I7 Action confirm dialog** — Write `Common/Dialogs/ActionConfirmDialog/ActionConfirmDialog.tsx` with props `{open, title, message, confirmLabel, onConfirm, onClose, loading}` and a `LoadingButton`, modelled on `ConfirmCancelDialog`.
-- [ ] **I8 CTF state chip** — Add a CTF mapping to `Common/Status/StateMapping.tsx` returning `{text, color, icon}` using theme palette keys, rendered through `StatusBadge` with `icon` and announced through `StateInfo`'s `aria-live`.
-- [ ] **I9 Dashboard shell** — Write `CtfDashboard.tsx` copying `TeacherUnit`'s 25/75 `Box` split: left column holds the state chip, remaining time, and Event Control panel in `Paper elevation={2}`; right column holds MUI `Tabs` for Flags, Hosts, Scoreboard, Event Log, Submissions. Polls `state` with `usePolling` every 10 s. Shows an `Alert` banner when `budget_exceeded`.
+- [x] **I7 Action confirm dialog** — Write `Common/Dialogs/ActionConfirmDialog/ActionConfirmDialog.tsx` with props `{open, title, message, confirmLabel, onConfirm, onClose, loading}` and a `LoadingButton`, modelled on `ConfirmCancelDialog`.
+- [x] **I8 CTF state chip** — Add a CTF mapping to `Common/Status/StateMapping.tsx` returning `{text, color, icon}` using theme palette keys, rendered through `StatusBadge` with `icon` and announced through `StateInfo`'s `aria-live`.
+- [x] **I9 Dashboard shell** — Write `CtfDashboard.tsx` copying `TeacherUnit`'s 25/75 `Box` split: left column holds the state chip, remaining time, and Event Control panel in `Paper elevation={2}`; right column holds MUI `Tabs` for Flags, Hosts, Scoreboard, Event Log, Submissions. Polls `state` with `usePolling` every 10 s. Shows an `Alert` banner when `budget_exceeded`.
   - Done when: verified in browser.
-- [ ] **I10 Event Control panel** — Render Arm, Start, Pause, Resume, End, Archive, each enabled only in its legal states. Arm/Start/Pause/Resume use `ActionConfirmDialog`; End and Archive use the existing type-to-confirm `ConfirmationDialog`, extended with a `confirmLabel` prop so its button no longer reads "Delete".
+- [x] **I10 Event Control panel** — Render Arm, Start, Pause, Resume, End, Archive, each enabled only in its legal states. Arm/Start/Pause/Resume use `ActionConfirmDialog`; End and Archive use the existing type-to-confirm `ConfirmationDialog`, extended with a `confirmLabel` prop so its button no longer reads "Delete".
   - Done when: verified in browser that illegal actions are disabled.
-- [ ] **I11 Scoreboard settings** — Write `ScoreboardSettings.tsx`: freeze toggle, public-scoreboard toggle, `ends_at` picker, each sending `PUT /ctf/{id}/`.
-- [ ] **I12 Flags panel** — Render a Community DataGrid of flag id, server, slot, points, decoy, and per-board plant status, with a Replant action per row; `stale` and `failed` rows show a warning icon and text.
-- [ ] **I13 Flags bulk replant** — Add Community `checkboxSelection` driving one scoped `PUT /ctf/{id}/flags/`.
-- [ ] **I14 Hosts panel** — Render one row per board per server with server state and a reset menu offering `replant`, `restart`, `rebuild` with no default; `rebuild` is disabled with a tooltip when `rebuild_allowed` is false and confirmed with the type-to-confirm dialog.
-- [ ] **I15 Scoreboard panel** — Render ranked boards, polled every 30 s, with a visible banner while frozen.
-- [ ] **I16 Event log panel** — Render the action log, filterable by action, newest first.
-- [ ] **I17 Submission log panel** — Render the submission log, filterable by verdict, newest first, with `cross_submission` rows showing the matched team.
+- [x] **I11 Scoreboard settings** — Write `ScoreboardSettings.tsx`: freeze toggle, public-scoreboard toggle, `ends_at` picker, each sending `PUT /ctf/{id}/`.
+- [x] **I12 Flags panel** — Render a Community DataGrid of flag id, server, slot, points, decoy, and per-board plant status, with a Replant action per row; `stale` and `failed` rows show a warning icon and text.
+- [x] **I13 Flags bulk replant** — Add Community `checkboxSelection` driving one scoped `PUT /ctf/{id}/flags/`.
+- [x] **I14 Hosts panel** — Render one row per board per server with server state and a reset menu offering `replant`, `restart`, `rebuild` with no default; `rebuild` is disabled with a tooltip when `rebuild_allowed` is false and confirmed with the type-to-confirm dialog.
+- [x] **I15 Scoreboard panel** — Render ranked boards, polled every 30 s, with a visible banner while frozen.
+- [x] **I16 Event log panel** — Render the action log, filterable by action, newest first.
+- [x] **I17 Submission log panel** — Render the submission log, filterable by verdict, newest first, with `cross_submission` rows showing the matched team.
 
 **Group J — Student UI**
 
-- [ ] **J1 Student CTF polling** — In `Workout.tsx`, fetch `GET /ctf-board/{workout_id}/` once on mount; if `enrolled`, poll it with `usePolling` every 15 s (independent of the page's existing 3.5 s workout poll); if not, make no further CTF request.
-- [ ] **J2 CTF banner** — Write `CtfBanner.tsx` at the top of the left `aside`, above `TimerBox`: a `Paper` with `component="section"` and `aria-labelledby` (as in `ConfigureAccess.tsx`), showing event name, state, remaining time, and a rules link.
+- [x] **J1 Student CTF polling** — In `Workout.tsx`, fetch `GET /ctf-board/{workout_id}/` once on mount; if `enrolled`, poll it with `usePolling` every 15 s (independent of the page's existing 3.5 s workout poll); if not, make no further CTF request.
+- [x] **J2 CTF banner** — Write `CtfBanner.tsx` at the top of the left `aside`, above `TimerBox`: a `Paper` with `component="section"` and `aria-labelledby` (as in `ConfigureAccess.tsx`), showing event name, state, remaining time, and a rules link.
   - Done when: verified in browser; absent when not enrolled.
-- [ ] **J3 Flag submission card** — Write `FlagSubmitCard.tsx` in the aside below `ConfigureAccess`: one text field, the flag format shown verbatim, verdicts shown with `showModal(SimpleSnackbar, {severity})`; a 429 shows the server's message.
+- [x] **J3 Flag submission card** — Write `FlagSubmitCard.tsx` in the aside below `ConfigureAccess`: one text field, the flag format shown verbatim, verdicts shown with `showModal(SimpleSnackbar, {severity})`; a 429 shows the server's message.
   - Done when: verified in browser.
-- [ ] **J4 Challenge list** — Write `ChallengeList.tsx` in the main column below `WorkoutTable`: category, points, solved state, and a hint button confirmed with `ActionConfirmDialog` stating the cost; no host, no path. When `public_scoreboard_enabled`, add a standings table with the caller's row highlighted.
+- [x] **J4 Challenge list** — Write `ChallengeList.tsx` in the main column below `WorkoutTable`: category, points, solved state, and a hint button confirmed with `ActionConfirmDialog` stating the cost; no host, no path. When `public_scoreboard_enabled`, add a standings table with the caller's row highlighted.
   - Done when: verified in browser.
 
 **Group K — Documentation**
 
-- [ ] **K1 Game master guide** — Write `docs/guides/game-master-guide.md` covering spec authoring (with a complete `ctf` block example), create-to-archive, the three reset modes, what `stale` and `failed` mean, and the overnight-stop exemption.
+- [x] **K1 Game master guide** — Write `docs/guides/game-master-guide.md` covering spec authoring (with a complete `ctf` block example), create-to-archive, the three reset modes, what `stale` and `failed` mean, and the overnight-stop exemption.
 
 **Group L — Setup & rosters**
 
 Replaces create-from-unit. The game master creates an event from **Teachers → CTF Events**, then prepares it in DRAFT before any participant can join.
 
-- [ ] **L1 Shared workout record** — Move `BaseUnit._create_workout_record` into `common/utilities/workout_record.py` `build_workout_record(unit_model, workout_id, …)` so the API can write a NOT_BUILT workout without a Pub/Sub round trip; `BaseUnit` delegates to it.
-- [ ] **L2 Create from template** — `CtfSetup.create`: `POST /ctf/` body `{spec_id, name?, expires}`. Solo templates with a `ctf` block only (community → 400). Writes a solo unit (`Unit.new_unit_model`, `ctf_event_id`, `registration_required`, `count` 0) and a DRAFT event with no boards and the unit's `join_code`; publishes nothing. `GET /ctf/templates/` lists eligible templates.
-- [ ] **L3 Teams** — `GET|POST /ctf/{id}/teams/`, `PUT|DELETE /ctf/{id}/teams/{workout_id}/`. A team is a board with `members` plus a NOT_BUILT workout (`team_name`, `student_email` = first member). Add/remove only in DRAFT (board id list changed in a transaction that re-checks DRAFT); remove only while NOT_BUILT; names unique per event; an email on at most one active board; `ctf_max_boards` caps teams. Members editable until ENDED.
-- [ ] **L4 Per-event flags** — `PUT /ctf/{id}/spec/` in DRAFT only: `CtfSpecModel` + `CtfValidator` against the unit's servers, then every board's flag states and digests are rebuilt and stale digests deleted.
-- [ ] **L5 Servers** — `PUT /ctf/{id}/servers/` `{action: build|start|stop}` publishes the existing workout BUILD/START/STOP messages per team (build only NOT_BUILT; stop never while RUNNING). Arm with no boards → 400 "Add at least one team before arming".
-- [ ] **L6 Roster-only join** — `Workout._find_existing_workout`: on a unit with `ctf_event_id`, the email resolves through the active board whose `members` contains it (single `array_contains` filter; no composite index) to the team's workout; anyone else → `NotOnRoster` → 403 with a roster message. Non-CTF units unchanged.
-- [ ] **L7 Setup UI** — **New CTF** dialog on the events list; a **Setup** tab (default in DRAFT) with Teams (add, CSV import, members, remove, join code), Flags (editor), and Servers (build/start/stop all) sections; Arm disabled until there is a team. The lab-page **Create CTF Event** button is removed.
+- [x] **L1 Shared workout record** — Move `BaseUnit._create_workout_record` into `common/utilities/workout_record.py` `build_workout_record(unit_model, workout_id, …)` so the API can write a NOT_BUILT workout without a Pub/Sub round trip; `BaseUnit` delegates to it.
+- [x] **L2 Create from template** — `CtfSetup.create`: `POST /ctf/` body `{spec_id, name?, expires}`. Solo templates with a `ctf` block only (community → 400). Writes a solo unit (`Unit.new_unit_model`, `ctf_event_id`, `registration_required`, `count` 0) and a DRAFT event with no boards and the unit's `join_code`; publishes nothing. `GET /ctf/templates/` lists eligible templates.
+- [x] **L3 Teams** — `GET|POST /ctf/{id}/teams/`, `PUT|DELETE /ctf/{id}/teams/{workout_id}/`. A team is a board with `members` plus a NOT_BUILT workout (`team_name`, `student_email` = first member). Add/remove only in DRAFT (board id list changed in a transaction that re-checks DRAFT); remove only while NOT_BUILT; names unique per event; an email on at most one active board; `ctf_max_boards` caps teams. Members editable until ENDED.
+- [x] **L4 Per-event flags** — `PUT /ctf/{id}/spec/` in DRAFT only: `CtfSpecModel` + `CtfValidator` against the unit's servers, then every board's flag states and digests are rebuilt and stale digests deleted.
+- [x] **L5 Servers** — `PUT /ctf/{id}/servers/` `{action: build|start|stop}` publishes the existing workout BUILD/START/STOP messages per team (build only NOT_BUILT; stop never while RUNNING). Arm with no boards → 400 "Add at least one team before arming".
+- [x] **L6 Roster-only join** — `Workout._find_existing_workout`: on a unit with `ctf_event_id`, the email resolves through the active board whose `members` contains it (single `array_contains` filter; no composite index) to the team's workout; anyone else → `NotOnRoster` → 403 with a roster message. Non-CTF units unchanged.
+- [x] **L7 Setup UI** — **New CTF** dialog on the events list; a **Setup** tab (default in DRAFT) with Teams (add, CSV import, members, remove, join code), Flags (editor), and Servers (build/start/stop all) sections; Arm disabled until there is a team. The lab-page **Create CTF Event** button is removed.
   - Done when: verified in browser on the development project.
 
 **Group N — Nested lab hosts**
@@ -1660,7 +1660,7 @@ first.
 
 - [x] **V1 Nested virtualization for template and lab servers** — In `BaseComputeManager._build_server`, enable nested virtualization when `self.ip_aliases` **or** the server's image record has `nested`. `ImageTemplateManager._load_template_server` and `LabServerManager` set a `self.nested_host` flag from the image document. Fix the stale local `min_cpu_platform` (Working Note 18) so the N1/N2 platform reaches the insert. Raise `BadRequest` for an E2 machine type on a nested server.
   - Done when: mocked tests show `InstanceResource.new` receives `advanced_machine_features={"enable_nested_virtualization": True}` and the platform for a nested template server, a nested lab server, and an `ip_aliases` lab server (unchanged); E2 is rejected; a standard template server gets neither.
-- [ ] **V2 Nested machine types** — Make `ComputeMachineType.get` resolve any N1/N2 type up to `NESTED_MAX_MACHINE_MEMORY_MB` (keeping the 17000 MB cap for `list()` unless `nested=True`), and make `_lookup_machine_type` handle `None` instead of raising `AttributeError` (Working Note 20). `GET /compute/images/machine-types/?nested=true` returns N1/N2 types up to the nested cap.
+- [x] **V2 Nested machine types** — Make `ComputeMachineType.get` resolve any N1/N2 type up to `NESTED_MAX_MACHINE_MEMORY_MB` (keeping the 17000 MB cap for `list()` unless `nested=True`), and make `_lookup_machine_type` handle `None` instead of raising `AttributeError` (Working Note 20). `GET /compute/images/machine-types/?nested=true` returns N1/N2 types up to the nested cap.
   - Done when: tests show `n2-standard-8` resolves for a nested server, an unknown type falls back to SMALL with a warning, the default list is unchanged, and the nested list holds no E2 type.
 - [ ] **V3 License on check-in** — Add `licenses: Optional[List[str]]` to `ComputeImageAPI.create` (passed into `Image(...)`), and have `ImageTemplateManager._create_image_from_snapshot` pass `[ENABLE_VMX_LICENSE]` when the record has `nested`.
   - Done when: mocked `ImagesClient.insert` receives the license for a nested record and no `licenses` for a standard one.
