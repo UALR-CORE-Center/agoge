@@ -1098,3 +1098,35 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** api/unit_tests 1369 passed; cloud_functions/tests 493 passed; build_files/cloud_deployment/tests 316 passed; frontend `npm test` 34 files, 393 tests passed.
 - **Blockers:** none. I4b and HUMAN are human-only.
 - **Next:** the verifier should re-check L1–L7, V1 and V2, which were never loop-verified. Then N1 (PRD says ship it first), continuing in queue order through Group N and Group V.
+
+### Verification — 2026-10-17 — PASS
+- **Checked:** L1–L7, V1 and V2. These were done outside the loop and had never been loop-verified (HEAD `efb9f8f`, clean tree). Two read-only agents covered Group L and V1/V2 against PRD.md:1606-1617 and :1661-1664. I spot-checked the key claims myself.
+  - L1: `common/utilities/workout_record.py` `build_workout_record` writes a NOT_BUILT record. `BaseUnit._create_workout_record` delegates to it (`base_unit.py:353-367`), and `api/core/ctf/setup.py:196` calls it directly. The delegation is tested in `test_workout_record.py`.
+  - L2: `CtfSetup.create` (`setup.py:108-166`) gives a 400 for a community template and for a template with no `ctf` block. It writes a unit with `count` 0, `registration_required` and `ctf_event_id`, and a DRAFT event with `board_ids=[]` and the unit's `join_code`. It publishes nothing. `GET /ctf/templates/` returns `{'items'}`.
+  - L3: add and remove are DRAFT-only, and the board-id list changes in a transaction that re-checks DRAFT (`_change_board_ids`). Remove requires NOT_BUILT. Names are unique (case-insensitive), `ctf_max_boards` caps teams, and an email can be on only one active board. Members can be edited until ENDED.
+  - L4: `update_spec` is DRAFT-only and runs `CtfValidator` against the unit's servers. It rebuilds boards and digests in a DRAFT-checked transaction, then deletes stale digests.
+  - L5: `SERVER_ACTIONS` sends build only to NOT_BUILT workouts and never stops a RUNNING one. Arming with no boards gives "Add at least one team before arming" (`event.py:182`, confirmed).
+  - L6: `Workout._find_existing_workout` uses a single `ARRAY_CONTAINS` filter (`workout.py:375`, confirmed). `NotOnRoster` subclasses `Forbidden` and maps to 403 with a roster message. Non-CTF units take the old path. Covered by the 21 tests in `test_ctf_roster_join.py`.
+  - L7: code and vitest only. There is a New CTF dialog. DRAFT opens on the Setup tab, which has Teams (CSV import, remove, join code), Flags and Servers sections. Arm is disabled with no boards, and no lab-page Create CTF button remains. The done-when's browser check is carried by I4b, which stays `[ ]`, the same treatment I5, I6, I9 and I10 received.
+  - V1: `_build_server` (`base_compute_manager.py:284-313`, confirmed):
+    - It raises `BadRequest` for E2 on a nested host before the BUILDING transition.
+    - It enables nested virtualization on `ip_aliases or nested_host`.
+    - The platform is derived from the resolved type and then read into the local `min_cpu_platform`, which fixes the stale local (WN18).
+    - `nested_host` is set in `BaseComputeManager._load_template_server`, the base-class method `ImageTemplateManager` uses, and in `LabServerManager`.
+    - All done-when cases are in `test_nested_virtualization.py`.
+  - V2: `ComputeMachineType.get` checks the nested cap first: N1/N2 up to 65536 MB. `list()` keeps 17000 MB unless `nested=True`. `_lookup_machine_type` falls back to SMALL with a warning on `None` or `NotFound`. `?nested=true` is on the route. All done-when cases are tested, including at the route level.
+  - Sweep: no TODO, FIXME or `NotImplemented` in the new L/V source.
+  - Notes, not reopened:
+    - `get` now resolves N1/N2 up to 64 GB for non-nested servers too. The PRD wording allows it.
+    - The L3 one-board-per-email check is outside the commit transaction. The code documents this.
+    - A nested image shared from another project reads as not nested.
+- **Gate results:**
+  - api/unit_tests: 1369 passed.
+  - cloud_functions/tests: 493 passed.
+  - build_files/cloud_deployment/tests: 319 passed.
+  - frontend `npm test`: 34 files, 393 tests passed (exit 0).
+  - CTF ESLint gate: exit 0, 0 warnings.
+  - CTF tsc gate: exit 0.
+  - Group V tsc gate: exit 0.
+  - Group V ESLint gate: **exit 2**, "No files matching the pattern src/components/Teacher/ServerManagement/Forms/NestedImage". None of the targeted files (`NestedImage/`, `nested.service.ts`, `nested.model.ts`, `nested.transform.ts`) exist yet. They belong to V16–V21, which are all `[ ]`. No completed task is responsible, so this is not a failure of checked work, but the gate cannot pass until V16 exists.
+- **Reopened:** none.
