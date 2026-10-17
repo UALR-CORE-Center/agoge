@@ -170,7 +170,8 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
     - [x] **V6b2e** (iteration 123) openSUSE Leap 16.0 Minimal VM Cloud image (`nm-keyfile`, osinfo `opensuse16.0`), pinned to `distribution/leap/16.0/appliances/Leap-16.0-Minimal-VM.x86_64-Cloud-Build18.81.qcow2` with the SHA-256 from its published `.sha256`. `builder.sh` now relabels SELinux for `opensuse` osinfo ids and writes wheel sudoers drop-ins that override SUSE's `Defaults targetpw`.
     - [x] **V6b2f** (iteration 124) Security Onion 3.3.0 appliance (`manual_iso`, agentless, osinfo `generic`), pinned to `download.securityonion.net/file/securityonion/securityonion-3.3.0-20260911.iso` with the SHA-256 from the `3/main` branch's `DOWNLOAD_AND_VERIFY_ISO.md`.
     - [x] **V6b2g** (iteration 127) OPNsense 26.7 nano image (`disk_image`, agentless, osinfo `freebsd14.0`), pinned to `pkg.opnsense.org/releases/26.7/OPNsense-26.7-nano-amd64.img.bz2` with the SHA-256 from the release's `OPNsense-26.7-checksums-amd64.sha256`. Adds the `img.bz2` media format (model, frontend, `builder.sh` `prepare_disk`, `bzip2` host package).
-    - [ ] **V6b2** The rest of V6b (Kali, Debian, CentOS Stream 9, openSUSE Leap 15.6/Alpine, Metasploitable 2, Microsoft evals, appliances). Microsoft and Kali stay BLOCKED on V-5. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file. Debian publishes only SHA512SUMS, so its SHA-256 must come from another source or V-5.
+    - [x] **V6b2h** (iteration 129) Debian 11 (`ifupdown`), 12 and 13 (`netplan`) genericcloud images, pinned to dated `cloud.debian.org/images/cloud/<codename>/<build>/` files. Debian publishes only `SHA512SUMS`, so each SHA-256 was computed from a download that first matched the published SHA-512.
+    - [ ] **V6b2** The rest of V6b (Kali, CentOS Stream 9, openSUSE Leap 15.6/Alpine, Metasploitable 2, Microsoft evals, appliances). Microsoft and Kali stay BLOCKED on V-5. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file.
 - [x] **V6c** (found in iteration 116; done in iteration 118) Ubuntu 16.04's cloud image needs `net_config: ifupdown`. But its `/etc/network/interfaces` sources only `interfaces.d/*.cfg`, so `builder.sh` `write_network_config` must write `interfaces.d/agoge.cfg`, not `interfaces.d/agoge` (Debian sources `*`, so the rename is safe there). Then add `ubuntu-16.04` (`xenial/release-20211001/ubuntu-16.04-server-cloudimg-amd64-disk1.img`, sha256 `fff2494a70bcaffb59f26f71ec49e137dd87d319341c35832dbe0ea65ff15140`).
 - [x] **V6d** (found in iteration 116; done in iteration 117) Ubuntu 18.04 ships netplan.io 0.99 (`bionic/release-20230607` manifest), and `routes: [{to: default}]` needs netplan 0.103+. Make `builder.sh` write `to: 0.0.0.0/0`, which every netplan version accepts. Then add `ubuntu-18.04` (`bionic/release-20230607/ubuntu-18.04-server-cloudimg-amd64.img`, sha256 `8dd2e6b5e5aad20c3f836123b300cba9861249408cbb07c359145a65d6bab6b6`).
 - [x] **V7** Nested host validator — spec + done-when at PRD.md:1673
@@ -2369,3 +2370,17 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. CentOS Stream 9 and VyOS publish no SHA-256. V25 and HUMAN need a person.
 - **Next:** the rest of V6b2: pfSense CE (check for a published SHA-256 and a VGA-console image), Metasploitable 2, or Alpine (needs builder work).
+
+### Iteration 129 — 2026-10-17
+- **Completed:** V6b2h, split out of V6b2. `common/data/nested_os_catalog.json` has 41 entries. `debian-11`, `debian-12` and `debian-13` come right before `ubuntu-16.04`, and each is pinned to a dated genericcloud qcow2: bullseye `20260821-2577` (the last bullseye build), bookworm `20261015-2632`, and trixie `20261017-2634`. They use osinfo `debian<n>`, the Ubuntu sizing (512/2048 MB, 10/20 GB), and `media_size_bytes` from `Content-Length`.
+- **Learned:**
+  - cloud.debian.org publishes only `SHA512SUMS`, with no SHA-256 and no signature file in the dated dirs. I downloaded each qcow2 over https, checked it with `shasum -a 512 -c` against that dir's `SHA512SUMS` (all three OK), and then took its SHA-256. A verifier can repeat this.
+  - Each build's `<image>.json` lists its packages. Debian 11 ships `ifupdown` 0.8.36 plus `resolvconf`, so `dns-nameservers` works. Debian 12 (netplan.io 0.106) and 13 (1.1.2) ship netplan, not ifupdown, so they use `netplan`. All three ship `cloud-guest-utils`, so the firstboot growpart runs. None ships qemu-guest-agent, which the builder installs anyway.
+- **Tests:** no new test functions. The existing JSON-parametrized tests now run once per new entry: `test_nested_os_catalog_sync.py` checks https, SHA-256, size, a dated release and the cloud-image rules, and `test_nested_manifest.py` checks the pinned cloud-image download (`-k debian`: 3 passed).
+- **Gate results:**
+  - api/unit_tests: 1660 passed, 97.67%.
+  - cloud_functions/tests: 913 passed, 94.28%.
+  - build_files: 502 passed.
+  - No frontend files changed.
+- **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. CentOS Stream 9 and VyOS publish no SHA-256. V25 and HUMAN need a person.
+- **Next:** the rest of V6b2: pfSense CE (check for a published SHA-256 and a VGA-console image), Metasploitable 2 (SourceForge zip; check for a published hash), or Alpine (needs builder work for apk/openrc).
