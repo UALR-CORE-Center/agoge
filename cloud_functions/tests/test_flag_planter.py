@@ -280,7 +280,8 @@ def test_linux_payload_plants_every_linux_row_silently(sandbox):
         f'PATH="/usr/local/bin:/usr/bin"\nLANG=C\nAGOGE_ROOT_FLAG={_value("web-env")}\n'
     )
     iptables = (sandbox['calls'] / 'iptables').read_text().splitlines()
-    assert iptables[-1] == '-I OUTPUT -d 169.254.169.254 -m owner ! --uid-owner 0 -j REJECT'
+    assert '-I OUTPUT -d 169.254.169.254 -m owner ! --uid-owner 0 -j REJECT' in iptables
+    assert '-I FORWARD -d 169.254.169.254 -j REJECT' in iptables
     curl = (sandbox['calls'] / 'curl').read_text()
     assert f"--data ok:{NONCE} " in curl
     assert curl.rstrip().endswith('instance/guest-attributes/agoge-ctf/plant-result')
@@ -330,6 +331,59 @@ def test_linux_payload_failing_iptables_is_not_a_plant_failure(sandbox):
     _write_tool(sandbox['bin'], 'iptables', 'exit 1')
     payload = _linux_planter(sandbox['root']).build_payload(_board(BOARD_IDS), 'web', NONCE, SEED)
     _run(payload, sandbox)
+    assert f"--data ok:{NONCE} " in (sandbox['calls'] / 'curl').read_text()
+
+
+# --- N1: nested guests NAT'd through the host must not reach its metadata server ---------------------
+
+FORWARD_CHECK = 'iptables -C FORWARD -d 169.254.169.254 -j REJECT'
+FORWARD_INSERT = 'iptables -I FORWARD -d 169.254.169.254 -j REJECT'
+
+
+@pytest.mark.parametrize('flags, ids', [
+    ([_flag('web-user', 'web', 1, 'file', '/home/student/user.txt')], ['web-user']),
+    ([_flag('web-env', 'web', 1, 'env', 'AGOGE_FLAG')], ['web-env']),
+    ([_flag('web-env', 'web', 1, 'env', 'AGOGE_FLAG'),
+      _flag('web-root', 'web', 2, 'file', '/root/root.txt')], ['web-env', 'web-root']),
+])
+def test_every_linux_payload_blocks_forwarded_metadata_before_the_first_placement(flags, ids):
+    payload = FlagPlanter(_event(flags)).build_payload(_board(ids), 'web', NONCE, SEED)
+    # The planting helpers are defined in the prologue; a placement is a call line that starts with one
+    first_placement = min(
+        payload.index(line) for line in payload.splitlines()
+        if line.startswith(('agoge_ctf_plant_file ', 'agoge_ctf_plant_env '))
+    )
+    check = payload.index(FORWARD_CHECK)
+    assert check < payload.index(FORWARD_INSERT, check) < first_placement
+
+
+@pytest.mark.skipif(shutil.which('bash') is None, reason="bash is not installed")
+def test_linux_payload_skips_the_forward_insert_when_the_rule_exists(sandbox):
+    # -C succeeds: the rule is already there, so nothing is inserted twice
+    _write_tool(sandbox['bin'], 'iptables', f'printf "%s\\n" "$*" >> {sandbox["calls"]}/iptables')
+    payload = _linux_planter(sandbox['root']).build_payload(_board(BOARD_IDS), 'web', NONCE, SEED)
+    _run(payload, sandbox)
+    iptables = (sandbox['calls'] / 'iptables').read_text().splitlines()
+    assert '-C FORWARD -d 169.254.169.254 -j REJECT' in iptables
+    assert not any(call.startswith('-I ') for call in iptables)
+
+
+@pytest.mark.skipif(shutil.which('bash') is None, reason="bash is not installed")
+def test_linux_payload_reports_ok_when_iptables_is_absent(sandbox, tmp_path):
+    # A PATH holding only the tools the payload needs, so a real /usr/sbin/iptables cannot leak in
+    (sandbox['bin'] / 'iptables').unlink()
+    for tool in ('mkdir', 'dirname', 'chmod', 'grep', 'mktemp', 'cat', 'rm'):
+        found = shutil.which(tool)
+        if found is None:
+            pytest.skip(f"{tool} is not installed")
+        (sandbox['bin'] / tool).symlink_to(found)
+    payload = _linux_planter(sandbox['root']).build_payload(_board(BOARD_IDS), 'web', NONCE, SEED)
+    result = subprocess.run([shutil.which('bash'), '-c', payload], capture_output=True, text=True,
+                            env={**os.environ, 'PATH': str(sandbox['bin'])}, timeout=30)
+
+    assert result.returncode == 0
+    assert not (sandbox['calls'] / 'iptables').exists()
+    assert (sandbox['root'] / 'root/root.txt').read_text() == _value('web-root')
     assert f"--data ok:{NONCE} " in (sandbox['calls'] / 'curl').read_text()
 
 

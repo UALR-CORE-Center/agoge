@@ -44,10 +44,14 @@ agoge_ctf_errors=''
 agoge_ctf_fail() {{
   agoge_ctf_errors="${{agoge_ctf_errors:+$agoge_ctf_errors; }}$1"
 }}
-# Best effort: keep non-root users off the metadata server until the plant key is removed.
+# Best effort: keep non-root users off the metadata server until the plant key is removed, and keep
+# nested guests NAT'd through this host off it entirely (their traffic is FORWARDed, not OUTPUT).
 if command -v iptables >/dev/null 2>&1; then
   iptables -C OUTPUT -d {metadata_ip} -m owner ! --uid-owner 0 -j REJECT \\
     || iptables -I OUTPUT -d {metadata_ip} -m owner ! --uid-owner 0 -j REJECT \\
+    || true
+  iptables -C FORWARD -d {metadata_ip} -j REJECT \\
+    || iptables -I FORWARD -d {metadata_ip} -j REJECT \\
     || true
 fi
 # path value mode owner flag_id
