@@ -144,6 +144,7 @@ class BaseComputeManager:
         self.state_manager = None
         self.assessment = None
         self.ip_aliases = False
+        self.nested_host = False
         self.collection = DbCollections.SERVER
         self.primary_external_ip = None
 
@@ -257,6 +258,7 @@ class BaseComputeManager:
             ]
             self.server_spec.ssh_keys = ssh_keys
         self.server_spec.image = self.image_name
+        self.nested_host = bool(server_spec.get('nested'))
         self.server_spec.ip_aliases = server_spec.get('ip_aliases', None)
         self.server_spec.machine_image = server_spec.get('machine_image', None)
         self.server_spec.machine_type = (
@@ -281,6 +283,13 @@ class BaseComputeManager:
 
     def _build_server(self, finalize_state: bool = True) -> None:
         """Build a server, optionally deferring RUNNING until caller dependencies finish."""
+        # Reject before any disk or address is created for the server
+        machine_type = self._lookup_machine_type(self.server_spec.machine_type)
+        nested_host = getattr(self, 'nested_host', False)
+        if nested_host and machine_type.startswith('e2'):
+            raise BadRequest(
+                f'{self.class_name}:{self.server_name} - Nested hosts need an N1 or N2 machine type, not {machine_type}'
+            )
         self.state_manager.state_transition(self.s.BUILDING)
         self._add_disks()
         self._add_metadata()
@@ -288,20 +297,19 @@ class BaseComputeManager:
 
         advanced_machine_features = None
         min_cpu_platform = None
-        machine_type = self._lookup_machine_type(self.server_spec.machine_type)
         service_account = self.server_spec.service_accounts or self.compute_instance.SERVICE_ACCOUNT_CONFIG
         tags = {'items': self.server_spec.tags} if self.server_spec.tags else {'items': []}
 
-        if self.server_spec.min_cpu_platform and self.server_spec.min_cpu_platform != "":
-            min_cpu_platform = self.server_spec.min_cpu_platform
-        if self.ip_aliases:
+        if self.ip_aliases or nested_host:
             advanced_machine_features = {"enable_nested_virtualization": True}
-            if self.server_spec.min_cpu_platform is None:
-                machine_type_prefix = self.server_spec.machine_type[:2]
+            if not self.server_spec.min_cpu_platform:
+                machine_type_prefix = machine_type[:2]
                 if machine_type_prefix == 'n1':
                     self.server_spec.min_cpu_platform = "Intel Haswell"
                 elif machine_type_prefix == "n2":
                     self.server_spec.min_cpu_platform = "Intel Cascade Lake"
+        if self.server_spec.min_cpu_platform and self.server_spec.min_cpu_platform != "":
+            min_cpu_platform = self.server_spec.min_cpu_platform
 
         instance = (
             InstanceResource(zone=self.env.zone)

@@ -17,8 +17,7 @@ def installation(monkeypatch):
     base.run.side_effect = lambda: calls.append("base")
     base.ensure_wireguard_prerequisites.side_effect = lambda: calls.append("preflight")
     app = MagicMock()
-    app.deploy_main_app.side_effect = lambda: calls.append("apps") or True
-    app.deploy_cloud_functions.side_effect = lambda: calls.append("function") or True
+    app.deploy_main_app.side_effect = lambda **kwargs: calls.append("apps") or True
     routing = MagicMock()
     routing.run.side_effect = lambda: calls.append("routing") or True
     public_images = MagicMock()
@@ -43,13 +42,16 @@ def installation(monkeypatch):
 
 
 @pytest.mark.parametrize("method, expected, action", [
-    ("run_full_install", ["base", "apps", "function", "routing", "public-images", "guacamole", "labs", "record"], "initial install"),
-    ("run_update", ["preflight", "apps", "function", "routing", "record"], "update"),
+    ("run_full_install", ["base", "apps", "routing", "public-images", "guacamole", "labs", "record"], "initial install"),
+    ("run_update", ["preflight", "apps", "routing", "record"], "update"),
 ])
 def test_installation_routes_after_deployments_before_recording_success(installation, method, expected, action):
     getattr(installation.manager, method)()
 
     assert installation.calls == expected
+    # The function deploys on the same board as the apps, concurrently.
+    installation.app.deploy_main_app.assert_called_once_with(with_cloud_function=True)
+    installation.app.deploy_cloud_functions.assert_not_called()
     installation.constructors["AgogeApp"].assert_called_once_with(project="selected-tenant")
     installation.constructors["SharedLoadBalancer"].assert_called_once_with(project="selected-tenant")
     installation.manager._create_update_record.assert_called_once_with(action=action)
@@ -64,25 +66,24 @@ def test_full_install_does_not_report_success_with_incomplete_public_catalog(ins
 
     installation.manager.run_full_install()
 
-    assert installation.calls == ['base', 'apps', 'function', 'routing', 'public-images']
+    assert installation.calls == ['base', 'apps', 'routing', 'public-images']
     installation.manager._create_update_record.assert_not_called()
     installation.constructors['GuacamoleImageManager'].assert_not_called()
     assert 'Setup complete' not in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("method", ["run_full_install", "run_update"])
-@pytest.mark.parametrize("failure", ["apps", "function", "routing"])
+@pytest.mark.parametrize("failure", ["apps", "routing"])
 def test_failed_or_deferred_installation_stops_later_steps(installation, method, failure, capsys):
     step = {
         "apps": installation.app.deploy_main_app,
-        "function": installation.app.deploy_cloud_functions,
         "routing": installation.routing.run,
     }[failure]
-    step.side_effect = lambda: installation.calls.append(failure) or False
+    step.side_effect = lambda **kwargs: installation.calls.append(failure) or False
 
     getattr(installation.manager, method)()
 
-    sequence = ["apps", "function", "routing"]
+    sequence = ["apps", "routing"]
     prerequisite = "base" if method == "run_full_install" else "preflight"
     assert installation.calls == [prerequisite] + sequence[:sequence.index(failure) + 1]
     installation.manager._create_update_record.assert_not_called()

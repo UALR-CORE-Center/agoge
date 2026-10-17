@@ -2,6 +2,7 @@
 
 > **Created:** 2026-10-02
 > **Revised:** 2026-10-16 — audit fixes: metadata-safe planting, arm aggregation, NPCs and rotation moved to Phase 2, gates re-verified
+> **Revised:** 2026-10-17 — Group V: nested image builder (create nested lab hosts from the Create Image page)
 > **Author:** liquidswrds
 > **Status:** Draft
 > **Target branch:** `release/2027-spring` (the quality gates below were run there; it does not contain `main`'s `7d0a5a8`)
@@ -67,6 +68,10 @@ topic for the Cloud Function to execute.
   `cross_submission` on the game master's dashboard within the same request.
 - **Preserve the student experience.** The student workout page keeps its
   existing layout, route, and auth model, gaining exactly three sections.
+- **Build nested lab hosts** (Group V). An instructor creates, from the Create
+  Image page, one image holding a libvirt parent and up to eight guests (Kali,
+  Linux, Windows XP through Windows 11 / Server 2025, appliances) on networks they
+  define, and selects it as a server in any lab or CTF template.
 
 ## Non-Goals
 
@@ -116,8 +121,21 @@ do not add configuration hooks for them.
   student-modifiable; only the hypervisor channel is relied on.
 - **No nested hypervisor other than libvirt/QEMU-KVM on a Linux parent** (Group N).
   Hyper-V, VirtualBox, VMware, GNS3, and EVE-NG are Phase 2.
-- **No automatic guest snapshots.** The relay never creates `agoge-pristine`;
-  the instructor makes it during image prep.
+- **No automatic guest snapshots in the relay.** The relay never creates
+  `agoge-pristine`; it is made during image prep, by the instructor or by Group V's
+  finalize step.
+- **No Windows media redistribution** (Group V). Agoge downloads Windows only
+  from Microsoft-hosted evaluation URLs; everything else is uploaded by the
+  instructor, who supplies the license. No bundled ISOs, no key generation, no
+  activation bypass beyond Microsoft's documented `slmgr /rearm`.
+- **No unattended install of Windows XP, Server 2003, or older** (Group V). They
+  build as `manual_iso` or from an uploaded disk image; `winnt.sif` automation is Phase 2.
+- **No guests spanning several parents.** One nested host is one VM; multi-VM
+  labs keep using ordinary spec servers and networks.
+- **No Guacamole for image servers.** Instructors reach guests during the build
+  through SSH tunnels shown in the Connect dialog; Guacamole stays a lab feature.
+- **No automatic rebuild from a saved nested spec.** Editing a finalized host is
+  check-out, customize, check-in; regenerating from the spec is Phase 2.
 
 ---
 
@@ -153,6 +171,18 @@ do not add configuration hooks for them.
 | SC-26 | Replants one guest without resetting the parent | A guest-scoped plant or host reset calls compute `reset`, `stop`, `start`, and `nuke` 0 times (mocked), whether or not the watcher acks | 0 calls |
 | SC-27 | Reports guest results per guest | With mocked guest attributes where `plant-result-a` is `ok` and `plant-result-b` is `error`, guest a's flags end `planted` and guest b's `failed` with b's message | 100% |
 | SC-28 | Completes a guest replant inside the deadline | Manual: wall-clock from the Hosts-panel guest replant to `planted` on a live nested host with a running Linux guest | ≤ 90 seconds |
+| SC-29 | Creates a nested image server from the wizard | `POST /compute/images/nested/` with a valid body returns 200; `image/<name>` holds `nested` with derived `exposures`/`console_ports`, `nested_build.phase == "queued"`, no product key; exactly one CONTROL / CHECK_OUT / TEMPLATE_SERVER message is published (mocked) | 100% of valid requests |
+| SC-30 | Rejects invalid nested specs | One test per row of the Nested Image Builder validation table returns 400 naming the network, guest, or field | 100% of rows |
+| SC-31 | Gives nested template and lab servers nested virtualization | Mocked `InstanceResource.new` receives `enable_nested_virtualization` and an Intel `min_cpu_platform` for nested template servers, nested-image lab servers, and `ip_aliases` lab servers | 100% |
+| SC-32 | Licenses every nested image for VMX | Mocked `ImagesClient.insert` carries `ENABLE_VMX_LICENSE` on every nested check-in | 100% of nested check-ins |
+| SC-33 | Keeps guest secrets out of the manifest, the disk, and argument lists | Unit tests: no admin password, VNC password, or product key in `agoge-nested-manifest` or in any rendered command line; secrets are read only from `/run/agoge-nested/secrets.json` | 0 occurrences |
+| SC-34 | Removes the secrets item once a build ends | `NestedBuildMonitor` removes `agoge-nested-secrets` exactly once when the phase becomes `ready` or `failed` (mocked) | 100% of terminal builds |
+| SC-35 | Builds a three-guest host unattended | Manual: Kali (cloud image) + Ubuntu 24.04 + Windows Server 2022 Evaluation on two networks, `build_machine_type` `n2-standard-8`, from Submit to `ready` with no console interaction | ≤ 60 minutes |
+| SC-36 | Finalizes inside the function budget | Manual: Check In on a ready host reaches `finalized` and CHECKED_IN with `agoge-pristine` on every guest; the `NESTED_FINALIZE` invocation ends before 540 s | ≤ 360 s finalize |
+| SC-37 | Reaches every guest from a lab | Manual: a lab built from the finalized image opens a Guacamole session to each exposed guest (RDP/SSH) and to one console (VNC) | 100% of guests |
+| SC-38 | Isolates guests from the parent | Manual, from a guest on a NAT network of a lab server: the SC-24 metadata `curl` fails, and TCP 22 and 5901 on the parent's bridge address are refused or time out | 0 successful connections |
+| SC-39 | Keeps overnight maintenance from killing builds | `DailyMaintenance` publishes no STOP for a template server whose `nested_build.phase` is `provisioning` or `building` (mocked) | 0 such stops |
+| SC-40 | Never fetches Windows media from a non-Microsoft host | Catalog test: every Windows entry with a `media_url` has a Microsoft host; every Windows entry older than Windows 10 / Server 2016 has `requires_upload` | 100% of entries |
 
 ---
 
@@ -345,6 +375,50 @@ frontend/src/
 
 docs/guides/
   game-master-guide.md         NEW
+  nested-lab-hosts.md          NEW (V24)
+
+# Group V — nested image builder
+common/
+  constants/nested.py          NEW — contract constants
+  data/nested_os_catalog.json  NEW — seeded guest OS catalog
+  models/agoge.py              (+ Nested* models; AgogeImageModel.nested/nested_build; HumanInteractionModel targets)
+  utilities/nested_manifest.py NEW — manifest, secrets, autounattend rendering
+  utilities/nested_build_monitor.py  NEW — NestedBuildMonitor (used by the API and the Cloud Function, so it lives in common/)
+  utilities/gcp/compute/compute_image.py         (+ licenses)
+  utilities/gcp/compute/compute_machine_type.py  (+ nested machine types)
+
+api/
+  core/compute/nested/
+    validator.py               NEW — NestedHostValidator
+    nested_image.py            NEW — create, catalog, media
+  routers/compute_image.py     (+ /nested/, /nested/catalog/, /nested/media/, /{name}/nested-build/)
+
+cloud_functions/
+  cloud_fn_utilities/server_specific/nested/
+    builder.sh                 NEW
+    runtime.sh                 NEW
+    finalize_watcher.sh        NEW
+    autounattend.xml.tmpl      NEW
+  cloud_fn_utilities/course_objects/compute/
+    base_compute_manager.py    (nested virtualization, min CPU fix)
+    image_template_manager.py  (nested provisioning, finalize_nested, license, metadata merge)
+  handlers/control_handler.py  (+ NESTED_FINALIZE branch)
+  cloud_fn_utilities/periodic_maintenance/   (build monitor task; daily-stop exemption)
+
+build_files/cloud_deployment/operations/images_and_specs/
+  nested_os_catalog_sync.py    NEW — setup operation
+  nested_media_bucket.py       NEW — setup operation
+
+frontend/src/
+  components/Teacher/ServerManagement/Forms/NestedImage/
+    NestedImageWizard.tsx      NEW — stepper shell
+    HostStep.tsx, NetworksStep.tsx, GuestsStep.tsx, AccessStep.tsx, ReviewStep.tsx   NEW
+    OsPickerDialog.tsx, MediaUpload.tsx, TopologyPreview.tsx                         NEW
+  components/Teacher/ServerManagement/Forms/ServerCreator/ServerCreatorForm.tsx      (+ type toggle; display fix)
+  components/Teacher/ServerManagement/ImageListTable.tsx, ImageDetailsDialog         (+ build phase, guests)
+  components/Teacher/Specifications/NewEditor/ServerForm/NestedGuestsPanel.tsx       NEW
+  services/Server/nested.service.ts, nested.model.ts                                 NEW
+  utilities/transformers/nested.transform.ts                                         NEW
 ```
 
 ### Data Models
@@ -1092,6 +1166,290 @@ one-guest payload through the watcher and touches no GCE instance:
 A `rebuild` of the **parent** recreates every guest's disk from the image, so the
 existing `mark_stale` already covers guest flags.
 
+### Nested Image Builder Contract
+
+Group V lets an instructor build a **nested lab host** from the Create Image
+page: one Debian parent VM running libvirt/QEMU-KVM, with up to eight guest VMs
+(Kali, Linux distributions, Windows XP through Windows 11 / Server 2025, network
+appliances) on networks the instructor defines inside the parent. The result
+is an ordinary Agoge image (`image-<name>` plus an `image/<name>` document), so
+it appears in the server picker of the lab spec editor and of CTF templates. One
+VM then carries a whole lab.
+
+A reference host built by hand on 2026-10-17 exists in the development project:
+`image-nested-hv-debian12` (Debian 12 parent, `linux-guest` Debian 12 at
+192.168.122.10, `windows-guest` Windows Server 2022 Evaluation at
+192.168.122.20, both with qemu-guest-agent and an `agoge-pristine` snapshot,
+`enable-vmx` license). Group V automates what was done to build it; see Working
+Notes 14–23 for what that build taught.
+
+**Lifecycle.** It reuses the existing image-server check-out/check-in cycle
+and adds one build phase and one finalize handshake:
+
+| Step | Who | What happens |
+|------|-----|--------------|
+| Create | Instructor, wizard | `POST /compute/images/nested/` validates the spec, writes `image/<name>` CHECKED_OUT with `nested` and `nested_build.phase = "queued"`, publishes the existing CONTROL / CHECK_OUT / TEMPLATE_SERVER message |
+| Provision | Cloud Function | `ImageTemplateManager.check_out` builds the template server from the Debian family image on `build_machine_type`, with nested virtualization, `enable-guest-attributes`, the builder `startup-script`, `agoge-nested-manifest`, and `agoge-nested-secrets` |
+| Build | Builder on the parent | Installs libvirt, creates networks, downloads and verifies media, installs every guest, runs post-install scripts, reports progress in guest attributes, then reports `ready` (or `failed`). Leaves guests running |
+| Monitor | API on poll, `MaintenanceHandler` every 15 min | `NestedBuildMonitor` copies guest attributes into `nested_build`, removes `agoge-nested-secrets` once the phase is `ready` or `failed`, and fails a stalled or overlong build |
+| Customize | Instructor | Works in the guests through the consoles (SSH tunnel from the Connect dialog) to install lab software |
+| Finalize | Check In button | The API publishes `NESTED_FINALIZE` instead of CHECK_IN. The function writes `agoge-nested-finalize` = nonce. The parent's finalize watcher shuts the guests down, (re)creates `agoge-pristine`, cleans up, and answers `finalize-result`. The function then publishes the existing CHECK_IN |
+| Image | Cloud Function | The existing check-in stops, snapshots, and images the disk, adding the `enable-vmx` license; the record returns to CHECKED_IN with `nested_build.phase = "finalized"` |
+| Re-check-out | Instructor | The existing check-out of a finalized image. The startup-script installs only the finalize watcher (no manifest, nothing is rebuilt); Check In finalizes again |
+| Lab use | Unit build | A lab server built from the image gets nested virtualization from the license (and explicitly, V1). `agoge-nested-runtime.service` maps the server's alias IPs to exposed guests and isolates the guests from the parent |
+
+**Data models** (added to `common/models/agoge.py`):
+
+```python
+NestedOsFamily = Literal['linux', 'windows', 'appliance']
+NestedOsGroup = Literal['kali', 'linux', 'windows_client', 'windows_server', 'appliance']
+NestedInstallMethod = Literal['cloud_image', 'unattended_iso', 'disk_image', 'manual_iso']
+NestedMediaFormat = Literal['qcow2', 'raw', 'img.xz', 'tar.xz', 'iso', 'vmdk', 'vhd', 'vhdx', 'ova', 'zip', '7z']
+NestedNetConfig = Literal['networkd', 'netplan', 'nm-keyfile', 'ifupdown', 'windows', 'none']
+NestedGuestStatus = Literal['pending', 'downloading', 'installing', 'post_install', 'manual', 'ready', 'failed']
+NestedBuildPhase = Literal['queued', 'provisioning', 'building', 'ready', 'finalizing', 'finalized', 'failed']
+SLUG15 = r'^[a-z][a-z0-9-]{0,13}[a-z0-9]$'   # libvirt domain, hostname, NetBIOS (15 chars)
+
+# Collection `nested-os-catalog`, doc id = id. Seeded from common/data/nested_os_catalog.json (V5).
+class NestedOsCatalogModel(BaseModel):
+    id: str = Field(..., pattern=r'^[a-z0-9][a-z0-9.-]{1,47}$')    # e.g. "win-server-2022-eval"
+    display_name: str
+    family: NestedOsFamily
+    group: NestedOsGroup
+    version: str
+    install_method: NestedInstallMethod
+    media_url: Optional[str] = None            # https only; None => requires_upload
+    media_sha256: Optional[str] = Field(default=None, pattern=r'^[a-f0-9]{64}$')
+    media_formats: List[NestedMediaFormat]     # accepted formats (first = the media_url's format)
+    requires_upload: bool = False
+    license_note: str                          # shown in the wizard; never empty for windows
+    eval_days: Optional[int] = None
+    osinfo: str                                # virt-install --osinfo value, e.g. "win2k22"
+    firmware: Literal['bios', 'uefi'] = 'bios'
+    disk_bus: Literal['virtio', 'sata', 'ide'] = 'virtio'
+    nic_model: Literal['virtio', 'e1000e', 'e1000', 'rtl8139'] = 'virtio'
+    video: Literal['virtio', 'qxl', 'vga', 'cirrus'] = 'vga'
+    virtio_win_version: Optional[str] = None   # pinned virtio-win ISO release; None = no virtio media
+    agent: bool                                # qemu-guest-agent available => CTF driver qemu-agent, else offline
+    net_config: NestedNetConfig
+    unattend_template: Optional[Literal['autounattend']] = None   # Vista and later only
+    windows_image_index: Optional[int] = None
+    default_username: Optional[str] = None     # disk_image/manual entries with fixed credentials, e.g. kali
+    min_memory_mb: int
+    default_memory_mb: int
+    min_disk_gb: int
+    default_disk_gb: int
+    default_vcpus: int = 1
+    is_enabled: bool = True
+
+# Collection `nested-media`, doc id = IdGenerator.uuid(). Instructor uploads (V13).
+class NestedMediaModel(BaseModel):
+    id: str
+    filename: str
+    format: NestedMediaFormat
+    size_bytes: int
+    gcs_path: str                              # gs://<project>_nested-media/media/<id>/<filename>
+    sha256: Optional[str] = None               # filled by the builder on first use
+    os_id: Optional[str] = None                # catalog entry it was uploaded for
+    uploaded_by: str
+    uploaded_at: str
+    complete: bool = False
+
+class NestedNetworkModel(BaseModel):
+    name: str = Field(..., pattern=SLUG15)
+    cidr: str                                  # RFC 1918, /16 to /29
+    mode: Literal['nat', 'isolated']           # nat: internet through the parent
+    parent_address: Optional[str] = None       # the parent's address on this network; None = pure L2 segment
+    dhcp: bool = True
+    dhcp_start: Optional[str] = None
+    dhcp_end: Optional[str] = None
+
+class NestedGuestNicModel(BaseModel):
+    network: str
+    ip: Optional[str] = None                   # static; None = DHCP or unconfigured
+    expose: bool = False                       # 1:1 NAT to the next alias slot on the lab server
+
+class NestedGuestModel(BaseModel):
+    name: str = Field(..., pattern=SLUG15)
+    os_id: str
+    media_id: Optional[str] = None             # required when the catalog entry requires_upload
+    vcpus: int = Field(default=1, ge=1, le=8)
+    memory_mb: int = Field(default=2048, ge=256, le=32768)
+    disk_gb: int = Field(default=20, ge=2, le=500)
+    nics: List[NestedGuestNicModel] = Field(..., min_length=1, max_length=4)
+    admin_username: str = Field(..., pattern=r'^[a-zA-Z][a-zA-Z0-9_.-]{0,19}$')
+    admin_password: str                        # stored; teachers see it (like human_interaction)
+    packages: List[str] = Field(default_factory=list, max_length=50)   # cloud_image Linux only
+    post_install_script: Optional[str] = Field(default=None, max_length=65536)  # bash or PowerShell
+    console: bool = True                       # VNC console on the parent
+    autostart: bool = True
+    start_order: int = Field(default=0, ge=0, le=99)
+    start_delay_seconds: int = Field(default=0, ge=0, le=600)
+
+class NestedHostSpecModel(BaseModel):
+    parent_os: Literal['debian-12', 'debian-13'] = 'debian-12'
+    build_machine_type: str = 'n2-standard-8'
+    networks: List[NestedNetworkModel] = Field(..., min_length=1, max_length=8)
+    guests: List[NestedGuestModel] = Field(..., min_length=1, max_length=8)
+    # Derived by the API on create, never sent by the client:
+    exposures: List[Tuple[str, int]] = Field(default_factory=list)   # (guest, nic index); list index = alias slot
+    console_ports: Dict[str, int] = Field(default_factory=dict)      # guest -> 5901..5908
+    vnc_passwords: Dict[str, str] = Field(default_factory=dict)      # guest -> 8 chars (VNC limit)
+
+class NestedBuildStatusModel(BaseModel):
+    phase: NestedBuildPhase = 'queued'
+    guests: Dict[str, NestedGuestStatus] = Field(default_factory=dict)
+    message: Optional[str] = Field(default=None, max_length=200)
+    heartbeat_at: Optional[str] = None
+    started_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    finalize_nonce: Optional[str] = None
+
+# AgogeImageModel gains:
+#     nested: Optional[NestedHostSpecModel] = None
+#     nested_build: Optional[NestedBuildStatusModel] = None
+# and `base_family: Optional[str] = None` loses its trailing comma (Working Note 19).
+#
+# HumanInteractionModel gains (V22):
+#     nested_guest: Optional[str] = None   # label only
+#     alias_index: Optional[int] = None    # connect to server.nics[0].ip_aliases[alias_index]
+#     port: Optional[int] = None           # Guacamole port override (VNC console 5901..5908)
+
+# Request body, POST /compute/images/nested/
+class NestedImageCreateRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    server_name: str
+    description: str = Field(..., max_length=200)
+    labels: List[str] = Field(default_factory=list)
+    machine_type: str                          # what lab servers default to
+    disk_size: Optional[int] = None            # None = computed minimum
+    username: str
+    ssh_key: str                               # parent access, as for standard Linux images
+    nested: NestedHostSpecModel                # exposures/console_ports/vnc_passwords must be empty
+    product_keys: Dict[str, str] = Field(default_factory=dict)   # guest -> key; never persisted
+```
+
+**Validation** (`api/core/compute/nested/validator.py` `NestedHostValidator`,
+raising `BadRequest` with a message naming the network, guest, or field):
+
+| Rule | Names |
+|------|-------|
+| `server_name` passes `_validate_new_name` and is not `nested` (reserved for the route prefix) | the name |
+| Network names unique; each `cidr` is RFC 1918, /16–/29, and overlaps no other network, `169.254.0.0/16`, or libvirt's `192.168.122.0/24` | the network |
+| `parent_address`, `dhcp_start`, `dhcp_end` lie inside the CIDR and are not its network or broadcast address; `mode: nat` and `dhcp: true` both require `parent_address`; the DHCP range excludes `parent_address` and every static guest IP | the network |
+| Guest names unique; `os_id` names an enabled catalog entry; `requires_upload` ⇒ `media_id` names a `complete` medium whose `format` is in the entry's `media_formats` | the guest |
+| `memory_mb ≥ min_memory_mb`, `disk_gb ≥ min_disk_gb` | the guest |
+| Σ guest `memory_mb` + `NESTED_PARENT_OVERHEAD_MB` ≤ memory of `machine_type` and of `build_machine_type`; Σ `vcpus` ≤ 2 × the machine's vCPUs | `machine_type` |
+| `machine_type` and `build_machine_type` are N1 or N2 (nested-capable); E2 is rejected | the machine type |
+| `disk_size` (or the computed minimum) ≥ `NESTED_PARENT_BASE_DISK_GB` + Σ `disk_gb` + `NESTED_BUILD_SCRATCH_GB`, ≤ `NESTED_MAX_DISK_GB` | `disk_size` |
+| Every NIC's `network` exists; a static `ip` is inside the CIDR, unique across guests, not `parent_address`, and outside the DHCP range | the guest |
+| `expose: true` requires a static `ip`; at most `NESTED_MAX_EXPOSURES` exposed NICs | the guest |
+| An `unattended_iso` Windows entry without `eval_days` requires `product_keys[guest]` matching `^([A-Z0-9]{5}-){4}[A-Z0-9]{5}$` | the guest |
+| `packages` only for `cloud_image` Linux entries, each matching `^[a-z0-9][a-z0-9+.-]{0,63}$` | the guest |
+| `admin_password` meets Windows complexity for Windows guests (≥ 8 chars, 3 of 4 classes) and ≥ 8 chars otherwise | the guest |
+
+**Constants** (`common/constants/nested.py`):
+
+| Name | Value |
+|------|-------|
+| `ENABLE_VMX_LICENSE` | `https://www.googleapis.com/compute/v1/projects/vm-options/global/licenses/enable-vmx` |
+| `NESTED_PARENT_OVERHEAD_MB` | `2048` |
+| `NESTED_PARENT_BASE_DISK_GB` / `NESTED_BUILD_SCRATCH_GB` / `NESTED_MAX_DISK_GB` | `20` / `12` / `1000` |
+| `NESTED_MAX_EXPOSURES` | `8` |
+| `NESTED_CONSOLE_BASE_PORT` | `5901` |
+| `NESTED_MAX_MACHINE_MEMORY_MB` | `65536` (the machine-type list for nested images; standard images keep 17000) |
+| `NESTED_FINALIZE_TIMEOUT_SECONDS` | `360` (must stay below the 540 s function timeout with overhead) |
+| `NESTED_BUILD_STALL_MINUTES` / `NESTED_BUILD_MAX_MINUTES` | `45` / `240` |
+| `NESTED_MEDIA_MAX_BYTES` / `NESTED_UPLOAD_URL_TTL_SECONDS` | `21474836480` (20 GiB) / `3600` |
+| `NESTED_MEDIA_BUCKET_SUFFIX` | `nested-media` → `<project>_nested-media` |
+
+**Metadata and guest attributes:**
+
+| Name | Kind | Value |
+|------|------|-------|
+| `agoge-nested-manifest` | metadata, build only | JSON: the spec without secrets, plus each guest's resolved catalog entry and media source (`https` URL + sha256, or `gs://` path) |
+| `agoge-nested-secrets` | metadata, removed after build | JSON `{guest: {admin_password, vnc_password, product_key?}}`. The builder copies it to `/run/agoge-nested/secrets.json` (tmpfs, 0600) and never writes it to the persistent disk |
+| `agoge-nested-finalize` | metadata | nonce, written by `NESTED_FINALIZE`, removed after the answer |
+| `enable-guest-attributes` | metadata | `TRUE` |
+| `agoge-nested/phase` | guest attribute | `building`, `ready`, `failed` |
+| `agoge-nested/guest-<name>` | guest attribute | a `NestedGuestStatus`, optionally `failed:<message>` |
+| `agoge-nested/message` | guest attribute | the latest human-readable step, ≤ 200 chars |
+| `agoge-nested/heartbeat` | guest attribute | epoch seconds, written every 60 s while building |
+| `agoge-nested/finalize-result` | guest attribute | `ok:<nonce>` or `error:<nonce>:<message>` |
+
+**Parent filesystem layout:**
+
+| Path | Contents |
+|------|----------|
+| `/usr/local/sbin/agoge-nested-builder` | the builder (rendered from `cloud_functions/cloud_fn_utilities/server_specific/nested/builder.sh`); per-step markers in `/var/lib/agoge-nested/state/` so a reboot resumes rather than restarts |
+| `/var/lib/libvirt/boot/agoge-nested/` | downloaded media and unattend ISOs. Not under `/root`: `libvirt-qemu` cannot read it (Working Note 15). Deleted at finalize |
+| `/var/lib/libvirt/images/<guest>.qcow2` | guest disks |
+| `/etc/agoge-nested/host.json` | non-secret host description (networks, guests, IPs, exposures, console ports) read by the runtime |
+| `/usr/local/sbin/agoge-nested-runtime` + `agoge-nested-runtime.service` | runs at every boot of every server built from the image |
+| `/usr/local/sbin/agoge-nested-finalize` + `agoge-nested-finalize.service` | long-polls `agoge-nested-finalize`; installed only on template servers by the startup-script |
+
+**Builder.** On a template server whose manifest is present and whose state is not done, the builder:
+
+1. Writes `phase=building` and installs `qemu-system-x86 qemu-utils libvirt-daemon-system virtinst libguestfs-tools genisoimage p7zip-full ovmf swtpm`.
+2. Destroys and undefines libvirt's `default` network, then defines one persistent, autostarted network per `NestedNetworkModel` with bridge `agb<index>`. NAT networks use libvirt `<forward mode='nat'/>`; isolated networks have no `<forward>`. A network with `parent_address: None` has no `<ip>` (pure L2). DHCP reservations come from static IPs.
+3. Installs the runtime (below) and starts it, so the metadata block is in force before any guest boots.
+4. Installs guests in `start_order`, at most two installs at a time. For each guest it obtains the media (cache `gs://<project>_nested-media/cache/<sha256>` first, else the `https` URL), verifies the SHA-256, and fails the guest on a mismatch. It then runs the install method:
+
+| Method | Steps | Done when |
+|--------|-------|-----------|
+| `cloud_image` | Convert to qcow2 and resize. `virt-customize`: hostname; admin user with the password read from a root-only file (`--password user:file:…`, never on the command line); `qemu-guest-agent`, `openssh-server`, and `packages`; network config per `net_config`; disable cloud-init with `/etc/cloud/cloud-init.disabled` (do **not** purge it, Working Note 16); regenerate SSH host keys at first boot; `--selinux-relabel` for RHEL-family; on RHEL-family remove the `guest-exec` block from `/etc/sysconfig/qemu-ga`. `virt-install --import` | the agent answers `guest-ping` |
+| `unattended_iso` | Render `autounattend.xml` (V8) with hostname, admin password, product key or none, the image index, virtio driver paths, and for Windows 11 the `LabConfig` TPM/Secure Boot/RAM bypass keys. Build a small ISO. `virt-install` with the OS ISO, the pinned virtio-win ISO (when set), and the unattend ISO, `--boot hd,cdrom`. FirstLogonCommands install virtio guest tools (when set), enable RDP and ICMP, configure static IPs by MAC, delete `C:\Windows\Panther\unattend*.xml` (it holds the password), then power off. The builder waits for `shut off` (never relying on `virt-install --wait`, Working Note 17), detaches all media, and starts the guest | the agent answers, or for agentless entries the guest has been running 120 s |
+| `disk_image` | Unpack `ova`/`zip`/`7z`/`xz`, `qemu-img convert` to qcow2, grow to `disk_gb` when larger. For Linux entries with `agent: true`, the same `virt-customize` user, password, and agent steps as `cloud_image` | as above |
+| `manual_iso` | Blank qcow2 of `disk_gb`, boot the ISO with the console enabled, set guest status `manual` | the instructor finishes in the console; finalize accepts `manual` guests |
+
+5. Runs `post_install_script` through `guest-exec` with the script as `input-data` (bash `-s` / `powershell.exe -Command -`), for guests whose entry has `agent: true`. A non-zero exit fails that guest with the first 150 chars of stderr.
+6. Every domain gets `--cpu host-passthrough`, the `org.qemu.guest_agent.0` channel, a VNC console on `0.0.0.0:<console_port>` with the guest's `vnc_password` (when `console: true`), and `virsh autostart` per `autostart`.
+7. Writes `phase=ready`. One failed guest does not stop the others; the phase is `failed` only when no guest reached `ready` or `manual`. `message` says which guests failed.
+
+**Finalize watcher** (answers one nonce; the function times out after `NESTED_FINALIZE_TIMEOUT_SECONDS`):
+1. ACPI-shutdown every running guest in parallel and wait up to 240 s. A guest still running → `error:<nonce>:<guest>: guest did not shut down`. The watcher never runs `virsh destroy`.
+2. `managedsave-remove`, delete any existing `agoge-pristine`, then `snapshot-create-as <guest> agoge-pristine --atomic` (internal; BIOS guests only, see Open Questions).
+3. Remove `/var/lib/libvirt/boot/agoge-nested/`, `/run/agoge-nested/`, the builder state, and the apt cache; `fstrim -av`.
+4. Leave guests shut off; the runtime starts them in `start_order` with `start_delay_seconds` at the next boot. Write `ok:<nonce>`.
+
+**Runtime** (`agoge-nested-runtime`, every boot, idempotent):
+1. `iptables -I FORWARD -d 169.254.169.254 -j REJECT` (the same rule as N1; SC-24 applies to every nested image).
+2. `INPUT` from any `agb*` bridge accepts only DHCP (udp 67) and DNS (udp/tcp 53) to the parent; everything else is dropped, so guests cannot reach the parent's SSH, VNC, or metadata-holding processes.
+3. Reads `instance/network-interfaces/0/ip-aliases/` from the metadata server. For exposure slot *i* with alias *a* and guest IP *g*: `PREROUTING -d a -j DNAT --to g`, `POSTROUTING -s g -j SNAT --to a` on the primary NIC, and `FORWARD` accept between them. Extra aliases are ignored. Missing aliases leave that guest unexposed, which is logged, not an error.
+4. Starts autostart guests in `start_order` with their delays (libvirt's own autostart is disabled so the order holds).
+5. Configures `libvirt-guests` with `ON_SHUTDOWN=shutdown`, `PARALLEL_SHUTDOWN=8`, and `SHUTDOWN_TIMEOUT=80` so a workout stop shuts guests down instead of cutting their power.
+
+**Lab and CTF use.** A spec server whose image has `nested`:
+- needs an N1/N2 machine type;
+- needs `len(nested.exposures)` alias IPs on NIC 0 (alias slot *i* is exposure *i*);
+- gets editor help to add Guacamole connections per guest. An exposed guest uses `alias_index` and its protocol (RDP for Windows, SSH for Linux). A console uses protocol `vnc`, `port` = the console port, and the VNC password.
+
+N5's rule "the parent has at least one NIC with `ip_aliases`" also accepts a parent whose image has `nested` (V23). The CTF editor pre-fills `nested_guests` from the image: `domain` = guest name, and `driver` = `qemu-agent` when the catalog entry has `agent`, else `offline`.
+
+**Guest OS catalog.** Seeded entries (V5). Agoge downloads only media its
+publisher hosts publicly. Windows media is never redistributed, and every Windows
+entry before Windows 10 / Server 2016 requires an upload. The license note is
+shown before selection.
+
+| Group | Entries | Method | Media |
+|-------|---------|--------|-------|
+| Kali | Kali rolling (current release) | `cloud_image` (generic cloud image) | kali.org |
+| Kali | Kali QEMU VM (default `kali`/`kali`) | `disk_image` (`7z`) | kali.org |
+| Linux | Debian 11, 12, 13 | `cloud_image` | cloud.debian.org |
+| Linux | Ubuntu 16.04, 18.04, 20.04, 22.04, 24.04, 26.04 | `cloud_image` | cloud-images.ubuntu.com |
+| Linux | Fedora (current), Rocky 8/9/10, AlmaLinux 8/9/10, CentOS Stream 9/10, CentOS 7 (vault) | `cloud_image` | publisher mirrors |
+| Linux | openSUSE Leap (current), Arch Linux, Alpine (cloud) | `cloud_image` | publisher mirrors |
+| Linux | Metasploitable 2 | `disk_image` (`zip`/vmdk), agentless | SourceForge |
+| Windows server | Server 2016, 2019, 2022, 2025 Evaluation (180 days) | `unattended_iso`, agent via virtio-win | Microsoft Evaluation Center |
+| Windows client | Windows 10 Enterprise, Windows 11 Enterprise Evaluation (90 days), where Microsoft still publishes them | `unattended_iso` | Microsoft Evaluation Center |
+| Windows client | Windows Vista, 7, 8.1, 10, 11 (retail/volume, with product key) | `unattended_iso`, upload required | instructor |
+| Windows server | Server 2008, 2008 R2, 2012, 2012 R2, 2016–2025 (licensed) | `unattended_iso`, upload required | instructor |
+| Windows legacy | Windows XP, Server 2003 (2000 optional) | `manual_iso` or `disk_image`, upload required, IDE disk, `rtl8139`/`e1000`, agentless | instructor |
+| Appliance | pfSense CE, OPNsense, VyOS, Security Onion | `manual_iso` (OPNsense also `disk_image`) | publisher or upload |
+| Any | Custom ISO / custom disk image | `manual_iso` / `disk_image`, upload required | instructor |
+
+Profiles: XP/2003 use IDE + `rtl8139` or `e1000`, `cirrus`/`vga`. Vista–8.1 and 2008–2012 R2 use SATA + `e1000`, with the agent from the pinned virtio-win release that last supports them (Open Questions). Windows 10+/Server 2016+ use virtio + current virtio-win. Windows 11 and Server 2025 use BIOS with LabConfig bypass keys, not UEFI (Design Decisions).
+
 ---
 
 ## Features
@@ -1293,6 +1651,63 @@ Plants and replants flags on VMs nested inside a lab server. See the Nested Gues
   - Done when: verified in browser.
 - [ ] **N15 Nested host guide** — Add a "Nested lab hosts" section to `docs/guides/game-master-guide.md`: guest image prep (qemu-guest-agent with `guest-exec` allowed, which RHEL-family `/etc/sysconfig/qemu-ga` blocks by default; the agent channel; domain autostart; the `agoge-pristine` snapshot; `libguestfs-tools` for `offline`), a spec example, and the warning that root on the parent exposes every guest flag.
 
+**Group V — Nested image builder**
+
+Builds nested lab hosts from the Create Image page. See the Nested Image
+Builder Contract. Independent of the CTF groups except V23, which needs N3, N5,
+and N13. V1–V4 fix defects the rest depends on (Working Notes 18, 20, 21); ship them
+first.
+
+- [x] **V1 Nested virtualization for template and lab servers** — In `BaseComputeManager._build_server`, enable nested virtualization when `self.ip_aliases` **or** the server's image record has `nested`. `ImageTemplateManager._load_template_server` and `LabServerManager` set a `self.nested_host` flag from the image document. Fix the stale local `min_cpu_platform` (Working Note 18) so the N1/N2 platform reaches the insert. Raise `BadRequest` for an E2 machine type on a nested server.
+  - Done when: mocked tests show `InstanceResource.new` receives `advanced_machine_features={"enable_nested_virtualization": True}` and the platform for a nested template server, a nested lab server, and an `ip_aliases` lab server (unchanged); E2 is rejected; a standard template server gets neither.
+- [ ] **V2 Nested machine types** — Make `ComputeMachineType.get` resolve any N1/N2 type up to `NESTED_MAX_MACHINE_MEMORY_MB` (keeping the 17000 MB cap for `list()` unless `nested=True`), and make `_lookup_machine_type` handle `None` instead of raising `AttributeError` (Working Note 20). `GET /compute/images/machine-types/?nested=true` returns N1/N2 types up to the nested cap.
+  - Done when: tests show `n2-standard-8` resolves for a nested server, an unknown type falls back to SMALL with a warning, the default list is unchanged, and the nested list holds no E2 type.
+- [ ] **V3 License on check-in** — Add `licenses: Optional[List[str]]` to `ComputeImageAPI.create` (passed into `Image(...)`), and have `ImageTemplateManager._create_image_from_snapshot` pass `[ENABLE_VMX_LICENSE]` when the record has `nested`.
+  - Done when: mocked `ImagesClient.insert` receives the license for a nested record and no `licenses` for a standard one.
+- [ ] **V4 Template startup-script merge** — `ImageTemplateManager._add_metadata` concatenates the image's `startup_script` with the user-creation script under one `startup-script` key (reuse `LabServerManager._merge_metadata_item`), fixing the duplicate key (Working Note 21).
+  - Done when: a test shows exactly one `startup-script` item containing both scripts, and Windows images are unchanged.
+- [ ] **V5 Models and constants** — Add the contract's models, `common/constants/nested.py`, `DbCollections.NESTED_OS_CATALOG = 'nested-os-catalog'` and `NESTED_MEDIA = 'nested-media'`, `PubSub.Actions.NESTED_FINALIZE`, `AgogeImageModel.nested`/`nested_build`, the three `HumanInteractionModel` fields, and fix the `base_family` default.
+  - Done when: tests reject a bad guest slug, an http `media_url`, and an unknown install method; an existing image document without `nested` still validates; `base_family` defaults to `None`; `NESTED_FINALIZE` collides with no existing action value.
+- [ ] **V6 OS catalog and seeding** — Write `common/data/nested_os_catalog.json` per the contract's catalog table and a setup operation **Synchronize Nested Guest OS Catalog** (the four `add-setup-operation` edits) that upserts entries by id while keeping an admin's `is_enabled` choice.
+  - Done when: a test validates every JSON entry against `NestedOsCatalogModel`; every entry without `requires_upload` has an `https` URL and a SHA-256; every Windows entry with a URL points at a Microsoft host; every Windows entry older than Windows 10 / Server 2016 has `requires_upload`; a second sync changes nothing; Open Question V-5 is answered first.
+- [ ] **V7 Nested host validator** — Write `NestedHostValidator` enforcing the contract's validation table, plus `derive(spec)` filling `exposures`, `console_ports`, and generated `vnc_passwords`.
+  - Done when: one test per table row rejects a bad spec with a message naming the network, guest, or field; a valid three-guest, two-network spec passes; `derive` is deterministic for a given spec except for the passwords.
+- [ ] **V8 Manifest and unattend rendering** — Write `common/utilities/nested_manifest.py`: `render_manifest(spec, catalog, media)` and `render_secrets(spec, product_keys)`, and `render_autounattend(guest, entry, secrets)` from `.../server_specific/nested/autounattend.xml.tmpl`.
+  - Done when: tests show the manifest contains no admin password, VNC password, or product key; both stay under 256 KB for eight guests; the XML parses for every `unattended_iso` catalog entry, carries the virtio driver paths only when `virtio_win_version` is set, carries LabConfig only for Windows 11 / Server 2025, and its FirstLogonCommands delete `Panther\unattend*.xml` and end with a shutdown.
+- [ ] **V9 Builder script** — Write `builder.sh` per the contract's Builder section: resumable step markers, network definitions, cache-then-URL media fetch with SHA-256 check, the four install methods, post-install over `guest-exec`, progress attributes, heartbeat, and phase rules.
+  - Done when: the rendered script passes `bash -n`; tests show no secret is interpolated into a command line (secrets read from `/run/agoge-nested/secrets.json` only); media lives under `/var/lib/libvirt/boot/agoge-nested/`; `virsh destroy` never appears; the script installs and starts the runtime before the first `virt-install`.
+- [ ] **V10 Runtime service** — Write `agoge-nested-runtime` per the contract's Runtime section and its systemd unit; the builder installs both.
+  - Done when: tests on the rendered script show the FORWARD metadata reject, the bridge INPUT policy, DNAT/SNAT pairs generated from a sample `ip-aliases` response in slot order, ordered guest start, and the `libvirt-guests` settings; `bash -n` passes.
+- [ ] **V11 Nested template server provisioning** — `ImageTemplateManager.check_out` for a record with `nested`: on the first build (phase `queued`), boot from the Debian family image of `parent_os` on `build_machine_type`, size the disk to `add_disk`, and add the four metadata items plus the builder bootstrap, then set phase `provisioning`. On re-check-out of a finalized image, boot from `image-<name>` with only the finalize-watcher bootstrap.
+  - Done when: mocked tests show both paths' metadata keys and machine type, the secrets item is present only on the first build, and a standard image's check-out is unchanged.
+- [ ] **V12 Create route** — `POST /compute/images/nested/` (teacher) taking `NestedImageCreateRequest`: validate, derive, write the record (`_create_record`, status CHECKED_OUT, Debian base, `human_interaction` for the parent from `username`/`ssh_key`), then publish the existing check-out. `GET /compute/images/nested/catalog/` (teacher) lists enabled entries.
+  - Done when: router tests cover 200, 400 (validator), 409 (name exists), and 403 (student); the stored record has no product key; a router test shows `/compute/images/nested/catalog/` is not captured by `/{image_name}/`.
+- [ ] **V13 Build monitor** — Write `common/utilities/nested_build_monitor.py` `NestedBuildMonitor.refresh(image)` (in `common/` because both deployables call it): read the `agoge-nested/*` guest attributes, update `nested_build` through a field mask, remove `agoge-nested-secrets` once the phase is `ready` or `failed`, and fail the build (stopping the server) when the heartbeat is older than `NESTED_BUILD_STALL_MINUTES` or the build exceeds `NESTED_BUILD_MAX_MINUTES`. Add `GET /compute/images/{name}/nested-build/` (teacher, refreshes then returns `NestedBuildStatusModel`) and a quarter-hourly maintenance task over active builds. `DailyMaintenance` skips template servers whose phase is `provisioning` or `building`.
+  - Done when: mocked tests cover each phase mapping, secrets removal exactly once, stall and timeout failure, and the daily-stop exemption.
+- [ ] **V14 Finalize handshake** — `process_action_on_list` publishes `NESTED_FINALIZE` instead of `CHECK_IN` for a nested record in phase `ready` or `finalized` (CHECK_IN is refused with 409 while phase is `provisioning`, `building`, or `finalizing`). The `ControlHandler` branch calls `ImageTemplateManager.finalize_nested()`, which writes the nonce, sets phase `finalizing`, waits up to `NESTED_FINALIZE_TIMEOUT_SECONDS` for `finalize-result`, removes the key, then publishes CHECK_IN on `ok` or records `failed` with the message (leaving the server checked out and running). Write the finalize watcher per the contract and its bootstrap.
+  - Done when: mocked tests show ok → CHECK_IN published once, error → no CHECK_IN and the message stored, timeout → no CHECK_IN and phase back to `ready` with a message; the watcher script never contains `virsh destroy`, and `bash -n` passes.
+- [ ] **V15 Media uploads** — A setup operation creates `<project>_nested-media` with CORS for the app origins, a lifecycle rule deleting incomplete `media/` objects after 2 days, and `roles/iam.serviceAccountTokenCreator` for the API service account on itself (needed to sign URLs on Cloud Run). Routes: `POST /compute/images/nested/media/` `{filename, size_bytes, os_id?}` returns `{media_id, upload_url}` (V4 signed resumable upload, `x-goog-content-length-range` capped at `NESTED_MEDIA_MAX_BYTES`, expiry `NESTED_UPLOAD_URL_TTL_SECONDS`); `PUT …/media/{id}/` marks it complete after checking the object's size; `GET …/media/` lists them; `DELETE …/media/{id}/` (uploader or admin). The builder fetches `gs://` media with `gcloud storage cp`.
+  - Done when: tests with mocked storage cover each route, reject an unsupported extension and an oversize request, and show completion fails when the object is missing or the wrong size.
+- [ ] **V16 Frontend service layer** — `services/Server/nested.service.ts`, `nested.model.ts`, `utilities/transformers/nested.transform.ts`, and URL constants for every V2/V12–V15 route.
+  - Done when: vitest covers each service function's URL and body (pattern of `rubric.service.test.ts`) and the transformer round trip.
+- [ ] **V17 Wizard shell and Host step** — Add an image-type toggle (Standard VM / Nested lab host) to `ServerCreatorForm`; Standard keeps today's form, with the `enable_display` → `display` key and the "Edit Server" heading fixed (Working Note 22). Nested renders `Forms/NestedImage/NestedImageWizard.tsx`: a non-linear MUI `Stepper` following `NewEditor/Editor.tsx` (Host, Networks, Guests, Access, Review) with per-step validation. The Host step has name, description, labels, parent OS, build and lab machine types (from `?nested=true`), disk size (computed minimum, editable upward), username, and SSH key.
+  - Done when: verified in browser on the development project; vitest covers step validation and that the Standard path still submits the same body plus the corrected `display` key.
+- [ ] **V18 Networks step** — Editable network list (name, CIDR, NAT/isolated, parent address, DHCP and range), pre-filled with one NAT network `lab` `192.168.100.0/24` (parent `.1`, DHCP `.100–.199`), with client-side versions of the network rules and a read-only topology preview (networks as rails, guests as boxes, inline SVG).
+  - Done when: verified in browser; vitest covers overlap and range validation.
+- [ ] **V19 Guests step** — An OS picker dialog grouped by catalog `group`, with search and chips for Auto install / Upload required / Manual install / Eval *n* days / No agent, and the license note before confirming. Then a guest form: name, vCPU/RAM/disk (catalog defaults and minimums), admin username and password (generate, show/hide), product key when required, media (upload with progress through the signed URL, or pick from the media library), NICs (network, static IP or DHCP, expose), packages (Linux `cloud_image`), post-install script, console, autostart, start order and delay.
+  - Done when: verified in browser with an upload of at least 1 GB; vitest covers the per-guest rules and that `requires_upload` blocks Next without media.
+- [ ] **V20 Access and Review steps** — Access lists exposures in alias-slot order (move up/down buttons, no drag; MUI X Community) and consoles with their ports. Review shows RAM, vCPU, and disk meters against the chosen machine types, warnings (evaluation expiry, manual installs needing console work, agentless guests using the CTF `offline` driver, legacy Windows needing an upload), the estimated build time, and a credentials summary. Submit posts the request and returns to the server list.
+  - Done when: verified in browser by creating the three-guest host of SC-35; vitest covers the request body built from wizard state.
+- [ ] **V21 Image list and details for nested images** — In `ImageListTable`, a nested row shows the build phase (polled through `GET …/nested-build/` while active) and disables Check In while building. `ImageDetailsDialog` lists guests with status, IPs, credentials, and console ports. The Connect dialog shows the `ssh -L <port>:localhost:<port>` tunnel per console and per exposed guest (RDP 3389 / SSH 22 through the tunnel to the guest IP).
+  - Done when: verified in browser on a live build.
+- [ ] **V22 Guacamole targets for guests** — `DisplayProxy` and `GuacamoleConfiguration.prepare_guac_connection` honor `alias_index` (target `server.nics[0].ip_aliases[alias_index]`) and `port`. Lab spec validation requires a server using a nested image to have an N1/N2 machine type and at least `len(nested.exposures)` aliases on NIC 0, and every `alias_index` to be in range.
+  - Done when: mocked tests show the connection IP and port for an alias target, a console target, and an ordinary target (unchanged); the spec validator rejects the three bad cases on both save paths.
+- [ ] **V23 Spec editor and CTF integration** — In the lab spec server form, selecting a nested image shows a Nested guests panel: guest list, a **Fill alias IPs** button choosing free addresses in NIC 0's subnet in slot order, and **Add connections** creating `HumanInteractionModel` entries (RDP for exposed Windows, SSH for exposed Linux, VNC console otherwise). The machine-type picker hides E2. The N5 rule accepts a parent whose image has `nested`, and the N13 nested-guests section pre-fills from the image (`domain` = guest name, `driver` from catalog `agent`).
+  - Done when: verified in browser; vitest covers alias filling and connection generation; a C/N validator test shows a nested-image parent without `ip_aliases` passes N5.
+- [ ] **V24 Nested image guide** — Write `docs/guides/nested-lab-hosts.md`: licensing (evaluation periods, `slmgr /rearm`, no Windows redistribution, upload requirements), sizing, the wizard, build time and troubleshooting (where the builder logs, `agoge-nested/message`), customizing through tunnels, finalize, using the image in a lab (aliases and connections), CTF use, and the warning that root on the parent exposes every guest.
+- [ ] **V25 Live acceptance** — On the development project, build the SC-35 host, customize one guest, finalize, build a lab from it, connect through Guacamole to every guest, and run the SC-38 isolation checks. Record the results and timings in Open Questions.
+  - Done when: SC-35 through SC-38 are met and recorded.
+
 ### Phase 2 (Post-MVP)
 
 - [ ] **NPC background activity** — Benign traffic generators controlled through a `agoge-ctf-npc` metadata key (the agent long-polls the metadata server with `?wait_for_change=true`) with heartbeats in guest attributes, keeping the no-network-path contract.
@@ -1311,6 +1726,11 @@ Plants and replants flags on VMs nested inside a lab server. See the Nested Gues
 - [ ] **Watcher on every lab server** — Install the plant watcher on all Linux servers, not only nested hosts, so every replant avoids a reset.
 - [ ] **Other nested hypervisors** — Windows Hyper-V parents (`Copy-VMFile` + PowerShell Direct), VirtualBox, VMware Workstation, GNS3, and EVE-NG nodes.
 - [ ] **Asynchronous plant confirmation** — Settle long plants from `MaintenanceHandler` instead of polling inside one invocation, lifting the 540 s ceiling on nested plants.
+- [ ] **Unattended legacy Windows** — `winnt.sif` automation for Windows XP and Server 2003.
+- [ ] **Role recipes for nested guests** — One-click post-install recipes: AD DS domain controller with domain join of sibling guests, IIS, DVWA/Juice Shop, Kali metapackages, appliance config injection (pfSense `config.xml`).
+- [ ] **Rebuild and duplicate nested hosts** — Regenerate an image from its saved `nested` spec, or start a new wizard pre-filled from an existing host.
+- [ ] **Guacamole consoles for image servers** — Browser consoles to guests during the build instead of SSH tunnels.
+- [ ] **UEFI and Secure Boot guests** — swtpm + OVMF for guests that need them, once Open Question V-4 allows pristine snapshots.
 
 ---
 
@@ -1336,6 +1756,10 @@ PYTHONPATH=.:build_files:cloud_functions ./venv/bin/python -m pytest build_files
 
 # Type check, scoped to the new code: passes when no tsc error names a CTF file.
 (cd frontend && ! npx tsc --noEmit 2>&1 | grep -E '^src/(components/(Teacher|Student)/Ctf|services/Ctf|hooks/useCtfEnabled|utilities/transformers/ctf|components/Common/Dialogs/ActionConfirmDialog)')
+
+# Group V: the same two checks, scoped to the nested image builder code.
+(cd frontend && npx eslint src/components/Teacher/ServerManagement/Forms/NestedImage src/services/Server/nested.service.ts src/services/Server/nested.model.ts src/utilities/transformers/nested.transform.ts --max-warnings 0)
+(cd frontend && ! npx tsc --noEmit 2>&1 | grep -E '^src/(components/Teacher/ServerManagement/Forms/NestedImage|services/Server/nested|utilities/transformers/nested)')
 ```
 
 Coverage gate for SC-23. `pytest-cov` is **not** installed; the first
@@ -1508,6 +1932,16 @@ before N7 and N9 run in the loop; record the answer here.
 - [ ] Does `virsh` in shell mode accept a `qemu-agent-command` line as long as a 256 KB payload's base64 needs, or must the relay chunk with `guest-file-write`?
 - [ ] Do guest attributes from a previous boot survive a parent `reset()`? (Affects whether a stale `plant-ack` could be read; the nonce check should make it harmless.)
 
+Group V. Resolve on the development project before the item named; record the answer here.
+
+- [ ] **V-1** (V10) Does 1:1 NAT on an alias IP work with the Google guest agent's local alias routes, and without `canIpForward`? Is the metadata `ip-aliases/` list returned in the order the spec lists the aliases?
+- [ ] **V-2** (V10) Does `libvirt-guests` shut a Windows guest down within the time GCE allows during a workout stop, or does the instance need GCE graceful shutdown configured?
+- [ ] **V-3** (V9) Which virtio-win release is the last with drivers and qemu-ga for Windows 7 / 2008 R2, and for 8.1 / 2012 R2? Pin them in the catalog.
+- [ ] **V-4** (V14) Can Debian 12's libvirt (9.0) take internal snapshots of a UEFI guest? Can Debian 13's? If either can, UEFI becomes an option for Windows 11.
+- [ ] **V-5** (V6) What are the current Microsoft Evaluation Center URLs and SHA-256 values for Server 2016/2019/2025 and Windows 10/11 Enterprise (if still offered)? (Server 2022: `https://go.microsoft.com/fwlink/p/?LinkID=2195280&clcid=0x409&culture=en-us&country=US` worked on 2026-10-17.) Also the Kali cloud image URL and format.
+- [ ] **V-6** (V15) Can the Cloud Run API service account sign V4 URLs once it has `serviceAccountTokenCreator` on itself, and does a browser resumable PUT to the bucket succeed with the CORS rule?
+- [ ] **V-7** (V13) What are the size limits on a guest attribute value, and how many keys can one namespace hold?
+
 ---
 
 ## Design Decisions
@@ -1552,6 +1986,17 @@ change this table first.
 | A plant watcher on nested hosts | Resetting the parent, as for other servers | A reset hard-kills every guest (disk corruption risk) and a nested reboot does not fit the 540 s function timeout. |
 | A guest-scoped plant never resets the parent | Falling back to reset, as whole-server plants do | Resetting the parent to fix one guest disrupts every sibling guest and the teams working on them. |
 | One result key per guest | One `plant-result` for the whole server | Guests succeed and fail independently, and the 200-character message would be shared by every guest. |
+| Nested lab hosts are ordinary Agoge images built through the existing check-out/check-in cycle | A separate nested-image pipeline and collection | The server picker, sharing, copying, and lab builds already work on `image/<name>`; only the build and the finalize step are new. |
+| The build runs on the parent (startup-script builder), with progress in guest attributes | Driving the build from the Cloud Function | A Windows install takes many minutes and the function stops at 540 s; guest attributes already carry CTF plant results without network access. |
+| Nested virtualization comes from the `enable-vmx` image license, and is also requested explicitly | Relying on `ip_aliases` to turn it on | Verified 2026-10-17: an instance from a licensed image has VMX without the flag, so a lab server works whether or not the spec author adds aliases. |
+| Guests reach the VPC through 1:1 NAT on the lab server's alias IPs | Bridging guests onto the VPC, or port forwards on the primary IP | GCE does not bridge foreign MACs, and alias IPs are already how Agoge marks a nested host; one alias per guest keeps every port of a guest reachable. |
+| Guest consoles are VNC on the parent, one port per guest | Requiring network access to each guest | Consoles work for isolated guests, manual installs, and agentless legacy systems, and survive a student breaking a guest's network. |
+| Windows 11 and Server 2025 install under BIOS with LabConfig bypass keys | UEFI + Secure Boot + swtpm | Internal `agoge-pristine` snapshots, which N11's rebuild uses, are not available for pflash UEFI guests on Debian 12's libvirt; lab use does not need Secure Boot. |
+| Product keys are used at build time and never stored | Saving them on the image document | Firestore image documents are readable by every teacher, and copied when shared. |
+| Guest admin passwords are stored on the image document | Write-only secrets | Lab authors need them for Guacamole connections, exactly like `human_interaction` passwords today. |
+| Cloud-init is disabled, not purged, in Linux cloud images | Purging it | Purging removed the only network configuration from the Debian cloud image in the 2026-10-17 build. |
+| Media is cached in the project bucket by SHA-256 | Downloading on every build | Publisher URLs move and Microsoft links are slow; the cache also makes a rebuild reproducible. |
+| One failed guest does not fail the host | All-or-nothing builds | An instructor can fix or replace one guest from the console instead of waiting for a full rebuild. |
 
 ---
 
@@ -1596,3 +2041,44 @@ Facts about this repository that will otherwise cost an iteration:
     `object.__new__(Handler)` with attributes set by hand, or `patch.object` on
     `CloudEnv`, `Logger`, `PubSubManager`, and
     `DocumentDatabaseFactory.create_db_object`.
+14. **Reference nested host.** `image-nested-hv-debian12` in the development
+    project was built by hand on 2026-10-17 and registered as `image/nested-hv-debian12`.
+    It carries the `enable-vmx` license. An `n2-standard-4` instance built from it
+    **without** `--enable-nested-virtualization` had VMX, and both guests
+    autostarted with working agents. Windows Server 2022 went from ISO boot to the
+    FirstLogonCommands power-off in under 10 minutes on `n2-standard-8` with
+    `--cpu host-passthrough`.
+15. **libvirt cannot read `/root`.** qemu runs as `libvirt-qemu`; media under
+    `/root` fails with "Permission denied". Keep media under `/var/lib/libvirt/boot/`.
+16. **Debian cloud images get their network from cloud-init.** Purging cloud-init
+    left the guest with no network configuration; a systemd-networkd `en*` DHCP
+    file fixed it. Disable cloud-init instead. `virt-customize --write` does not
+    expand `\n`; use `--run-command 'printf …'` or `--upload`.
+17. **`virt-install --wait` returns at the first Windows Setup reboot**, not at
+    the end of the install. Wait for the domain to reach `shut off` after
+    FirstLogonCommands powers it off.
+18. **Template servers never get nested virtualization.** `_build_server` checks
+    `self.ip_aliases`, which only `LabServerManager._add_nics` sets. In the same
+    method, the local `min_cpu_platform` is read before the N1/N2 platform is
+    assigned to `server_spec`, so the platform is never sent (V1).
+19. **`AgogeImageModel.base_family` defaults to the tuple `(None,)`** because of a
+    trailing comma (V5).
+20. **Machine types are capped at 17000 MB and N1/N2/E2.** `ComputeMachineType.get`
+    returns `None` for anything larger (for example `n2-standard-8`), and
+    `_lookup_machine_type` then raises `AttributeError` on `.name`. Today's
+    lab and image servers cannot use more than 16 GB (V2).
+21. **Template servers can get two `startup-script` items** when the image has a
+    custom script and a Linux user-creation script (V4).
+22. **Create Image form defects.** It sends `enable_display`, but
+    `_generate_human_interaction` reads `display`, so the checkbox does nothing.
+    The heading says "Edit Server". No image or server-management component,
+    service, or transformer has a vitest test.
+23. **Image servers today.** They sit on the `default` network with a public IP
+    and a `<name><parent_dns_suffix>` DNS record. The Connect dialog shows SSH/RDP
+    to that name; the VPC allows only 22 and 3389 (`default-allow-management`).
+    `DailyMaintenance` stops every checked-out template server at midnight.
+    Check-in does stop, snapshot, image delete, and image insert in one 540 s
+    invocation. `self.server_spec = self.Server` assigns the dataclass itself, so
+    attributes persist across calls in a warm function instance; set every field
+    the nested path reads. The image routes take raw `request.json()` dicts; the
+    nested routes use Pydantic request models.

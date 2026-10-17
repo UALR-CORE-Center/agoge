@@ -8,14 +8,8 @@ from typing import Sequence
 from dotenv import load_dotenv
 
 from common.exceptions import AgogeValidationError
+from cloud_deployment.utilities import console as ui
 from .project_menu import ProjectMenu
-
-# ANSI Colors
-CYAN = '\033[0;36m'
-GREEN = '\033[0;32m'
-RED = '\033[0;31m'
-NC = '\033[0m'
-YELLOW = '\033[0;33m'
 
 ENV_FILE = Path("main_app/api/.env")
 SHARED_RESOURCE_PROJECT = {
@@ -83,7 +77,7 @@ class GcloudEnvironmentManager:
             timeout=30,
         )
         if result.returncode != 0:
-            print(f"{RED}[!!] Error: {self._gcloud_error(result)}{NC}")
+            ui.error(f"{self._gcloud_error(result)}")
             return None
         account = result.stdout.strip()
         return account if account and account != "(unset)" else None
@@ -91,19 +85,17 @@ class GcloudEnvironmentManager:
     def set_account(self):
         """Allow the user to set a different gcloud account."""
         current_account = self.get_current_account()
-        print(f"{CYAN}\nAvailable Accounts:{NC}")
         result = self._run_gcloud(["auth", "list"], timeout=30)
         if result.returncode != 0:
             raise AgogeValidationError(
                 f"Unable to list gcloud accounts: {self._gcloud_error(result)}"
             )
-        print(f"{CYAN}{result.stdout}{NC}")
-        new_account = input(
-            f"{YELLOW}\nEnter the email of the account to use "
-            f"(or press Enter to keep current): {NC}"
+        ui.panel("Google Cloud accounts", result.stdout.strip())
+        new_account = ui.prompt(
+            "Account email to use (Enter keeps the current one):"
         ).strip()
         if not new_account:
-            print(f"{CYAN}No changes made to the account.{NC}")
+            ui.info("Keeping the current account.")
             return current_account
 
         result = self._run_gcloud(
@@ -115,7 +107,7 @@ class GcloudEnvironmentManager:
                 f"Unable to select account {new_account}: {self._gcloud_error(result)}"
             )
         self._account_changed = new_account != current_account
-        print(f"{GREEN}[+] Successfully set account to: {new_account}{NC}")
+        ui.success(f"Successfully set account to: {new_account}")
         return new_account
 
     def ensure_credentials(
@@ -141,9 +133,9 @@ class GcloudEnvironmentManager:
         if failures:
             reason = "; ".join(failures)
             if prompt:
-                answer = input(
-                    f"{YELLOW}Google Cloud credentials need attention ({reason}). "
-                    f"Re-authenticate now? (Y/n): {NC}"
+                answer = ui.prompt(
+                    f"Google Cloud credentials need attention ({reason}). "
+                    f"Re-authenticate now? (Y/n):"
                 ).strip().lower()
                 if answer not in {"", "y", "yes"}:
                     raise AgogeValidationError(
@@ -181,9 +173,9 @@ class GcloudEnvironmentManager:
                 "account the required permissions."
             )
 
-        print(
-            f"{CYAN}Refreshing gcloud and Application Default Credentials. "
-            f"Complete the browser sign-in if prompted.{NC}"
+        ui.info(
+            "Refreshing gcloud and Application Default Credentials. "
+            "Complete the browser sign-in if prompted."
         )
         args = ["auth", "login"]
         if account:
@@ -214,7 +206,7 @@ class GcloudEnvironmentManager:
         # written. Explicitly synchronize it even if an old ADC token is valid,
         # since that token could belong to another account. Passing ACCOUNT lets
         # gcloud reuse the selected user's login while writing the ADC file.
-        print(f"{CYAN}Synchronizing Application Default Credentials for {account}.{NC}")
+        ui.info(f"Synchronizing Application Default Credentials for {account}.")
         adc_args = ["auth", "application-default", "login", account]
         if quota_project:
             adc_args.append(f"--project={quota_project}")
@@ -234,7 +226,7 @@ class GcloudEnvironmentManager:
         if quota_project:
             self.set_adc_quota_project(quota_project)
         self._account_changed = False
-        print(f"{GREEN}[+] gcloud and Application Default Credentials are ready.{NC}")
+        ui.success(f"gcloud and Application Default Credentials are ready.")
 
     def _credential_failures(self, account: str | None) -> list[str]:
         failures = []
@@ -289,9 +281,9 @@ class GcloudEnvironmentManager:
     def set_adc_quota_project(self, project_id: str) -> None:
         """Set the quota project used by local Python client libraries."""
         if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
-            print(
-                f"{YELLOW}[!] Skipping ADC quota-project update because "
-                f"GOOGLE_APPLICATION_CREDENTIALS is set.{NC}"
+            ui.warning(
+                "Skipping ADC quota-project update because "
+                "GOOGLE_APPLICATION_CREDENTIALS is set."
             )
             return
         result = self._run_gcloud(
@@ -314,10 +306,7 @@ class GcloudEnvironmentManager:
         """Display a menu of environments for user selection."""
         if not self.configurations:
             self.load_configurations()
-        print(f"{CYAN}\nAvailable Environments:{NC}")
-        for index, env_name in enumerate(self.configurations.keys(), start=1):
-            print(f"{index}. {env_name}")
-        print()
+        ui.menu("Environments", enumerate(self.configurations.keys(), start=1))
 
     def select_environment(self):
         """Prompt the user to select an environment by number."""
@@ -329,15 +318,15 @@ class GcloudEnvironmentManager:
         while True:
             try:
                 choice = int(
-                    input(f"{YELLOW}Select an env (1-{len(keys)}): {NC}")
+                    ui.prompt(f"Select an environment (1-{len(keys)}):")
                 ) - 1
                 if 0 <= choice < len(keys):
                     return keys[choice]
-                print(
-                    f"{RED}[!!] Invalid choice. Pick 1-{len(keys)}.{NC}"
+                ui.error(
+                    f"Invalid choice. Pick 1-{len(keys)}."
                 )
             except ValueError:
-                print(f"{RED}[!!] Invalid input. Enter a number.{NC}")
+                ui.error(f"Invalid input. Enter a number.")
 
     def read_env_file(self):
         """Read existing variables from the .env file."""
@@ -354,7 +343,7 @@ class GcloudEnvironmentManager:
                         if sep:
                             variables[key.strip()] = value.strip()
         else:
-            print(f"{YELLOW}[!] No existing .env file found. A new one will be created.{NC}")
+            ui.warning(f"No existing .env file found. A new one will be created.")
         return variables
 
     def write_env_file(self, variables):
@@ -378,7 +367,7 @@ class GcloudEnvironmentManager:
         """Switch to the selected environment by configuring gcloud and updating .env."""
         env_config = self.configurations.get(env_name)
         if not env_config:
-            print(f"{RED}[!!] Error: Configuration for environment '{env_name}' not found.{NC}")
+            ui.error(f"Configuration for environment '{env_name}' not found.")
             sys.exit(1)
 
         # Set both the gcloud target and the quota project used by ADC-backed
@@ -397,9 +386,9 @@ class GcloudEnvironmentManager:
             quota_project=project_id,
             synchronize=self._account_changed,
         )
-        print(f"{GREEN}[+] Successfully set gcloud project to: {project_id}{NC}")
+        ui.success(f"Successfully set gcloud project to: {project_id}")
 
         # Load .env file to set the impersonation account
         load_dotenv(self.env_file)
-        print(f"{GREEN}[+] Successfully switched to environment: {env_name}{NC}")
+        ui.success(f"Successfully switched to environment: {env_name}")
         return project_id

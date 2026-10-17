@@ -1,8 +1,7 @@
 # agoge/cloud_deployment/utilities/menu_options.py
 from enum import Enum
-from colorama import Fore, Style, init
 
-init(autoreset=True)
+from cloud_deployment.utilities import console as ui
 
 
 class SetupCategories(Enum):
@@ -168,10 +167,9 @@ def display_main_menu():
     Displays the main category menu (top-level), allowing the user to choose
     among predefined SetupCategories.
     """
-    print(Fore.YELLOW + "=== Select a Category ===" + Style.RESET_ALL)
-    for category in get_main_menu_categories():
-        print(Fore.GREEN + f"{category.value}. {category_menu[category]['label']}")
-    print(Style.RESET_ALL, end="")
+    ui.menu("Main menu", (
+        (category.value, category_menu[category]["label"]) for category in get_main_menu_categories()
+    ))
 
 
 def display_sub_menu(selected_category: SetupCategories):
@@ -179,10 +177,10 @@ def display_sub_menu(selected_category: SetupCategories):
     Displays the sub-menu options for a given category.
     """
     sub_options = category_menu[selected_category]["options"]
-    print(Fore.BLUE + f"\n-- {category_menu[selected_category]['label']} --" + Style.RESET_ALL)
-    for idx, (_, description) in enumerate(sub_options, start=1):
-        print(f"{idx}. {description}")
-    print("")
+    ui.menu(
+        category_menu[selected_category]["label"],
+        ((idx, description) for idx, (_, description) in enumerate(sub_options, start=1)),
+    )
 
 
 def get_setup_selection(selected_category: SetupCategories, choice: int) -> SetupOptions:
@@ -202,16 +200,12 @@ def get_user_selection(max_choice: int = None, valid_choices: list[int] = None) 
         valid_choices = list(range(1, max_choice + 1))
     while True:
         try:
-            choice = int(input("Enter your choice: ").strip().rstrip("."))
+            choice = int(ui.prompt("Enter your choice:").strip().rstrip("."))
             if choice in valid_choices:
                 return choice
-            print(
-                Fore.RED
-                + f"Invalid choice. Please enter one of: {', '.join(str(c) for c in valid_choices)}."
-                + Style.RESET_ALL
-            )
+            ui.error(f"Invalid choice. Please enter one of: {', '.join(str(c) for c in valid_choices)}.")
         except ValueError:
-            print(Fore.RED + "Invalid input. Please enter a valid number." + Style.RESET_ALL)
+            ui.error("Invalid input. Please enter a valid number.")
 
 
 # ------------------------------
@@ -248,10 +242,9 @@ PROJECT_MAINTENANCE_REGISTRY = [
 
 
 def display_project_maintenance_menu():
-    print(Fore.BLUE + "\n-- Project Maintenance --" + Style.RESET_ALL)
-    for idx, item in enumerate(PROJECT_MAINTENANCE_REGISTRY, start=1):
-        print(f"{idx}. {item['description']}")
-    print("")
+    ui.menu("Project maintenance", (
+        (idx, item["description"]) for idx, item in enumerate(PROJECT_MAINTENANCE_REGISTRY, start=1)
+    ))
 
 
 def get_project_maintenance_selection(choice: int) -> ProjectMaintenanceOptions:

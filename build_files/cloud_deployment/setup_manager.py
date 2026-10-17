@@ -32,6 +32,7 @@ from cloud_deployment.utilities.menu_options import (
     get_user_selection,
 )
 from cloud_deployment.utilities.menu_options import get_user_selection
+from cloud_deployment.utilities import console as ui
 
 from cloud_deployment.operations.guacamole_image_management.guacamole_image_manager import (
     GuacamoleImageManager,
@@ -90,11 +91,14 @@ class SetupManager:
             # Retrieve the operation based on the current selection
             operation = operation_map.get(self.selection)
             if operation:
+                ui.section(self.selection.description)
+                started = time.monotonic()
                 operation()  # execute
+                ui.muted(f"Finished in {ui.duration(time.monotonic() - started)}")
 
         except KeyError as e:
-            print(f"A KeyError occurred, possibly due to a missing environment variable: {e}")
-            print(f"Attempting to synchronize environment variables for project '{self.project}' before retrying.")
+            ui.error(f"A KeyError occurred, possibly due to a missing environment variable: {e}")
+            ui.info(f"Synchronizing environment variables for project '{self.project}' before retrying.")
             EnvironmentVariables(project=self.project).run()
 
     def _deploy_and_configure_routing(self, deployment: str) -> None:
@@ -126,4 +130,4 @@ class SetupManager:
                     operation_kwargs["project"] = self.project
                 operation_class(**operation_kwargs).run()
             else:
-                print(f"Unsupported maintenance selection: {selection}")
+                ui.error(f"Unsupported maintenance selection: {selection}")
