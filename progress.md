@@ -140,7 +140,7 @@ See `### Nested Guest Contract` in PRD.md.
 - [x] **N3** Nested guest models — spec + done-when at PRD.md:1628
 - [x] **N4** Nested contract constants — spec + done-when at PRD.md:1630
 - [x] **N5** Nested guest validator — spec + done-when at PRD.md:1632
-- [ ] **N6** Guest payload builder — spec + done-when at PRD.md:1634
+- [x] **N6** Guest payload builder — spec + done-when at PRD.md:1634
 - [ ] **N7** qemu-agent relay section — spec + done-when at PRD.md:1636
 - [ ] **N8** Plant watcher installer — spec + done-when at PRD.md:1638
 - [ ] **N9** Nested plant procedure — spec + done-when at PRD.md:1640
@@ -1209,3 +1209,10 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - Group V tsc gate: 0 matches (passes).
   - Group V ESLint gate: **exit 2**, "No files matching the pattern src/components/Teacher/ServerManagement/Forms/NestedImage". Those files belong to V16–V21, which are all `[ ]`, so no completed task is responsible.
 - **Reopened:** none.
+
+### Iteration 81 — 2026-10-17
+- **Completed:** N6. `FlagPlanter.build_guest_payload(board, server, guest, nonce, seed)` in `flag_planter.py`: BadRequest unless the guest is declared on that server, the board has flags on it, and every flag's OS equals the guest's; reuses the existing bash/PowerShell bodies via a `guest=True` switch on `_linux_payload`/`_windows_payload`. The prologue templates gained a `{save_stdout}` slot (empty for server payloads, so they are byte-for-byte unchanged): Linux `exec 3>&1` before the `/dev/null` redirect and `printf '%s\n' "$agoge_ctf_result" >&3` as the only fd-3 write; Windows saves `[Console]::Out`, nulls console out/err and the chatty preference streams, and ends with `$agogeCtfStdout.WriteLine($agogeCtfResult)`. Result composition is shared (`_LINUX_RESULT`/`_WINDOWS_RESULT`); flag derivation moved into `_planted`. New `cloud_functions/tests/test_flag_planter_guest.py` (27 tests): scope per guest/board/workout, no guest-attribute write (no curl/metadata URL/Invoke-RestMethod), no print command, `bash -n`, pwsh parse, run under `bash -s` → stdout is exactly `ok:<nonce>\n` with noisy tools, error line has no values, pwsh `-File` run prints exactly one line.
+- **Learned:** `build_payload` still selects every board flag on the server, guest flags included, so for a nested host it currently mixes OSes and raises — N7 must restrict the parent body to `flag.guest is None` (use `_board_flags_on` + filter) and call `build_guest_payload` per guest.
+- **Gate results:** api/unit_tests 1440 passed; cloud_functions/tests 525 passed; build_files/cloud_deployment/tests 319 passed; ruff clean on changed files. No frontend files changed.
+- **Blockers:** none.
+- **Next:** N7 (qemu-agent relay section in `build_payload`).
