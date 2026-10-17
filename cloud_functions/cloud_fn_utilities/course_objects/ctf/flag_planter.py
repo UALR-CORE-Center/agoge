@@ -3,7 +3,7 @@ import json
 import re
 import shlex
 import time
-from typing import Callable, Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections
 from common.exceptions import BadRequest, NotFound
@@ -14,8 +14,8 @@ from common.utilities.ctf_plant_contract import (
     GUEST_ATTRIBUTE_ACK_KEY, GUEST_ATTRIBUTE_ACK_PATH, GUEST_ATTRIBUTE_NAMESPACE, GUEST_ATTRIBUTE_PATH,
     GUEST_ATTRIBUTE_RESULT_KEY, GUEST_ATTRIBUTES_ENABLE_KEY, GUEST_ATTRIBUTES_ENABLE_VALUE, LOCATION_PATH_PATTERNS,
     MAX_RESULT_MESSAGE_LENGTH, NESTED_CONFIRM_TIMEOUT_SECONDS, PLANT_METADATA_KEY, PLANT_PAYLOAD_MAX_BYTES,
-    PRISTINE_SNAPSHOT_NAME, RELAY_BUDGET_SECONDS, RESULT_ERROR, RESULT_OK, WATCHER_ACK_SECONDS, guest_result_key,
-    guest_result_path, parse_plant_result
+    PRISTINE_SNAPSHOT_NAME, RELAY_BUDGET_SECONDS, RESULT_ERROR, RESULT_OK, RUN_DIR, WATCHER_ACK_SECONDS,
+    guest_result_key, guest_result_path, parse_plant_result
 )
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.id_generator import IdGenerator
@@ -305,6 +305,241 @@ try {
   Remove-Item -Force -LiteralPath $agogeCtfFile -ErrorAction SilentlyContinue
 }
 """
+# offline relay (driver offline), defined after _LINUX_RELAY, whose agoge_ctf_guest_result it uses. Each guest
+# runs in its own background subshell: agoge_ctf_offline_begin installs an EXIT trap that starts the guest again
+# (once the tool checks pass), removes the section's temp directory, and writes the guest's result key, whatever
+# the outcome. The section never runs `virsh destroy`. Values reach libguestfs only as root-only files in a temp directory under
+# /run/agoge-ctf/ (OFFLINE_TEMP_DIR), written with the printf builtin; every libguestfs argument is a path, a mode, an owner or a
+# registry key, none of them secret. Guest paths have passed LOCATION_PATH_PATTERNS, so none holds a quote, a
+# colon (virt-customize's --upload separator) or, on Linux, a space.
+_LINUX_OFFLINE = """agoge_ctf_offline_dir={offline_dir}
+# Bounded by the section's deadline, so a hung appliance cannot hold plant-result past the relay budget
+agoge_ctf_lg() {{
+  local left=$((agoge_ctf_og_deadline - SECONDS))
+  [ "$left" -gt 0 ] || return 124
+  timeout "$left" "$@"
+}}
+agoge_ctf_og_fail() {{
+  agoge_ctf_og_errors="${{agoge_ctf_og_errors:+$agoge_ctf_og_errors; }}$1"
+}}
+agoge_ctf_offline_end() {{
+  if [ "$agoge_ctf_og_restart" = 1 ]; then
+    timeout {virsh_timeout} virsh -q start "$agoge_ctf_og_domain"
+  fi
+  [ -n "$agoge_ctf_og_tmp" ] && rm -rf "$agoge_ctf_og_tmp"
+  agoge_ctf_guest_result "$agoge_ctf_og_guest" "$agoge_ctf_og_url" "$agoge_ctf_og_result"
+}}
+agoge_ctf_offline_state() {{
+  timeout {virsh_timeout} virsh -q domstate "$agoge_ctf_og_domain" | head -n 1
+}}
+# guest domain result_url revert(0|1) os(linux|windows)
+agoge_ctf_offline_begin() {{
+  agoge_ctf_og_guest="$1" agoge_ctf_og_domain="$2" agoge_ctf_og_url="$3"
+  agoge_ctf_og_deadline=$((SECONDS + {budget}))
+  agoge_ctf_og_restart=0 agoge_ctf_og_tmp='' agoge_ctf_og_errors='' agoge_ctf_og_count=0
+  agoge_ctf_og_result="{error}:$agoge_ctf_nonce:$1: offline relay did not finish"
+  agoge_ctf_og_kind=() agoge_ctf_og_path=() agoge_ctf_og_value=() agoge_ctf_og_flag=() agoge_ctf_og_extra=()
+  trap agoge_ctf_offline_end EXIT
+  local tool state end
+  for tool in virsh virt-customize guestfish virt-win-reg; do
+    if [ "$5" = linux ] && [ "$tool" = virt-win-reg ]; then continue; fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      agoge_ctf_og_result="{error}:$agoge_ctf_nonce:$1: $tool is not available"
+      return 1
+    fi
+  done
+  # Contract step 4: the guest is started whatever the outcome, even one found shut off; start on a guest
+  # that is already running fails harmlessly
+  agoge_ctf_og_restart=1
+  umask 077
+  mkdir -p "$agoge_ctf_offline_dir" && chmod 700 "$agoge_ctf_offline_dir" \\
+    && agoge_ctf_og_tmp="$(mktemp -d "$agoge_ctf_offline_dir/offline.XXXXXX")" || {{
+    agoge_ctf_og_result="{error}:$agoge_ctf_nonce:$1: could not create a temporary directory"
+    return 1
+  }}
+  if [ "$4" = 1 ]; then
+    if ! timeout {virsh_timeout} virsh -q snapshot-info "$2" {snapshot}; then
+      agoge_ctf_og_result="{error}:$agoge_ctf_nonce:$1: no {snapshot} snapshot"
+      return 1
+    fi
+    if ! timeout {revert_timeout} virsh -q snapshot-revert "$2" {snapshot} --running; then
+      agoge_ctf_og_result="{error}:$agoge_ctf_nonce:$1: snapshot revert failed"
+      return 1
+    fi
+  fi
+  state="$(agoge_ctf_offline_state)"
+  if [ "$state" != "shut off" ]; then
+    timeout {virsh_timeout} virsh -q shutdown "$2"
+    end=$((SECONDS + {shutdown_timeout}))
+    until [ "$(agoge_ctf_offline_state)" = "shut off" ]; do
+      if [ "$SECONDS" -ge "$end" ] || [ "$SECONDS" -ge "$agoge_ctf_og_deadline" ]; then
+        agoge_ctf_og_result="{error}:$agoge_ctf_nonce:$1: guest did not shut down"
+        return 1
+      fi
+      sleep {poll_interval}
+    done
+  fi
+}}
+# kind guest_path value flag_id [extra]. The value goes to a 0600 temp file; libguestfs is given its path.
+agoge_ctf_offline_add() {{
+  local i=$agoge_ctf_og_count
+  printf '%s' "$3" > "$agoge_ctf_og_tmp/v$i" || {{ agoge_ctf_og_fail "$4: could not write temporary file"; return; }}
+  agoge_ctf_og_kind[i]="$1" agoge_ctf_og_path[i]="$2" agoge_ctf_og_value[i]="$3" agoge_ctf_og_flag[i]="$4"
+  agoge_ctf_og_extra[i]="$5"
+  agoge_ctf_og_count=$((i + 1))
+}}
+# path value mode owner flag_id
+agoge_ctf_offline_linux_file() {{
+  agoge_ctf_offline_add file "$1" "$2" "$5" "$3 $4"
+}}
+# name value flag_id
+agoge_ctf_offline_linux_env() {{
+  agoge_ctf_offline_add env "$1" "$2" "$3"
+}}
+# drive posix_path value flag_id. guestfish -i mounts only the system drive.
+agoge_ctf_offline_windows_file() {{
+  case "$1" in
+    C|c) agoge_ctf_offline_add file "$2" "$3" "$4" ;;
+    *) agoge_ctf_og_fail "$4: only drive C: can be written offline" ;;
+  esac
+}}
+# current_control_set(0|1) key_below_HKLM_or_CurrentControlSet value_name value flag_id
+agoge_ctf_offline_windows_reg() {{
+  agoge_ctf_offline_add "reg$1" "$2" "$4" "$5" "$3"
+}}
+# index -> 0 when the read-back file holds exactly the value (compared by SHA-256)
+agoge_ctf_og_same() {{
+  [ -f "$2" ] || return 1
+  [ "$(sha256sum < "$2" | cut -c1-64)" = "$(printf '%s' "${{agoge_ctf_og_value[$1]}}" | sha256sum | cut -c1-64)" ]
+}}
+agoge_ctf_og_same_text() {{
+  [ "$(printf '%s' "$2" | sha256sum | cut -c1-64)" = "$(printf '%s' "${{agoge_ctf_og_value[$1]}}" | sha256sum | cut -c1-64)" ]
+}}
+agoge_ctf_og_finish() {{
+  if [ -z "$agoge_ctf_og_errors" ]; then
+    agoge_ctf_og_result="{ok}:$agoge_ctf_nonce"
+  else
+    agoge_ctf_og_result="{error}:$agoge_ctf_nonce:${{agoge_ctf_og_errors:0:{max_message}}}"
+  fi
+}}
+agoge_ctf_offline_commit_linux() {{
+  local i ops=() reads=() env_file={env_file} has_env=0 got
+  local tmp="$agoge_ctf_og_tmp"
+  for ((i = 0; i < agoge_ctf_og_count; i++)); do
+    [ "${{agoge_ctf_og_kind[i]}}" = env ] && has_env=1
+  done
+  if [ "$has_env" = 1 ]; then
+    # Rewrite the guest's environment file from its current content; never replace one that could not be read
+    printf '%s\\n' "-download $env_file $tmp/env.cur" | agoge_ctf_lg guestfish --ro -d "$agoge_ctf_og_domain" -i
+    if [ ! -f "$tmp/env.cur" ]; then
+      if [ "$(printf '%s\\n' "exists $env_file" | agoge_ctf_lg guestfish --ro -d "$agoge_ctf_og_domain" -i)" = false ]; then
+        : > "$tmp/env.cur"
+      fi
+    fi
+    if [ -f "$tmp/env.cur" ]; then
+      cp "$tmp/env.cur" "$tmp/env.new"
+      for ((i = 0; i < agoge_ctf_og_count; i++)); do
+        [ "${{agoge_ctf_og_kind[i]}}" = env ] || continue
+        {{ grep -v "^${{agoge_ctf_og_path[i]}}=" "$tmp/env.new"; printf '%s=%s\\n' "${{agoge_ctf_og_path[i]}}" "${{agoge_ctf_og_value[i]}}"; }} \\
+          > "$tmp/env.next" && mv "$tmp/env.next" "$tmp/env.new"
+      done
+      ops+=(--upload "$tmp/env.new:$env_file" --chmod "0644:$env_file")
+    fi
+  fi
+  for ((i = 0; i < agoge_ctf_og_count; i++)); do
+    [ "${{agoge_ctf_og_kind[i]}}" = file ] || continue
+    local path="${{agoge_ctf_og_path[i]}}" mode="${{agoge_ctf_og_extra[i]%% *}}" owner="${{agoge_ctf_og_extra[i]#* }}"
+    ops+=(--mkdir "$(dirname "$path")" --upload "$tmp/v$i:$path" --chmod "$mode:$path")
+    [ -n "$owner" ] && ops+=(--run-command "chown $owner $path")
+    reads+=("-download $path $tmp/r$i")
+  done
+  [ "${{#ops[@]}}" -gt 0 ] && agoge_ctf_lg virt-customize -q -d "$agoge_ctf_og_domain" "${{ops[@]}}"
+  [ "$has_env" = 1 ] && reads+=("-download $env_file $tmp/env.rb")
+  [ "${{#reads[@]}}" -gt 0 ] && printf '%s\\n' "${{reads[@]}}" | agoge_ctf_lg guestfish --ro -d "$agoge_ctf_og_domain" -i
+  for ((i = 0; i < agoge_ctf_og_count; i++)); do
+    if [ "${{agoge_ctf_og_kind[i]}}" = file ]; then
+      agoge_ctf_og_same "$i" "$tmp/r$i" || agoge_ctf_og_fail "${{agoge_ctf_og_flag[i]}}: verification failed"
+    else
+      got="$( [ -f "$tmp/env.rb" ] && sed -n "s/^${{agoge_ctf_og_path[i]}}=//p" "$tmp/env.rb" | tail -n 1)"
+      [ -f "$tmp/env.rb" ] && agoge_ctf_og_same_text "$i" "$got" \\
+        || agoge_ctf_og_fail "${{agoge_ctf_og_flag[i]}}: verification failed"
+    fi
+  done
+  agoge_ctf_og_finish
+}}
+agoge_ctf_offline_commit_windows() {{
+  local i line idx raw set='' keys=() writes=() reads=() got
+  local tmp="$agoge_ctf_og_tmp" resolved=()
+  for ((i = 0; i < agoge_ctf_og_count; i++)); do
+    [ "${{agoge_ctf_og_kind[i]}}" = file ] && writes+=("echo @$i" "-case-sensitive-path \\"${{agoge_ctf_og_path[i]}}\\"")
+    [ "${{agoge_ctf_og_kind[i]}}" = reg1 ] && set=need
+  done
+  # NTFS is case-insensitive but ntfs-3g is not: resolve each path to the case already on disk
+  if [ "${{#writes[@]}}" -gt 0 ]; then
+    while IFS= read -r line; do
+      case "$line" in
+        @*) idx="${{line#@}}" ;;
+        '') ;;
+        /*) resolved[idx]="$line" ;;
+        *) resolved[idx]="/$line" ;;
+      esac
+    done < <(printf '%s\\n' "${{writes[@]}}" | agoge_ctf_lg guestfish --ro -d "$agoge_ctf_og_domain" -i)
+  fi
+  # HKLM\\SYSTEM\\CurrentControlSet exists only on a running system: map it to the hive's current ControlSet00N
+  if [ "$set" = need ]; then
+    set=''
+    raw="$(agoge_ctf_lg virt-win-reg "$agoge_ctf_og_domain" 'HKLM\\SYSTEM\\Select' Current | tr -d '\\r')"
+    case "$raw" in
+      dword:[0-9a-fA-F]*) printf -v set 'ControlSet%03d' "$((16#${{raw#dword:}}))" ;;
+      *[!0-9]*|'') ;;
+      *) printf -v set 'ControlSet%03d' "$((10#$raw))" ;;
+    esac
+  fi
+  printf 'REGEDIT4\\n\\n' > "$tmp/merge.reg"
+  writes=()
+  for ((i = 0; i < agoge_ctf_og_count; i++)); do
+    case "${{agoge_ctf_og_kind[i]}}" in
+      file)
+        local path="${{resolved[i]:-${{agoge_ctf_og_path[i]}}}}"
+        agoge_ctf_og_path[i]="$path"
+        writes+=("-mkdir-p \\"$(dirname "$path")\\"" "-upload $tmp/v$i \\"$path\\"")
+        reads+=("-download \\"$path\\" $tmp/r$i")
+        ;;
+      reg0) keys[i]="${{agoge_ctf_og_path[i]}}" ;;
+      reg1)
+        if [ -z "$set" ]; then
+          agoge_ctf_og_fail "${{agoge_ctf_og_flag[i]}}: could not find the current control set"
+          continue
+        fi
+        keys[i]="SYSTEM\\\\$set${{agoge_ctf_og_path[i]:+\\\\${{agoge_ctf_og_path[i]}}}}"
+        ;;
+    esac
+    [ -n "${{keys[i]}}" ] && printf '[HKEY_LOCAL_MACHINE\\\\%s]\\n"%s"="%s"\\n\\n' \\
+      "${{keys[i]}}" "${{agoge_ctf_og_extra[i]}}" "${{agoge_ctf_og_value[i]}}" >> "$tmp/merge.reg"
+  done
+  [ "${{#writes[@]}}" -gt 0 ] && printf '%s\\n' "${{writes[@]}}" | agoge_ctf_lg guestfish -d "$agoge_ctf_og_domain" -i
+  [ "${{#keys[@]}}" -gt 0 ] && agoge_ctf_lg virt-win-reg --merge "$agoge_ctf_og_domain" "$tmp/merge.reg"
+  [ "${{#reads[@]}}" -gt 0 ] && printf '%s\\n' "${{reads[@]}}" | agoge_ctf_lg guestfish --ro -d "$agoge_ctf_og_domain" -i
+  for ((i = 0; i < agoge_ctf_og_count; i++)); do
+    case "${{agoge_ctf_og_kind[i]}}" in
+      file) agoge_ctf_og_same "$i" "$tmp/r$i" || agoge_ctf_og_fail "${{agoge_ctf_og_flag[i]}}: verification failed" ;;
+      reg*)
+        [ -n "${{keys[i]}}" ] || continue
+        got="$(agoge_ctf_lg virt-win-reg "$agoge_ctf_og_domain" "HKLM\\\\${{keys[i]}}" "${{agoge_ctf_og_extra[i]}}" | tr -d '\\r')"
+        agoge_ctf_og_same_text "$i" "$got" || agoge_ctf_og_fail "${{agoge_ctf_og_flag[i]}}: verification failed"
+        ;;
+    esac
+  done
+  agoge_ctf_og_finish
+}}
+"""
+# Module-level so tests can point the offline temp files at a scratch directory
+OFFLINE_TEMP_DIR = RUN_DIR
+_OFFLINE_SHUTDOWN_SECONDS = 120
+_OFFLINE_WINDOWS_LOCATIONS = ('file', 'registry', 'env')
+# Machine environment variables live in the registry; offline they are merged like any other value
+_CURRENT_CONTROL_SET = 'SYSTEM\\CurrentControlSet'
+_WINDOWS_ENVIRONMENT_KEY = _CURRENT_CONTROL_SET + '\\Control\\Session Manager\\Environment'
 _RELAY_VIRSH_TIMEOUT_SECONDS = 30
 _RELAY_AGENT_TIMEOUT_SECONDS = 10
 _RELAY_PING_INTERVAL_SECONDS = 5
@@ -862,6 +1097,16 @@ class FlagPlanter:
         if not re.fullmatch(_NONCE_PATTERN, str(nonce)):
             raise BadRequest(f"{self.class_name}:{self.event.id} - Invalid plant nonce")
 
+        declared, flags = self._guest_flags(board, server, guest)
+        planted = self._planted(board, flags, seed)
+        if declared.operating_system == 'windows':
+            return self._windows_payload(planted, nonce, guest=True)
+        return self._linux_payload(planted, nonce, guest=True)
+
+    def _guest_flags(
+        self, board: CtfBoardModel, server: str, guest: str
+    ) -> Tuple[CtfNestedGuestSpecModel, List[CtfFlagSpecModel]]:
+        """The declared guest and the board's flags on it, checked as build_guest_payload documents."""
         declared = next(
             (g for g in self.event.spec.nested_guests if g.server == server and g.name == guest), None
         )
@@ -879,10 +1124,25 @@ class FlagPlanter:
                 raise BadRequest(
                     f"{self.class_name}:{self.event.id} - Flag {flag.id} operating system differs from guest '{guest}'"
                 )
-        planted = self._planted(board, flags, seed)
+        return declared, flags
+
+    def _offline_planted(self, board: CtfBoardModel, server: str, guest: str, seed: str) -> list:
+        """
+        (flag, value) pairs for an offline guest. Re-checks the offline rules of the nested guest validator, so a
+        placement libguestfs cannot make (an ADS, an ACL, Hidden, a hive it does not hold) is never attempted.
+        """
+        declared, flags = self._guest_flags(board, server, guest)
         if declared.operating_system == 'windows':
-            return self._windows_payload(planted, nonce, guest=True)
-        return self._linux_payload(planted, nonce, guest=True)
+            for flag in flags:
+                registry_ok = flag.location_type != 'registry' or flag.path.upper().startswith(
+                    ('HKLM\\SOFTWARE\\', 'HKLM\\SYSTEM\\')
+                )
+                if (flag.location_type not in _OFFLINE_WINDOWS_LOCATIONS or flag.windows_access is not None
+                        or flag.hidden or not registry_ok):
+                    raise BadRequest(
+                        f"{self.class_name}:{self.event.id} - Flag {flag.id} cannot be planted by the offline driver"
+                    )
+        return self._planted(board, flags, seed)
 
     def _nested_host_payload(
         self, board: CtfBoardModel, server: str, nonce: str, seed: str, guest: Optional[str] = None,
@@ -890,15 +1150,15 @@ class FlagPlanter:
     ) -> str:
         """
         Parent payload for a nested host (Nested Guest Contract): ack first, then the parent's own flags,
-        then one relay section per qemu-agent guest with board flags, run in parallel, then plant-result
-        last, reporting the parent's flags only. Guests with the offline driver are not relayed here.
+        then one relay section per guest with board flags (qemu-agent or offline), run in parallel, then
+        plant-result last, reporting the parent's flags only.
         With `guest` set (a guest host reset) the parent's flags and every other guest are left out.
         """
         board_flags = self._board_flags_on(board, server)
         parent_flags = [flag for flag in board_flags if flag.guest is None] if guest is None else []
         guests = [
             g for g in self.event.spec.nested_guests
-            if g.server == server and g.driver == 'qemu-agent' and (guest is None or g.name == guest)
+            if g.server == server and (guest is None or g.name == guest)
             and any(flag.guest == g.name for flag in board_flags)
         ]
         if not parent_flags and not guests:
@@ -909,8 +1169,13 @@ class FlagPlanter:
             raise BadRequest(
                 f"{self.class_name}:{self.event.id} - Flags on nested host '{server}' must be linux"
             )
-        relays = [(g, self.build_guest_payload(board, server, g.name, nonce, seed)) for g in guests]
-        return self._linux_payload(self._planted(board, parent_flags, seed), nonce, relays=relays, revert=revert)
+        relays = [
+            (g, self.build_guest_payload(board, server, g.name, nonce, seed)) for g in guests if g.driver != 'offline'
+        ]
+        offline = [(g, self._offline_planted(board, server, g.name, seed)) for g in guests if g.driver == 'offline']
+        return self._linux_payload(
+            self._planted(board, parent_flags, seed), nonce, relays=relays, revert=revert, offline=offline
+        )
 
     def _planted(self, board: CtfBoardModel, flags: List[CtfFlagSpecModel], seed: str) -> list:
         """(flag, value) pairs, each path and derived value checked against its pattern before interpolation."""
@@ -953,12 +1218,13 @@ class FlagPlanter:
     @staticmethod
     def _linux_payload(
         planted: list, nonce: str, guest: bool = False, relays: Optional[list] = None, revert: bool = False,
-        actions: Optional[List[str]] = None
+        actions: Optional[List[str]] = None, offline: Optional[list] = None
     ) -> str:
         """
-        `relays` (nested host only) is a list of (guest spec, guest payload) to relay after the placements, each
-        reverted to its pristine snapshot first when `revert` is set. `actions` (nested host only) are guest
-        action sections (_linux_guest_action) whose failures are reported through plant-result.
+        `relays` (nested host only) is a list of (guest spec, guest payload) to relay after the placements, and
+        `offline` a list of (guest spec, planted pairs) for offline guests; each guest is reverted to its pristine
+        snapshot first when `revert` is set. `actions` (nested host only) are guest action sections
+        (_linux_guest_action) whose failures are reported through plant-result.
         """
         q = shlex.quote
         ack = _LINUX_ACK.format(nonce=q(nonce), url=q(_GUEST_ATTRIBUTES_URL + GUEST_ATTRIBUTE_ACK_PATH))
@@ -976,8 +1242,8 @@ class FlagPlanter:
                 )
             else:
                 lines.append(f"agoge_ctf_plant_env {q(flag.path)} {q(value)} {q(flag.id)}")
-        if relays:
-            lines.append(FlagPlanter._linux_relays(relays, revert=revert))
+        if relays or offline:
+            lines.append(FlagPlanter._linux_relays(relays or [], revert=revert, offline=offline or []))
         lines.extend(actions or [])
         epilogue = _LINUX_GUEST_EPILOGUE if guest else _LINUX_EPILOGUE
         lines.append(epilogue.format(
@@ -986,7 +1252,7 @@ class FlagPlanter:
         return "\n".join(lines)
 
     @staticmethod
-    def _linux_relays(relays: list, revert: bool = False) -> str:
+    def _linux_relays(relays: list, revert: bool = False, offline: Optional[list] = None) -> str:
         """The relay functions, one background section per guest, and the wait that precedes plant-result."""
         q = shlex.quote
         compact = {'separators': (',', ':')}
@@ -1017,8 +1283,60 @@ class FlagPlanter:
             url = _GUEST_ATTRIBUTES_URL + guest_result_path(guest.name)
             relay = 'agoge_ctf_rebuild_qemu' if revert else 'agoge_ctf_relay_qemu'
             lines.append(f"{relay} {q(guest.name)} {q(guest.domain)} {q(url)} {q(exec_command)} &")
+        if offline:
+            lines.append(_LINUX_OFFLINE.format(
+                offline_dir=q(OFFLINE_TEMP_DIR), env_file=q(LINUX_ENVIRONMENT_FILE), budget=RELAY_BUDGET_SECONDS,
+                virsh_timeout=_RELAY_VIRSH_TIMEOUT_SECONDS, revert_timeout=_RELAY_REVERT_TIMEOUT_SECONDS,
+                shutdown_timeout=_OFFLINE_SHUTDOWN_SECONDS, poll_interval=_RELAY_STATUS_INTERVAL_SECONDS,
+                snapshot=q(PRISTINE_SNAPSHOT_NAME), ok=RESULT_OK, error=RESULT_ERROR,
+                max_message=MAX_RESULT_MESSAGE_LENGTH
+            ))
+            for guest, planted in offline:
+                lines.append(FlagPlanter._offline_section(guest, planted, revert))
         # plant-result (the epilogue) is written only once every guest section has written its own key
         lines.append("wait\n")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _offline_section(guest: CtfNestedGuestSpecModel, planted: list, revert: bool) -> str:
+        """One offline guest's background subshell: begin (shutdown, trap), one call per placement, commit."""
+        q = shlex.quote
+        url = _GUEST_ATTRIBUTES_URL + guest_result_path(guest.name)
+        lines = ["(", (
+            f"agoge_ctf_offline_begin {q(guest.name)} {q(guest.domain)} {q(url)} {1 if revert else 0} "
+            f"{guest.operating_system} || exit 0"
+        )]
+        for flag, value in planted:
+            if guest.operating_system == 'linux':
+                if flag.location_type == 'file':
+                    mode = flag.file_mode or _DEFAULT_LINUX_FILE_MODE
+                    lines.append(
+                        f"agoge_ctf_offline_linux_file {q(flag.path)} {q(value)} {q(mode)} "
+                        f"{q(flag.file_owner or '')} {q(flag.id)}"
+                    )
+                else:
+                    lines.append(f"agoge_ctf_offline_linux_env {q(flag.path)} {q(value)} {q(flag.id)}")
+            elif flag.location_type == 'file':
+                # C:\\dir\\file -> drive C and /dir/file on the mounted system drive
+                posix_path = '/' + flag.path[3:].replace('\\', '/')
+                lines.append(
+                    f"agoge_ctf_offline_windows_file {q(flag.path[0])} {q(posix_path)} {q(value)} {q(flag.id)}"
+                )
+            else:
+                if flag.location_type == 'registry':
+                    key, name = flag.path.rsplit(':', 1)
+                    key = key[len('HKLM\\'):]
+                else:
+                    key, name = _WINDOWS_ENVIRONMENT_KEY, flag.path
+                current, below = 0, key
+                # Registry paths are case-insensitive
+                if (key + '\\').upper().startswith(_CURRENT_CONTROL_SET.upper() + '\\'):
+                    current, below = 1, key[len(_CURRENT_CONTROL_SET) + 1:]
+                lines.append(
+                    f"agoge_ctf_offline_windows_reg {current} {q(below)} {q(name)} {q(value)} {q(flag.id)}"
+                )
+        lines.append(f"agoge_ctf_offline_commit_{guest.operating_system}")
+        lines.append(") &")
         return "\n".join(lines)
 
     @staticmethod
