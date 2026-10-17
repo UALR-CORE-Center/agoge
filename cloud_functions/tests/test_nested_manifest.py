@@ -159,6 +159,22 @@ def test_manifest_downloads_each_seeded_cloud_image_by_its_pinned_url(entry):
     assert guest['catalog']['net_config'] == entry.net_config
 
 
+def _json_downloaded_iso_entries():
+    items = json.loads(CATALOG_JSON.read_text()) if CATALOG_JSON.is_file() else []
+    return [NestedOsCatalogModel(**item) for item in items
+            if item['install_method'] == 'manual_iso' and not item['requires_upload']]
+
+
+@pytest.mark.parametrize('entry', _json_downloaded_iso_entries(), ids=lambda entry: entry.id)
+def test_manifest_downloads_each_seeded_appliance_iso_by_its_pinned_url(entry):
+    # A downloaded manual_iso guest has no media_id; the builder fetches and verifies the pinned ISO itself.
+    spec = _spec([_guest('appliance', entry.id, memory_mb=entry.default_memory_mb, disk_gb=entry.default_disk_gb)])
+    guest = json.loads(render_manifest(spec, {entry.id: entry}, {}))['guests'][0]
+    assert guest['media'] == {'source': 'url', 'url': entry.media_url, 'sha256': entry.media_sha256, 'format': 'iso'}
+    assert guest['catalog']['install_method'] == 'manual_iso'
+    assert guest['catalog']['net_config'] == 'none'
+
+
 def test_manifest_rejects_missing_catalog_entry_and_medium():
     spec = _three_guest_spec()
     with pytest.raises(ValueError, match='legacy: no medium med-1'):
