@@ -208,3 +208,67 @@ def test_a_user_not_on_the_event_is_unauthorized_before_any_server_read(db):
 
 def test_an_admin_not_on_the_event_can_read_host_rows(db):
     assert len(hosts(db, user("root@example.edu", admin=True))) == 4
+
+
+# --- nested guests (N10) ------------------------------------------------------------------------
+
+GUEST_FLAG = {"id": "web-g1", "server": "web", "guest": "ubuntu-lin", "slot": 1, "points": 100,
+              "location_type": "file", "path": "/root/flag.txt", "operating_system": "linux"}
+NESTED_GUESTS = [
+    {"name": "ubuntu-lin", "server": "web", "domain": "ubuntu", "operating_system": "linux"},
+    {"name": "win", "server": "web", "domain": "win10", "operating_system": "windows"},
+]
+
+
+@pytest.fixture
+def nested_db(db):
+    event = db.collection(DbCollections.CTF)[CTF_ID]
+    event["spec"]["flags"].append(copy.deepcopy(GUEST_FLAG))
+    event["spec"]["nested_guests"] = copy.deepcopy(NESTED_GUESTS)
+    for board in db.collection(DbCollections.CTF_BOARD).values():
+        board["flags"].append({"flag_id": GUEST_FLAG["id"], "digest": f"d-{board['workout_id']}-g"})
+    return db
+
+
+def test_each_guest_gets_a_row_per_board_right_after_its_parent(nested_db):
+    rows = hosts(nested_db)
+    assert [(r.workout_id, r.server, r.guest) for r in rows] == [
+        (workout_id, server, guest) for workout_id in BOARDS
+        for server, guest in [("web", None), ("web", "ubuntu-lin"), ("web", "win"), ("db", None)]
+    ]
+
+
+def test_guest_rows_allow_rebuild_and_show_the_parents_state(nested_db):
+    # Even a WireGuard parent: a guest rebuild is a snapshot revert, not an instance nuke.
+    seed_server(nested_db, BOARDS[0], "web", state=ServerStates.STOPPED.value, wireguard_endpoint_id="wg-1")
+    by_key = {(r.workout_id, r.server, r.guest): r for r in hosts(nested_db)}
+    parent, guest = by_key[(BOARDS[0], "web", None)], by_key[(BOARDS[0], "web", "win")]
+    assert (parent.rebuild_allowed, guest.rebuild_allowed) == (False, True)
+    assert (guest.server_state, guest.server_state_name) == (ServerStates.STOPPED.value, "STOPPED")
+    assert guest.team_name == parent.team_name == "Team 1"
+
+
+def test_a_guests_flags_count_on_the_guest_row_not_its_parent(nested_db):
+    by_key = {(r.server, r.guest): r.flag_count for r in hosts(nested_db) if r.workout_id == BOARDS[0]}
+    assert by_key == {("web", None): 2, ("web", "ubuntu-lin"): 1, ("web", "win"): 0, ("db", None): 1}
+
+
+def test_a_parent_whose_only_flags_are_on_guests_is_still_listed_first():
+    db = FakeDb()
+    seed_event(db)
+    event = db.collection(DbCollections.CTF)[CTF_ID]
+    event["spec"]["flags"] = [copy.deepcopy(GUEST_FLAG)]
+    event["spec"]["nested_guests"] = copy.deepcopy(NESTED_GUESTS[:1])
+    for workout_id in BOARDS:
+        seed_server(db, workout_id, "kali")
+        seed_server(db, workout_id, "web")
+    rows = [r for r in hosts(db) if r.workout_id == BOARDS[0]]
+    assert [(r.server, r.guest, r.flag_count) for r in rows] == [
+        ("web", None, 0), ("web", "ubuntu-lin", 0), ("kali", None, 0),
+    ]
+
+
+def test_guest_rows_of_a_parent_with_no_document_have_no_state(nested_db):
+    del nested_db.collection(DbCollections.SERVER)[f"{BOARDS[0]}-web"]
+    row = next(r for r in hosts(nested_db) if (r.workout_id, r.guest) == (BOARDS[0], "ubuntu-lin"))
+    assert (row.server_state, row.server_state_name) == (None, None)

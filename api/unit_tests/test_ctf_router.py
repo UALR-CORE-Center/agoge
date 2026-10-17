@@ -237,9 +237,43 @@ def test_host_reset_publishes_through_core_and_audits_once(h):
     response = h.client.put(f"/ctf/{CTF_ID}/boards/{WORKOUT}/hosts/web/reset/", json={"mode": "restart"})
 
     assert response.status_code == 200
-    h.hosts.reset.assert_called_once_with(CTF_ID, WORKOUT, "web", "restart", GM)
+    h.hosts.reset.assert_called_once_with(CTF_ID, WORKOUT, "web", "restart", GM, guest=None)
     [row] = h.log_db.rows
     assert (row["action"], row["target"], row["detail"]) == ("HOST_RESET", "web", {"workout_id": WORKOUT, "mode": "restart"})
+
+
+def test_guest_host_reset_passes_the_guest_and_names_it_in_the_audit_detail(h):
+    response = h.client.put(
+        f"/ctf/{CTF_ID}/boards/{WORKOUT}/hosts/web/reset/", json={"mode": "replant", "guest": "ubuntu-lin"},
+    )
+
+    assert response.status_code == 200
+    h.hosts.reset.assert_called_once_with(CTF_ID, WORKOUT, "web", "replant", GM, guest="ubuntu-lin")
+    [row] = h.log_db.rows
+    assert (row["action"], row["target"], row["result"]) == ("HOST_RESET", "web", "OK")
+    assert row["detail"] == {"workout_id": WORKOUT, "mode": "replant", "guest": "ubuntu-lin"}
+
+
+def test_unknown_guest_is_404_and_audited_as_a_failure(h):
+    h.hosts.reset.side_effect = NotFound(message="Guest nope is not declared on server web")
+
+    response = h.client.put(
+        f"/ctf/{CTF_ID}/boards/{WORKOUT}/hosts/web/reset/", json={"mode": "restart", "guest": "nope"},
+    )
+
+    assert response.status_code == 404
+    [row] = h.log_db.rows
+    assert row["detail"]["guest"] == "nope"
+    assert row["result"] != "OK"
+
+
+def test_guest_that_is_not_a_slug_is_a_bad_request_before_core(h):
+    response = h.client.put(
+        f"/ctf/{CTF_ID}/boards/{WORKOUT}/hosts/web/reset/", json={"mode": "restart", "guest": "agoge{x}"},
+    )
+
+    assert response.status_code == 400
+    h.hosts.reset.assert_not_called()
 
 
 def test_flag_shaped_server_segment_still_reaches_core(h):

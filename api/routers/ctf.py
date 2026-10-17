@@ -286,11 +286,16 @@ def reset_host(
         request = _parse(CtfHostResetRequest, payload)
         # The server goes in `target`, not `detail`: detail rejects flag-shaped text, and an odd
         # path segment must reach core (and 404) rather than fail the audit.
+        detail = {'workout_id': workout_id, 'mode': request.mode}
+        if request.guest is not None:
+            # Safe in `detail`: the request model already holds the guest to a slug pattern.
+            detail['guest'] = request.guest
         with CtfAudit(env_dict=env_dict).action(
-            ctf_id, 'HOST_RESET', current_user.email, target=server,
-            detail={'workout_id': workout_id, 'mode': request.mode},
+            ctf_id, 'HOST_RESET', current_user.email, target=server, detail=detail,
         ):
-            CtfHosts(env_dict=env_dict).reset(ctf_id, workout_id, server, request.mode, current_user)
+            CtfHosts(env_dict=env_dict).reset(
+                ctf_id, workout_id, server, request.mode, current_user, guest=request.guest,
+            )
         return AgogeResponse(data=AgogeIDResponse(build_id=workout_id))
     except Exception as e:
         raise _fail(e, "reset_host", ctf_id=ctf_id, user=current_user.uid) from e
