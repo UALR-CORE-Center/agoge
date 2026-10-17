@@ -1669,3 +1669,37 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V13 (build monitor).
+
+### Verification — 2026-10-17 — PASS
+- **Checked:** N15, V3, V4, V5, V7, V8, V9, V10, V11 and V12, every task ticked since the last verification (`5934b9b`). HEAD is `bd0bbc0` and the tree is clean. Three read-only agents checked them against PRD.md:1652 and :1665-1684 and the Nested Image Builder Contract. I read the V12 routes myself (`compute_image.py:158-185`), searched the diff `5934b9b..HEAD` for TODO, FIXME, NotImplemented and stubs (none), and ran `bash -n` on the rendered `render_builder`, `render_runtime` and `render_builder_bootstrap` (all exit 0).
+  - V3: `ComputeImageAPI.create(licenses=)` sets `Image.licenses`. `_create_image_from_snapshot` passes `[ENABLE_VMX_LICENSE]` only when `nested_host` is set. `test_check_in_licenses_only_nested_images_for_vmx` inspects what the mocked `ImagesClient.insert` receives, for both a nested and a standard record.
+  - V4: `_merge_metadata_item` now lives on `BaseComputeManager`. Tests show one `startup-script` with the user script first, and Windows unchanged.
+  - V5: all eight models, both collections, `NESTED_FINALIZE = 21`, `nested`/`nested_build`, the three `HumanInteractionModel` fields, and the `base_family=None` default are in place. Every done-when case is tested. The constants match the contract table.
+  - V7: all 13 validation-table rows are enforced and each has a test. The valid three-guest, two-network spec passes. `derive` is tested for determinism apart from the passwords.
+  - V8: tests cover no secrets in the manifest, the 256 KB bound for eight guests, XML that parses for each `unattended_iso` entry, virtio paths and LabConfig only when they apply, and Panther deletion followed by a final shutdown.
+  - V9:
+    - All four install methods are real code (`cloud_image`, `unattended_iso`, `disk_image`, `manual_iso`).
+    - Secrets are read only from `secrets.json`, and media lives under `/var/lib/libvirt/boot/agoge-nested`.
+    - The runtime restarts before the first `virt-install`.
+    - No `virsh destroy` appears. The only `destroy` strings are `virsh net-destroy` (networks) and a comment.
+  - V10: tests cover the FORWARD metadata reject, the `agb+` INPUT policy, DNAT/SNAT pairs in slot order, ordered start, and the libvirt-guests settings. `bash -n` passes.
+  - V11: the literal done-when is met. Tests cover both paths' metadata keys and machine type, secrets only on the first build, and a standard image unchanged.
+  - V12: routes return the `AgogeResponse` envelope and are teacher-gated. Tests cover 200, 400, 409 and 403. The stored record holds no product key, and the catalog route is not captured by `/{image_name}/`. The keys reach `check_out` through the `PRODUCT_KEYS` attribute, redacted in `main.py` logs.
+  - N15: the game master guide's `## Nested lab hosts` section (`game-master-guide.md:320-450`) covers every listed topic.
+  - Notes, not reopened:
+    - V11's description also asks for a finalize-watcher bootstrap on the finalized re-check-out path. Today that path adds only `enable-guest-attributes`. The watcher is V14's deliverable, and the V14 queue line already records the gap.
+    - V11's test mocks `build()` down to `_add_metadata`, so the `add_disk` and boot-image path is not exercised there.
+    - V3's test sets `nested_host` by hand. The record→flag link (`base_compute_manager.py:263`) is V1 code, verified earlier.
+    - The builder has no test for the `disk_image` install method.
+    - An uploaded medium with a null `sha256` is accepted unverified, and the builder never writes the computed hash back. The virtio-win ISO is not hash-checked.
+    - No test asserts `NESTED_FINALIZE_TIMEOUT_SECONDS == 360` (only `< 540`); the source value is 360.
+- **Gate results:**
+  - api/unit_tests: 1567 passed, coverage 97.75%, exit 0.
+  - cloud_functions/tests: 759 passed, coverage 94.28%, exit 0.
+  - build_files/cloud_deployment/tests: 319 passed, exit 0.
+  - frontend `npm test`: 34 files, 452 tests passed, exit 0.
+  - CTF ESLint gate: exit 0.
+  - CTF tsc gate: 0 CTF matches (passes; repo-wide tsc exits 2 on pre-existing errors).
+  - Group V ESLint gate (`--no-error-on-unmatched-pattern`): exit 0.
+  - Group V tsc gate: 0 matches (passes).
+- **Reopened:** none.
