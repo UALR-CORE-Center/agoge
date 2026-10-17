@@ -4,6 +4,7 @@
 
 export type LocationType = 'file' | 'registry' | 'env' | 'ads';
 export type OperatingSystem = 'linux' | 'windows';
+export type NestedGuestDriver = 'qemu-agent' | 'offline';
 export type WindowsAccess = 'administrators' | 'user' | 'everyone';
 export type PlantStatus = 'pending' | 'planting' | 'planted' | 'failed' | 'stale';
 export type ArmStatus = 'pending' | 'arming' | 'armed' | 'failed';
@@ -59,6 +60,17 @@ export interface CtfFlagSpec {
     windows_access?: WindowsAccess | null;
     windows_user?: string | null;
     hidden?: boolean;
+    // A CtfNestedGuestSpec.name on `server`; null = the server itself. Optional for older specs.
+    guest?: string | null;
+}
+
+// A VM running inside a lab server; flags reach it through its parent `server`.
+export interface CtfNestedGuestSpec {
+    name: string;
+    server: string;
+    domain: string;
+    operating_system: OperatingSystem;
+    driver: NestedGuestDriver;
 }
 
 export interface CtfScoringSpec {
@@ -73,6 +85,8 @@ export interface CtfSpec {
     rules_url: string | null;
     flags: CtfFlagSpec[];
     scoring: CtfScoringSpec;
+    // Optional so specs saved before nested guests existed still type-check.
+    nested_guests?: CtfNestedGuestSpec[];
 }
 
 // ---- Stored documents returned by the instructor API ----

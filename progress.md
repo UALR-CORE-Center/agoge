@@ -148,7 +148,7 @@ See `### Nested Guest Contract` in PRD.md.
 - [x] **N10** Guest host reset publish — spec + done-when at PRD.md:1642
 - [x] **N11** Guest host reset modes — spec + done-when at PRD.md:1644 (**land before any deploy**: since N10 the API publishes `guest`, but `CtfHandler` ignores it, so a guest reset would act on the whole parent server)
 - [x] **N12** Offline driver — spec + done-when at PRD.md:1646 (also: a guest rebuild/replant of an offline guest with board flags currently fails its flags with "Could not build the plant payload" and never reverts, because `_nested_host_payload` relays only qemu-agent guests; N12's offline section must honour `revert` the way `agoge_ctf_rebuild_qemu` does)
-- [ ] **N13** Nested guests in the spec editor — spec + done-when at PRD.md:1648 (code and vitest here; the browser check is carried by HUMAN)
+- [x] **N13** Nested guests in the spec editor — spec + done-when at PRD.md:1648 (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **N14** Guest rows on the Hosts panel — spec + done-when at PRD.md:1650 (`transformToCtfHostRow` drops `guest` today, so guest rows render as duplicate parent rows whose menu resets the parent; hide replant on guest rows with `flag_count == 0`, which the API refuses) (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **N15** Nested host guide — spec + done-when at PRD.md:1652
 
@@ -1371,3 +1371,21 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - Not changed: the exit codes of the env download and of `virt-win-reg --merge` are ignored, because the readback reports any failure. The REGEDIT4 writer does not escape `\` or `"`, which is safe while `_VALUE_PATTERN` and the path patterns hold.
 - **Blockers:** none.
 - **Next:** N13 (nested guests in the spec editor).
+
+### Iteration 89 — 2026-10-17
+- **Completed:** N13 (code and vitest; the browser check stays with HUMAN).
+  - `ctf.model.ts`: `NestedGuestDriver`, `CtfNestedGuestSpec`, optional `CtfFlagSpec.guest` and `CtfSpec.nested_guests`.
+  - `transformToCtfSpec`: copies `nested_guests` (driver defaults to `qemu-agent`) and normalises `flag.guest` to null. Before this, a dashboard spec save would have dropped every guest.
+  - `CtfSpecFields` (used by the event Setup tab and the template editor):
+    - A "Nested guests" grid with an add/edit `GuestDialog`. A rename or move carries the guest's flags along and gives them its OS. Delete is disabled while any flag references the guest.
+    - The flag dialog has a "Nested guest" select listing only the flag's server's guests. Picking one sets the OS and locks it. Changing the server clears a guest that isn't on the new server.
+  - Checks:
+    - `guestProblems`: name, domain, unique per server, at most 8 per server.
+    - `flagProblems` (new `guests` argument): the guest is declared and its OS matches; slot and same-OS rules are per (server, guest); offline Windows rules (case-sensitive registry prefix, like the API).
+    - Whether the parent is Linux with `ip_aliases` is left to the API, because the editor only knows server names.
+  - `CtfReview` shows `guest on server`.
+- **Tests:** transformer round trip in `ctf.transform.test.ts`, plus guestProblems, ctfSpecProblems and render tests in `CtfSpecFields.test.tsx`.
+- **Gate results:** frontend 443 passed (34 files); CTF eslint clean; CTF tsc clean; api/unit_tests 1461 passed; cloud_functions/tests 635 passed; build_files 319 passed.
+- **Reviewer:** no house-rule violations. Fixed its one finding: the offline registry regex had `/i`, but the API's `startswith` is case-sensitive. Not changed: there is no client check for the 32-guest total cap; the API enforces it.
+- **Blockers:** none.
+- **Next:** N14 (guest rows on the Hosts panel). `CtfHostRow`/`CtfHostResetRequest` still lack `guest` on the frontend.

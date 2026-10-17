@@ -59,8 +59,17 @@ const transformToCtfSpec = (data: CtfSpec): CtfSpec => ({
     name: data.name,
     description: orNull(data.description),
     rules_url: orNull(data.rules_url),
-    flags: data.flags ?? [],
+    // Flags keep every key the editor round-trips; only `guest` is normalised.
+    flags: (data.flags ?? []).map((flag) => ({...flag, guest: flag.guest || null})),
     scoring: data.scoring,
+    // Dropping these would make the next spec save delete every nested guest.
+    nested_guests: (data.nested_guests ?? []).map((guest) => ({
+        name: guest.name,
+        server: guest.server,
+        domain: guest.domain,
+        operating_system: guest.operating_system,
+        driver: guest.driver ?? 'qemu-agent',
+    })),
 });
 
 export const transformToCtfEvent = (data: CtfEvent): CtfEvent => ({
