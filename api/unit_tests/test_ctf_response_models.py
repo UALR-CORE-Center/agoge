@@ -108,6 +108,16 @@ def test_host_row():
     row = CtfHostRow(workout_id='abcdefghij', team_name='Red', server='web', server_state=None,
                      server_state_name=None, flag_count=2, rebuild_allowed=False)
     assert row.rebuild_allowed is False
+    assert row.guest is None  # a parent-server row; guest rows set it
+
+
+def test_host_row_guest():
+    row = CtfHostRow(workout_id='abcdefghij', team_name='Red', server='hv-host', server_state=None,
+                     server_state_name=None, flag_count=1, rebuild_allowed=True, guest='win-dc')
+    assert row.guest == 'win-dc'
+    with pytest.raises(ValidationError):
+        CtfHostRow(workout_id='abcdefghij', team_name='Red', server='hv-host', server_state=None,
+                   server_state_name=None, flag_count=1, rebuild_allowed=True, guest='Win DC')
 
 
 def test_scoreboard_rows():
