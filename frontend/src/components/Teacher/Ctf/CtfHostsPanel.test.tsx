@@ -8,7 +8,7 @@ import {CtfHostRow, CtfStates} from "../../../services/Ctf/ctf.model";
 import {ctfService} from "../../../services/Ctf/ctf.service";
 import {darkTheme} from "../../../styles/theme";
 import HttpError from "../../Common/Errors/HttpError";
-import CtfHostsPanel, {RESET_STATES, resetBlocker} from "./CtfHostsPanel";
+import CtfHostsPanel, {RESET_STATES, hostRowId, resetBlocker} from "./CtfHostsPanel";
 
 vi.mock("../../../services/Ctf/ctf.service", () => ({
     ctfService: {getHosts: vi.fn(), resetHost: vi.fn()},
@@ -58,6 +58,19 @@ describe("resetBlocker", () => {
             expect(resetBlocker(host({server_state: null, server_state_name: null}), mode)).toMatch(/not been built/);
         }
         expect(resetBlocker(host({flag_count: 0, rebuild_allowed: false}), "restart")).toBeNull();
+    });
+
+    it("names the guest or its parent in a guest row's reason", () => {
+        expect(resetBlocker(host({guest: "dc01", flag_count: 0}), "replant")).toMatch(/guest carries no flags/);
+        expect(resetBlocker(host({guest: "dc01", flag_count: 0}), "rebuild")).toBeNull();
+        expect(resetBlocker(host({guest: "dc01", server_state: null}), "restart")).toMatch(/parent server has not been built/);
+    });
+});
+
+describe("hostRowId", () => {
+    it("keeps a guest row apart from its parent and from a server whose name holds the guest's", () => {
+        const ids = [host(), host({guest: "a"}), host({server: "web-a"})].map(hostRowId);
+        expect(new Set(ids).size).toBe(3);
     });
 });
 
@@ -185,6 +198,75 @@ describe("CtfHostsPanel", () => {
         expect([...RESET_STATES].sort()).toEqual(
             [CtfStates.ARMED, CtfStates.RUNNING, CtfStates.PAUSED, CtfStates.BROKEN].sort()
         );
+    });
+
+    describe("guest rows", () => {
+        const GUEST_HOSTS: CtfHostRow[] = [
+            host({flag_count: 0}),
+            host({guest: "dc01", flag_count: 2}),
+            host({guest: "ws01", flag_count: 0}),
+        ];
+
+        beforeEach(() => {
+            vi.mocked(ctfService.getHosts).mockResolvedValue(GUEST_HOSTS);
+            vi.mocked(ctfService.resetHost).mockResolvedValue({id: CTF_ID} as never);
+        });
+
+        it("renders each guest indented under its parent with its own reset button", async () => {
+            renderPanel();
+            const guestButton = await screen.findByRole("button", {name: "Reset dc01 on web for Red"});
+            expect(screen.getAllByRole("button", {name: /^Reset /})).toHaveLength(3);
+            const rows = screen.getAllByRole("row").filter(r => within(r).queryByRole("button", {name: /^Reset /}));
+            expect(rows.map(r => within(r).getByRole("button").getAttribute("aria-label"))).toEqual([
+                "Reset web for Red", "Reset dc01 on web for Red", "Reset ws01 on web for Red",
+            ]);
+            const guestRow = guestButton.closest('[role="row"]') as HTMLElement;
+            expect(within(guestRow).getByTestId("SubdirectoryArrowRightIcon")).toBeInTheDocument();
+            expect(within(guestRow).getByRole("gridcell", {name: "2"})).toBeInTheDocument();
+        });
+
+        it("disables replant on a flagless guest but leaves restart and rebuild", async () => {
+            renderPanel();
+            const menu = await openMenu("ws01 on web", "Red");
+            expect(menuItem(menu, "Replant")).toHaveAttribute("aria-disabled", "true");
+            expect(menuItem(menu, "Restart")).not.toHaveAttribute("aria-disabled");
+            expect(menuItem(menu, "Rebuild")).not.toHaveAttribute("aria-disabled");
+            expect(menu).toHaveTextContent("agoge-pristine");
+        });
+
+        it("sends the guest with a guest reset", async () => {
+            renderPanel();
+            fireEvent.click(menuItem(await openMenu("dc01 on web", "Red"), "Replant"));
+            const dialog = await screen.findByRole("dialog");
+            expect(dialog).toHaveTextContent("Plant every flag on dc01 on web for Red again. The parent VM keeps running");
+            fireEvent.click(within(dialog).getByRole("button", {name: "Replant"}));
+            await waitFor(() => expect(ctfService.resetHost).toHaveBeenCalledWith(
+                CTF_ID, "boardaaaaa", "web", {mode: "replant", guest: "dc01"},
+            ));
+            expect(await screen.findByText("Replant of dc01 on web for Red started.")).toBeInTheDocument();
+        });
+
+        it("rebuilds a guest only after the guest name is typed", async () => {
+            renderPanel();
+            fireEvent.click(menuItem(await openMenu("dc01 on web", "Red"), "Rebuild"));
+            const dialog = await screen.findByRole("dialog");
+            expect(dialog).toHaveTextContent("Revert dc01 on web for Red to its agoge-pristine snapshot");
+            const confirm = within(dialog).getByRole("button", {name: "Rebuild"});
+            fireEvent.change(within(dialog).getByLabelText("Confirmation"), {target: {value: "web"}});
+            expect(confirm).toBeDisabled();
+            fireEvent.change(within(dialog).getByLabelText("Confirmation"), {target: {value: "dc01"}});
+            fireEvent.click(confirm);
+            await waitFor(() => expect(ctfService.resetHost).toHaveBeenCalledWith(
+                CTF_ID, "boardaaaaa", "web", {mode: "rebuild", guest: "dc01"},
+            ));
+        });
+
+        it("resets the parent row without a guest", async () => {
+            renderPanel();
+            fireEvent.click(menuItem(await openMenu("web", "Red"), "Restart"));
+            fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", {name: "Restart"}));
+            await waitFor(() => expect(ctfService.resetHost).toHaveBeenCalledWith(CTF_ID, "boardaaaaa", "web", {mode: "restart"}));
+        });
     });
 
     it("shows a load error", async () => {

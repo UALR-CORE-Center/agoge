@@ -1,7 +1,8 @@
 import {describe, expect, it} from "vitest";
-import {CtfEvent, CtfFlagSpec, CtfNestedGuestSpec, CtfTeamRow, CtfTemplateRow} from "../../services/Ctf/ctf.model";
+import {CtfEvent, CtfFlagSpec, CtfHostRow, CtfNestedGuestSpec, CtfTeamRow, CtfTemplateRow} from "../../services/Ctf/ctf.model";
 import {
     transformToCtfEvent,
+    transformToCtfHostRow,
     transformToCtfTeamList,
     transformToCtfTeamRow,
     transformToCtfTemplateList,
@@ -116,5 +117,20 @@ describe("transformToCtfEvent nested guests", () => {
     it("drops extra keys on a guest", () => {
         const spec = transformToCtfEvent(eventWith({nested_guests: [{...guest, junk: 1}]})).spec;
         expect(spec.nested_guests?.[0]).toEqual(guest);
+    });
+});
+
+describe("transformToCtfHostRow", () => {
+    const row: CtfHostRow = {
+        workout_id: "w", team_name: "Red", server: "web", server_state: 50, server_state_name: "RUNNING",
+        flag_count: 1, rebuild_allowed: true,
+    };
+
+    it("keeps a guest so the row is not mistaken for its parent", () => {
+        expect(transformToCtfHostRow({...row, guest: "dc01"})).toEqual({...row, guest: "dc01"});
+    });
+
+    it("nulls a missing guest", () => {
+        expect(transformToCtfHostRow(row).guest).toBeNull();
     });
 });

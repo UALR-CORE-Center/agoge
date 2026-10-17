@@ -149,7 +149,7 @@ See `### Nested Guest Contract` in PRD.md.
 - [x] **N11** Guest host reset modes — spec + done-when at PRD.md:1644 (**land before any deploy**: since N10 the API publishes `guest`, but `CtfHandler` ignores it, so a guest reset would act on the whole parent server)
 - [x] **N12** Offline driver — spec + done-when at PRD.md:1646 (also: a guest rebuild/replant of an offline guest with board flags currently fails its flags with "Could not build the plant payload" and never reverts, because `_nested_host_payload` relays only qemu-agent guests; N12's offline section must honour `revert` the way `agoge_ctf_rebuild_qemu` does)
 - [x] **N13** Nested guests in the spec editor — spec + done-when at PRD.md:1648 (code and vitest here; the browser check is carried by HUMAN)
-- [ ] **N14** Guest rows on the Hosts panel — spec + done-when at PRD.md:1650 (`transformToCtfHostRow` drops `guest` today, so guest rows render as duplicate parent rows whose menu resets the parent; hide replant on guest rows with `flag_count == 0`, which the API refuses) (code and vitest here; the browser check is carried by HUMAN)
+- [x] **N14** Guest rows on the Hosts panel — spec + done-when at PRD.md:1650 (`transformToCtfHostRow` drops `guest` today, so guest rows render as duplicate parent rows whose menu resets the parent; hide replant on guest rows with `flag_count == 0`, which the API refuses) (code and vitest here; the browser check is carried by HUMAN)
 - [ ] **N15** Nested host guide — spec + done-when at PRD.md:1652
 
 ### Group V — Nested image builder
@@ -1389,3 +1389,14 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Reviewer:** no house-rule violations. Fixed its one finding: the offline registry regex had `/i`, but the API's `startswith` is case-sensitive. Not changed: there is no client check for the 32-guest total cap; the API enforces it.
 - **Blockers:** none.
 - **Next:** N14 (guest rows on the Hosts panel). `CtfHostRow`/`CtfHostResetRequest` still lack `guest` on the frontend.
+
+### Iteration 90 — 2026-10-17
+- **Completed:** N14 (code and vitest; the browser check stays with HUMAN).
+  - `CtfHostRow.guest` / `CtfHostResetRequest.guest` on the frontend; `transformToCtfHostRow` keeps `guest` (null when missing).
+  - `CtfHostsPanel`: guest rows render indented (arrow icon + name + "guest") under their parent, keyed `workout-server/guest`; buttons, dialogs and notices name `guest on server`. Guest-specific menu descriptions and confirm texts follow the Nested Guest Contract (reboot / snapshot revert); guest rebuild's type-to-confirm expects the guest name. A guest reset sends `{mode, guest}`, a parent reset still sends `{mode}` only.
+  - `resetBlocker` disables replant on a flagless guest and every mode under an unbuilt parent, matching `CtfHosts.reset`.
+- **Tests:** 7 new in `CtfHostsPanel.test.tsx` (blocker, row id, render order/indent, guest replant/rebuild bodies, parent body), 2 in `ctf.transform.test.ts`.
+- **Gate results:** frontend 452 passed (34 files); CTF eslint clean; CTF tsc clean. No Python files changed.
+- **Reviewer:** no findings.
+- **Blockers:** none.
+- **Next:** N15 (nested host guide).
