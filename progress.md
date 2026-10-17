@@ -1290,3 +1290,26 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** api/unit_tests 1440 passed; cloud_functions/tests 585 passed; build_files/cloud_deployment/tests 319 passed; ruff clean on changed files. No frontend files changed.
 - **Blockers:** none.
 - **Next:** N10 (`CtfHosts.reset` accepts `guest`, publishes `GUEST`; guest rows in `CtfHosts.hosts`).
+
+### Verification — 2026-10-17 — PASS
+- **Checked:** N6, N7, N8, N9 and BUG5, the only tasks ticked since the last verification (`28c16c3`). HEAD is `1635f33`. Three read-only agents checked them against PRD.md:1634-1641 and the Nested Guest Contract (PRD.md:1042). I read the qemu-agent relay template myself (`flag_planter.py:196-262`) and swept the diff `28c16c3..HEAD`: no TODO, FIXME, NotImplemented or stubs.
+  - N6: `build_guest_payload` (`flag_planter.py:712-755`) keeps only the declared (server, guest)'s flags and raises BadRequest for an undeclared guest, a guest with no flags, or an OS mismatch. The guest epilogues contain no curl or Invoke-RestMethod. Stdout is saved before the redirect (Linux `exec 3>&1`; Windows `[Console]::Out`), and that saved stream receives only the result line. A `bash -s` run with noisy tools prints exactly `ok:<nonce>\n`. `bash -n` passes.
+  - N7: the ack is the first action. Parent flags are planted next. Each qemu-agent guest gets its own background relay, followed by `wait`, and `plant-result` is the last write (`puts[-1]` in the run test). The domstate check never starts a guest. Pings run every 5 s. guest-exec uses `capture-output` and base64 `input-data`. The Windows bootstrap writes `%ProgramData%\agoge-ctf\plant-<guid>.ps1` under the SYSTEM-only ACL, runs it with `-File`, and deletes it in a `finally`. Each guest gets its own `plant-result-<guest>`. A payload over 256 KB raises BadRequest with the exact message. Recorded argv contains no `input-data` and no flag value.
+  - N8: the installer is merged only when `os == 'linux'` and a NIC has `ip_aliases`, and existing `startup-script` content is kept. `_load_lab_server` now sets `os` from `details.os`, which production server records carry (lowercase). The watcher long-polls with the ETag. The watcher and the loader share `_LOCKED_RUN`: the same `plant.lock` flock, the same `last` SHA-256 dedupe, and directory mode 0700. The unit and script names match the contract.
+  - N9: an acked plant makes 0 `reset` calls. An un-acked whole-server plant makes exactly 1. An un-acked guest plant makes 0 and fails its flags with `"Plant watcher did not respond"`. Each flag takes its status from its own key. Nested hosts confirm within 420 s; plain servers are unchanged (they still reset, with 240 s). The ack and result waits poll every server on each tick, so per-server waits do not add up.
+  - BUG5: `_fail_unfinished` → `_write_flags` re-reads the stored board inside `db.transaction` and aborts only flags whose stored status is still `planting`. `test_error_mid_results_keeps_flags_already_recorded` covers this.
+  - Notes, not reopened:
+    - The 540 s budget is enforced only on the constants (30 + 420 < 540). Payload delivery and fallback resets run one server at a time before the 420 s window starts. With several nested hosts or slow GCE calls, the function could reach 540 s before it writes timeout statuses or runs the `finally` key cleanup. No done-when line requires an end-to-end cap.
+    - `RELAY_BUDGET_SECONDS` is checked only inside the relay loops. A virsh call that starts just before the deadline can overrun it by up to its own `timeout`; the code comment at `flag_planter.py:200-202` says so.
+    - No test makes `guest-exec-status` poll more than once, and none asserts the 5 s ping interval.
+    - PRD.md still shows N6–N9 as `[ ]`. This file, not PRD.md, is the task queue.
+- **Gate results:**
+  - api/unit_tests: 1440 passed.
+  - cloud_functions/tests: 585 passed.
+  - build_files/cloud_deployment/tests: 319 passed.
+  - frontend `npm test`: 34 files, 393 tests passed, exit 0.
+  - CTF ESLint gate: exit 0.
+  - CTF tsc gate: 0 CTF matches (passes).
+  - Group V tsc gate: 0 matches (passes).
+  - Group V ESLint gate: **exit 2**, "No files matching the pattern src/components/Teacher/ServerManagement/Forms/NestedImage". Those files belong to V16–V21, which are all `[ ]`, so no completed task is responsible.
+- **Reopened:** none.
