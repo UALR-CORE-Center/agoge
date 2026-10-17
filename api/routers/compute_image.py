@@ -137,14 +137,16 @@ async def list_project_images(
 
 @compute_image_router.get('/machine-types/')
 async def list_machine_types(
+    nested: bool = False,
     env_dict: dict = Depends(get_cloud_env),
     current_user: AgogeUser = Depends(teacher_required)
 ) -> AgogeResponse[MachineTypeListResponse]:
     log_args = {
         'user': current_user.uid,
+        'nested': nested,
     }
     try:
-        machine_types = ComputeImage(env_dict=env_dict).machine_types()
+        machine_types = ComputeImage(env_dict=env_dict).machine_types(nested=nested)
         return AgogeResponse(data={'items': machine_types})
     except NotFound as e:
         logger.error(e.message, **log_args)

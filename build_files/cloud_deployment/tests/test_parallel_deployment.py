@@ -109,7 +109,8 @@ def test_cloud_function_deploys_on_the_same_board(app, function_ok):
     # Secret access is granted once, before the concurrent tasks start.
     app_module.ensure_shared_api_secret_access.assert_called_once_with(app.env)
     app._deploy_api.assert_called_once_with(preflight=False)
-    app.deploy_cloud_functions.assert_called_once_with(preflight=False)
+    app.deploy_cloud_functions.assert_called_once()
+    assert app.deploy_cloud_functions.call_args.kwargs['preflight'] is False
 
 
 def test_staging_is_per_app_and_drops_tests_but_keeps_env(app, tmp_path, monkeypatch):
@@ -160,3 +161,31 @@ def test_all_apis_are_enabled_in_one_deduplicated_call(monkeypatch):
     services = shlex.split(run.call_args.args[0])[3:-1]
     assert len(services) == len(set(services))
     assert set(services) == {item.value.split()[-1] for item in ShellCommands.EnableAPIs}
+
+
+@pytest.mark.parametrize('api_ok', [True, False])
+def test_cloud_function_goes_live_only_after_the_api_succeeds(app, monkeypatch, api_ok):
+    api_done = threading.Event()
+    app._deploy_api = MagicMock(side_effect=lambda **_: api_done.set() or api_ok)
+    app._stage_build = MagicMock(return_value=app_module.Path('.staging/cloud_fn'))
+    app._set_scheduler = MagicMock(return_value=True)
+    function_deploys = []
+
+    def stream(command, **_):
+        if command.startswith('gcloud functions deploy'):
+            function_deploys.append(api_done.is_set())
+        return True
+
+    app._stream_command_output = MagicMock(side_effect=stream)
+    result = app.deploy_main_app(targets=(Commands.AppType.API,), with_cloud_function=True)
+
+    assert result is api_ok
+    assert function_deploys == ([True] if api_ok else [])
+
+
+def test_cloud_function_does_not_wait_when_the_api_is_not_deployed(app):
+    app._deploy_react = MagicMock(return_value=True)
+    app.deploy_cloud_functions = MagicMock(return_value=True)
+
+    assert app.deploy_main_app(targets=(Commands.AppType.REACT,), with_cloud_function=True) is True
+    assert app.deploy_cloud_functions.call_args.kwargs['wait_for'] is None

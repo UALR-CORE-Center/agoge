@@ -730,8 +730,12 @@ class BaseComputeManager:
         machine_type: Union[int, str]
     ) -> str:
         if self.compute_machine_types and isinstance(machine_type, str):
-            m_type_found = self.compute_machine_types.get(resource=machine_type)
-            return m_type_found.name
+            try:
+                m_type_found = self.compute_machine_types.get(resource=machine_type)
+            except NotFound:
+                m_type_found = None
+            if m_type_found:
+                return m_type_found.name
 
         self.logger.warning(f"Could not find machine type for {machine_type}. Defaulting to SMALL instead")
         return self.compute_instance.GOOGLE_MACHINE_TYPES[BuildConstants.MachineTypes.SMALL.value]

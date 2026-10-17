@@ -17,111 +17,170 @@ Read the PRD line cited for the full spec; its "Done when" bullet, if any, sits
 directly under it; the group header in the PRD collects them too. Phase 2 items are out of scope for this loop.
 
 ### Group 0 — Green baseline
-- [x] **0.1** Frontend test script — spec + done-when at PRD.md:943
-- [x] **0.2** Rubric opt-in tests — spec + done-when at PRD.md:945
+- [x] **0.1** Frontend test script — spec + done-when at PRD.md:1463
+- [x] **0.2** Rubric opt-in tests — spec + done-when at PRD.md:1465
 
 ### Group A — Contracts and constants
-- [x] **A1** CTF constants — spec + done-when at PRD.md:950
-- [x] **A2** CTF specification models — spec + done-when at PRD.md:952
-- [x] **A3** CTF stored models — spec + done-when at PRD.md:954
-- [x] **A4** CTF request models — spec + done-when at PRD.md:955
-- [x] **A5** CTF response models — spec + done-when at PRD.md:956
-- [x] **A6** Spec block wiring — spec + done-when at PRD.md:957
+- [x] **A1** CTF constants — spec + done-when at PRD.md:1470
+- [x] **A2** CTF specification models — spec + done-when at PRD.md:1472
+- [x] **A3** CTF stored models — spec + done-when at PRD.md:1474
+- [x] **A4** CTF request models — spec + done-when at PRD.md:1475
+- [x] **A5** CTF response models — spec + done-when at PRD.md:1476
+- [x] **A6** Spec block wiring — spec + done-when at PRD.md:1477
 
 ### Group B — Flag derivation and state
-- [x] **B1** Derivation module — spec + done-when at PRD.md:962
-- [x] **B2** Seed property — spec + done-when at PRD.md:964
-- [x] **B3** Seed provisioning — spec + done-when at PRD.md:965
-- [x] **B4** CTF state manager — spec + done-when at PRD.md:967
+- [x] **B1** Derivation module — spec + done-when at PRD.md:1482
+- [x] **B2** Seed property — spec + done-when at PRD.md:1484
+- [x] **B3** Seed provisioning — spec + done-when at PRD.md:1485
+- [x] **B4** CTF state manager — spec + done-when at PRD.md:1487
 
 ### Group C — Specification validation
-- [x] **C1** Flag validator — spec + done-when at PRD.md:972
-- [x] **C2** Validator wiring — spec + done-when at PRD.md:974
+- [x] **C1** Flag validator — spec + done-when at PRD.md:1492
+- [x] **C2** Validator wiring — spec + done-when at PRD.md:1494
 
 - [x] **BUG** `SpecEditManager.save` writes the spec to Firestore (catalog on publish, edits otherwise) *before* calling `is_valid()`, so an invalid spec is persisted and then the call raises. Callers in `lab_spec_edit.py` check `is_valid()` first, which masks it. Not CTF-specific.
 
 ### Group D — Compute primitives and the loader
-- [x] **D1** `set_metadata` — spec + done-when at PRD.md:979
-- [x] **D2** `get_guest_attributes` — spec + done-when at PRD.md:981
-- [x] **D3** Plant contract module — spec + done-when at PRD.md:982
-- [x] **D4** Loader at build — spec + done-when at PRD.md:983
+- [x] **D1** `set_metadata` — spec + done-when at PRD.md:1499
+- [x] **D2** `get_guest_attributes` — spec + done-when at PRD.md:1501
+- [x] **D3** Plant contract module — spec + done-when at PRD.md:1502
+- [x] **D4** Loader at build — spec + done-when at PRD.md:1503
 
 ### Group E — Planting
-- [x] **E1** Payload builder — spec + done-when at PRD.md:988
-- [x] **E2** Plant procedure — spec + done-when at PRD.md:990
-- [x] **E3** CTF handler — spec + done-when at PRD.md:992 (split: this slice is the handler, the `main.py` branch, `CTF_PLANT` routing and unknown action → `ValueError`; the other two routes are E4b and G4b)
-- [x] **E4** Arm worker — spec + done-when at PRD.md:994
-- [x] **E4b** Route `CTF_ARM_BOARD` → `ArmWorker.run(ctf_id, workout_id)` in `CtfHandler.action_map`, with a test showing it reaches ArmWorker (E3 done-when, PRD.md:992)
-- [x] **E5** Overnight exemption — spec + done-when at PRD.md:996
+- [x] **E1** Payload builder — spec + done-when at PRD.md:1508
+- [x] **E2** Plant procedure — spec + done-when at PRD.md:1510
+- [x] **E3** CTF handler — spec + done-when at PRD.md:1512 (split: this slice is the handler, the `main.py` branch, `CTF_PLANT` routing and unknown action → `ValueError`; the other two routes are E4b and G4b)
+- [x] **E4** Arm worker — spec + done-when at PRD.md:1514
+- [x] **E4b** Route `CTF_ARM_BOARD` → `ArmWorker.run(ctf_id, workout_id)` in `CtfHandler.action_map`, with a test showing it reaches ArmWorker (E3 done-when, PRD.md:1514)
+- [x] **E5** Overnight exemption — spec + done-when at PRD.md:1516
 - [x] **BUG2** `ProjectServerManager.stop_everything` calls `self.db.batch_write(operations)` inside the image loop (wrong indentation), so the growing batch is rewritten once per checked-out image. Not CTF-specific.
 
 ### Group F — Event core
-- [x] **F1** Config and feature flag — spec + done-when at PRD.md:1001
-- [x] **F2** Error helper — spec + done-when at PRD.md:1003
-- [x] **F3** Audit helper — spec + done-when at PRD.md:1004
-- [x] **F4** Event create — spec + done-when at PRD.md:1006
-- [x] **F5** Event read, update, delete — spec + done-when at PRD.md:1008
-- [x] **F6** Event actions — spec + done-when at PRD.md:1009
-- [x] **F7** Event reads for panels — spec + done-when at PRD.md:1011
+- [x] **F1** Config and feature flag — spec + done-when at PRD.md:1521
+- [x] **F2** Error helper — spec + done-when at PRD.md:1523
+- [x] **F3** Audit helper — spec + done-when at PRD.md:1524
+- [x] **F4** Event create — spec + done-when at PRD.md:1526
+- [x] **F5** Event read, update, delete — spec + done-when at PRD.md:1528
+- [x] **F6** Event actions — spec + done-when at PRD.md:1529
+- [x] **F7** Event reads for panels — spec + done-when at PRD.md:1531
 - [x] **BUG3** An `arm` whose Pub/Sub publish fails partway (`CtfEvent._publish_arm`) leaves the event in ARMING with `boards_pending` above 0 and no way out, because ARMING→ARMING is not an allowed transition and only arm workers leave ARMING. It needs a recovery path, such as a re-publish for boards still `pending`, or a stale-ARMING sweep that moves the event to BROKEN. The PRD does not specify one.
   - Reopened by verification: `_fail_unpublished` (api/core/ctf/event.py:299-315) runs only when `self.pubsub.msg(...)` raises *synchronously*. `PubSubManager.msg` (common/utilities/gcp/pubsub_manager.py:61-67) returns the `publisher.publish(...)` future and nothing ever calls `.result()` on it. google-cloud-pubsub reports real publish failures (network, permission, timeout, a missing topic) through that future, so in production the recovery never runs and the event still sticks in ARMING. The tests miss this because `FakePubSub.msg` (api/unit_tests/test_ctf_event_actions.py:87-89, :170, :223) raises in-line, which the real client does not do for these failures. Missing: resolve each publish future (for example, call `.result(timeout=...)` per message, or collect the futures and check them) and treat any that failed as unpublished. Add a test whose fake returns a future that fails.
 
 ### Group G — Hosts
-- [x] **G1** Replant publish — spec + done-when at PRD.md:1015
-- [x] **G2** Host rows — spec + done-when at PRD.md:1016
-- [x] **G3** Reset publish — spec + done-when at PRD.md:1017
-- [x] **G4** Reset dispatcher — spec + done-when at PRD.md:1018
-- [x] **G4b** Route `CTF_HOST_RESET` → the `host_reset` dispatcher (with `SERVER_NAME`, `RESET_MODE`) in `CtfHandler.action_map`, with a test showing it reaches it (E3 done-when, PRD.md:992)
-- [x] **G5** Reset `replant` — spec + done-when at PRD.md:1020
-- [x] **G6** Reset `restart` — spec + done-when at PRD.md:1021
-- [x] **G7** Reset `rebuild` — spec + done-when at PRD.md:1022
+- [x] **G1** Replant publish — spec + done-when at PRD.md:1535
+- [x] **G2** Host rows — spec + done-when at PRD.md:1536
+- [x] **G3** Reset publish — spec + done-when at PRD.md:1537
+- [x] **G4** Reset dispatcher — spec + done-when at PRD.md:1538
+- [x] **G4b** Route `CTF_HOST_RESET` → the `host_reset` dispatcher (with `SERVER_NAME`, `RESET_MODE`) in `CtfHandler.action_map`, with a test showing it reaches it (E3 done-when, PRD.md:1538)
+- [x] **G5** Reset `replant` — spec + done-when at PRD.md:1540
+- [x] **G6** Reset `restart` — spec + done-when at PRD.md:1541
+- [x] **G7** Reset `rebuild` — spec + done-when at PRD.md:1542
 
 ### Group H — Scoring
-- [x] **H1** Submission resolve — spec + done-when at PRD.md:1026
-- [x] **H2** Solve award — spec + done-when at PRD.md:1028
-- [x] **H3** Rate limiting — spec + done-when at PRD.md:1030
-- [x] **H4** Hints — spec + done-when at PRD.md:1032
-- [x] **H5** Student board read — spec + done-when at PRD.md:1033
-- [x] **H6** Scoreboards — spec + done-when at PRD.md:1035
-- [x] **H7** Score adjustment — spec + done-when at PRD.md:1037
+- [x] **H1** Submission resolve — spec + done-when at PRD.md:1546
+- [x] **H2** Solve award — spec + done-when at PRD.md:1548
+- [x] **H3** Rate limiting — spec + done-when at PRD.md:1550
+- [x] **H4** Hints — spec + done-when at PRD.md:1552
+- [x] **H5** Student board read — spec + done-when at PRD.md:1553
+- [x] **H6** Scoreboards — spec + done-when at PRD.md:1555
+- [x] **H7** Score adjustment — spec + done-when at PRD.md:1557
 
 ### Group R — Routers
-- [x] **R1** Instructor router — spec + done-when at PRD.md:1041
-- [x] **R2** Student router — spec + done-when at PRD.md:1042
-- [x] **R3** Router registration — spec + done-when at PRD.md:1043
-- [x] **R4** Router auth tests — spec + done-when at PRD.md:1044
+- [x] **R1** Instructor router — spec + done-when at PRD.md:1561
+- [x] **R2** Student router — spec + done-when at PRD.md:1562
+- [x] **R3** Router registration — spec + done-when at PRD.md:1563
+- [x] **R4** Router auth tests — spec + done-when at PRD.md:1564
 - [x] **BUG4** `AnonymousAppUser()` (common/models/users.py:124) cannot be constructed: it passes `uid=None`, `email=None`, `settings=None` to `AgogeUser`, whose fields are `str`/`str`/`Dict`, so Pydantic raises `ValidationError`. The `get_current_user` branch that returns it is unreachable today only because `HTTPBearer()` (auto_error) answers a missing token with 403 first. Not CTF-specific.
 
 ### Group I — Game master UI
-- [x] **I1** CTF TypeScript models — spec + done-when at PRD.md:1049
-- [x] **I2** CTF transformer and service — spec + done-when at PRD.md:1050
-- [x] **I3** Feature flag hook — spec + done-when at PRD.md:1052
-- [x] **I4** Routes and menu — spec + done-when at PRD.md:1053 (split: this slice is `URL_TEACHER_CTF_BASE`, `URL_TEACHER_CTF_EVENT` and the flag-gated **Teachers** menu item; the two routes are I4b)
-- [ ] **I4b** (both routes are in as of iteration 61; only the browser checks remain, including I9's dashboard check and I10's disabled-actions check) Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route. Also verify in the browser that `Create CTF Event` is absent on a non-CTF unit's `TeacherUnit` page (I6 done-when), and that the student `CtfBanner` shows on an enrolled workout and is absent otherwise (J2 done-when). Also submit a flag through the student `FlagSubmitCard` and check the verdict snackbar (J3 done-when). Also check the student `ChallengeList` below `WorkoutTable`: take a hint through its confirm dialog, and with `public_scoreboard_enabled` on, confirm the caller's standings row is highlighted (J4 done-when).
-- [x] **I5** Events list page — spec + done-when at PRD.md:1055 (the list route is in; the browser check is carried by I4b)
-- [x] **I6** Create from unit — spec + done-when at PRD.md:1057 (the browser check that the button is absent on a non-CTF unit is carried by I4b)
-- [x] **I7** Action confirm dialog — spec + done-when at PRD.md:1059
-- [x] **I8** CTF state chip — spec + done-when at PRD.md:1060
-- [x] **I9** Dashboard shell — spec + done-when at PRD.md:1061 (the browser check is carried by I4b)
-- [x] **I10** Event Control panel — spec + done-when at PRD.md:1063 (the browser check that illegal actions are disabled is carried by I4b)
-- [x] **I11** Scoreboard settings — spec + done-when at PRD.md:1065
-- [x] **I12** Flags panel — spec + done-when at PRD.md:1066
-- [x] **I13** Flags bulk replant — spec + done-when at PRD.md:1067
-- [x] **I14** Hosts panel — spec + done-when at PRD.md:1068
-- [x] **I15** Scoreboard panel — spec + done-when at PRD.md:1069
-- [x] **I16** Event log panel — spec + done-when at PRD.md:1070
-- [x] **I17** Submission log panel — spec + done-when at PRD.md:1071
+- [x] **I1** CTF TypeScript models — spec + done-when at PRD.md:1569
+- [x] **I2** CTF transformer and service — spec + done-when at PRD.md:1570
+- [x] **I3** Feature flag hook — spec + done-when at PRD.md:1572
+- [x] **I4** Routes and menu — spec + done-when at PRD.md:1573 (split: this slice is `URL_TEACHER_CTF_BASE`, `URL_TEACHER_CTF_EVENT` and the flag-gated **Teachers** menu item; the two routes are I4b)
+- [ ] **I4b** (both routes are in as of iteration 61; only the browser checks remain, including I9's dashboard check and I10's disabled-actions check) Add the two `ProtectedRoute level="instructor"` routes in `AppRouter.tsx`: `URL_TEACHER_CTF_BASE` → `CtfEventList` (with I5) and `${URL_TEACHER_CTF_EVENT}/:ctf_id` → `CtfDashboard` (with I9). Then verify in the browser that the menu item appears only when CTF is enabled (I4 done-when). Until then, the menu item links to a URL with no route. Also verify in the browser that `Create CTF Event` is absent on a non-CTF unit's `TeacherUnit` page (I6 done-when), and that the student `CtfBanner` shows on an enrolled workout and is absent otherwise (J2 done-when). Also submit a flag through the student `FlagSubmitCard` and check the verdict snackbar (J3 done-when). Also check the student `ChallengeList` below `WorkoutTable`: take a hint through its confirm dialog, and with `public_scoreboard_enabled` on, confirm the caller's standings row is highlighted (J4 done-when). Also, on the development project, create an event with **New CTF**, add teams (including a CSV import), edit flags, build/start/stop servers from the **Setup** tab, and confirm Arm stays disabled until there is a team (L7 done-when).
+- [x] **I5** Events list page — spec + done-when at PRD.md:1575 (the list route is in; the browser check is carried by I4b)
+- [x] **I6** Create from unit — spec + done-when at PRD.md:1577 (the browser check that the button is absent on a non-CTF unit is carried by I4b)
+- [x] **I7** Action confirm dialog — spec + done-when at PRD.md:1579
+- [x] **I8** CTF state chip — spec + done-when at PRD.md:1580
+- [x] **I9** Dashboard shell — spec + done-when at PRD.md:1581 (the browser check is carried by I4b)
+- [x] **I10** Event Control panel — spec + done-when at PRD.md:1583 (the browser check that illegal actions are disabled is carried by I4b)
+- [x] **I11** Scoreboard settings — spec + done-when at PRD.md:1585
+- [x] **I12** Flags panel — spec + done-when at PRD.md:1586
+- [x] **I13** Flags bulk replant — spec + done-when at PRD.md:1587
+- [x] **I14** Hosts panel — spec + done-when at PRD.md:1588
+- [x] **I15** Scoreboard panel — spec + done-when at PRD.md:1589
+- [x] **I16** Event log panel — spec + done-when at PRD.md:1590
+- [x] **I17** Submission log panel — spec + done-when at PRD.md:1591
 
 - [x] **LINT1** `frontend/src/utilities/transformers/unit.transform.test.ts:2` fails eslint `import/order` (`./unit.transform` should come after `./specificationEdit.transform`). This was already the case before I6. Not CTF-specific, and it is outside the CTF lint gate.
 
 ### Group J — Student UI
-- [x] **J1** Student CTF polling — spec + done-when at PRD.md:1075
-- [x] **J2** CTF banner — spec + done-when at PRD.md:1076 (the browser check is carried by I4b)
-- [x] **J3** Flag submission card — spec + done-when at PRD.md:1078 (the browser check is carried by I4b)
-- [x] **J4** Challenge list — spec + done-when at PRD.md:1080 (the browser check is carried by I4b)
+- [x] **J1** Student CTF polling — spec + done-when at PRD.md:1595
+- [x] **J2** CTF banner — spec + done-when at PRD.md:1596 (the browser check is carried by I4b)
+- [x] **J3** Flag submission card — spec + done-when at PRD.md:1598 (the browser check is carried by I4b)
+- [x] **J4** Challenge list — spec + done-when at PRD.md:1600 (the browser check is carried by I4b)
 
 ### Group K — Documentation
-- [x] **K1** Game master guide — spec + done-when at PRD.md:1085
+- [x] **K1** Game master guide — spec + done-when at PRD.md:1605
+
+### Group L — Setup & rosters
+Implemented outside the loop (commits `dbb2fec`, `83e5abc`); not yet loop-verified.
+- [x] **L1** Shared workout record — spec + done-when at PRD.md:1611
+- [x] **L2** Create from template — spec + done-when at PRD.md:1612
+- [x] **L3** Teams — spec + done-when at PRD.md:1613
+- [x] **L4** Per-event flags — spec + done-when at PRD.md:1614
+- [x] **L5** Servers — spec + done-when at PRD.md:1615
+- [x] **L6** Roster-only join — spec + done-when at PRD.md:1616
+- [x] **L7** Setup UI — spec + done-when at PRD.md:1617 (the browser check is carried by I4b)
+
+### Group N — Nested lab hosts
+See `### Nested Guest Contract` in PRD.md.
+- [ ] **N1** Metadata forward block — spec + done-when at PRD.md:1624 (standalone security fix — ship first)
+- [ ] **N2** Loader forward block — spec + done-when at PRD.md:1626
+- [ ] **N3** Nested guest models — spec + done-when at PRD.md:1628
+- [ ] **N4** Nested contract constants — spec + done-when at PRD.md:1630
+- [ ] **N5** Nested guest validator — spec + done-when at PRD.md:1632
+- [ ] **N6** Guest payload builder — spec + done-when at PRD.md:1634
+- [ ] **N7** qemu-agent relay section — spec + done-when at PRD.md:1636
+- [ ] **N8** Plant watcher installer — spec + done-when at PRD.md:1638
+- [ ] **N9** Nested plant procedure — spec + done-when at PRD.md:1640
+- [ ] **N10** Guest host reset publish — spec + done-when at PRD.md:1642
+- [ ] **N11** Guest host reset modes — spec + done-when at PRD.md:1644
+- [ ] **N12** Offline driver — spec + done-when at PRD.md:1646
+- [ ] **N13** Nested guests in the spec editor — spec + done-when at PRD.md:1648 (code and vitest here; the browser check is carried by HUMAN)
+- [ ] **N14** Guest rows on the Hosts panel — spec + done-when at PRD.md:1650 (code and vitest here; the browser check is carried by HUMAN)
+- [ ] **N15** Nested host guide — spec + done-when at PRD.md:1652
+
+### Group V — Nested image builder
+See `### Nested Image Builder Contract` and Working Notes 14–23. Independent of the CTF groups except V23. Frontend items use the Group V eslint/tsc gate lines in PRD.md `## Quality Gates`.
+- [x] **V1** Nested virtualization for template and lab servers — spec + done-when at PRD.md:1661
+- [x] **V2** Nested machine types — spec + done-when at PRD.md:1663
+- [ ] **V3** License on check-in — spec + done-when at PRD.md:1665
+- [ ] **V4** Template startup-script merge — spec + done-when at PRD.md:1667
+- [ ] **V5** Models and constants — spec + done-when at PRD.md:1669 (`common/constants/nested.py` already exists from V2 with `NESTED_MACHINE_FAMILIES`, `NESTED_MAX_MACHINE_MEMORY_MB`, `STANDARD_MAX_MACHINE_MEMORY_MB`; extend it)
+- [ ] **V6** OS catalog and seeding — spec + done-when at PRD.md:1671
+- [ ] **V7** Nested host validator — spec + done-when at PRD.md:1673
+- [ ] **V8** Manifest and unattend rendering — spec + done-when at PRD.md:1675
+- [ ] **V9** Builder script — spec + done-when at PRD.md:1677
+- [ ] **V10** Runtime service — spec + done-when at PRD.md:1679
+- [ ] **V11** Nested template server provisioning — spec + done-when at PRD.md:1681
+- [ ] **V12** Create route — spec + done-when at PRD.md:1683
+- [ ] **V13** Build monitor — spec + done-when at PRD.md:1685
+- [ ] **V14** Finalize handshake — spec + done-when at PRD.md:1687
+- [ ] **V15** Media uploads — spec + done-when at PRD.md:1689
+- [ ] **V16** Frontend service layer — spec + done-when at PRD.md:1691
+- [ ] **V17** Wizard shell and Host step — spec + done-when at PRD.md:1693 (code and vitest here; the browser check is carried by HUMAN)
+- [ ] **V18** Networks step — spec + done-when at PRD.md:1695 (code and vitest here; the browser check is carried by HUMAN)
+- [ ] **V19** Guests step — spec + done-when at PRD.md:1697 (code and vitest here; the browser check is carried by HUMAN)
+- [ ] **V20** Access and Review steps — spec + done-when at PRD.md:1699 (code and vitest here; the browser check is carried by HUMAN)
+- [ ] **V21** Image list and details for nested images — spec + done-when at PRD.md:1701 (code and vitest here; the browser check is carried by HUMAN)
+- [ ] **V22** Guacamole targets for guests — spec + done-when at PRD.md:1703
+- [ ] **V23** Spec editor and CTF integration — spec + done-when at PRD.md:1705 (needs N3, N5, N13; the browser check is carried by HUMAN)
+- [ ] **V24** Nested image guide — spec + done-when at PRD.md:1707
+- [ ] **V25** Live acceptance — spec + done-when at PRD.md:1708 — **HUMAN ONLY.** Builds real VMs on the development project; the loop must not attempt it. Carried by HUMAN.
+
+### Human checks
+- [ ] **HUMAN** Browser and live checks the loop cannot do: N13, N14, V17–V21 and V23 "verified in browser" done-whens, and V25 live acceptance (SC-35–SC-38) on the development project. Leave this for a person; do not mark it done.
 
 ---
 
@@ -1032,3 +1091,10 @@ directly under it; the group header in the PRD collects them too. Phase 2 items 
   - ESLint gate: exit 0 with 0 warnings.
   - tsc gate: no tsc error names a CTF file (gate exit 0).
 - **Reopened:** none. I4b, the human browser checks, is still the only open task.
+
+### Out-of-loop work — 2026-10-17
+- **Completed (outside the loop, by hand):** Group L (L1–L7: shared workout record, create from template, teams, per-event flags, servers, roster-only join, setup UI) in `dbb2fec`/`83e5abc`; V1 (nested virtualization for template and lab servers) in `99f275a`; V2 (nested machine types: `ComputeMachineTypesAPI.get` resolves N1/N2 up to 65536 MB, `list(nested=True)` and `GET /compute/images/machine-types/?nested=true` return N1/N2 only, `_lookup_machine_type` falls back to SMALL on `None`/`NotFound`).
+- **Learned:** PRD.md was rewritten in `99f275a` (Groups L, N, V added; line numbers moved). Every queue pointer above now uses the new line numbers. `common/constants/nested.py` was created early by V2 with the machine-type constants only — V5 extends it. The gate-count comments in PRD.md `## Quality Gates` are from 2026-10-16 and are stale.
+- **Gate results:** api/unit_tests 1369 passed; cloud_functions/tests 493 passed; build_files/cloud_deployment/tests 316 passed; frontend `npm test` 34 files, 393 tests passed.
+- **Blockers:** none. I4b and HUMAN are human-only.
+- **Next:** the verifier should re-check L1–L7, V1 and V2, which were never loop-verified. Then N1 (PRD says ship it first), continuing in queue order through Group N and Group V.

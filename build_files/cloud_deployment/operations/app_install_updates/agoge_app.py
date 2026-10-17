@@ -184,9 +184,10 @@ class AgogeApp:
     def deploy_main_app(self, targets: tuple[str, ...] | None = None, *, with_cloud_function: bool = False) -> bool:
         """Deploy the selected Cloud Run apps, optionally alongside the Cloud Function.
 
-        Images build concurrently, but React is deployed only after the API
-        deployment succeeds, so a failed API never leaves a newer UI in front
-        of it. The Cloud Function is independent and runs in parallel.
+        Everything prepares concurrently, but when the API is part of the
+        deploy, React and the Cloud Function go live only after the API
+        deployment succeeds, so a failed API never sits behind a newer UI or
+        a function built against newer shared code.
         """
         targets = targets or self.select_main_app_targets()
         include_frontend = Commands.AppType.REACT in targets
@@ -204,7 +205,8 @@ class AgogeApp:
                 with ui.status('Checking shared API secret access'):
                     ensure_shared_api_secret_access(self.env)
             tasks = []
-            if Commands.AppType.API in targets and include_frontend:
+            wait_for_api = None
+            if deploys_api:
                 api_finished, api_result = threading.Event(), []
 
                 def deploy_api() -> bool:
@@ -221,13 +223,15 @@ class AgogeApp:
                     api_finished.wait()
                     return api_result[0]
 
-                tasks += [('API', deploy_api), ('React', lambda: self._deploy_react(wait_for=wait_for_api))]
-            elif include_frontend:
-                tasks.append(('React', self._deploy_react))
-            else:
-                tasks.append(('API', lambda: self._deploy_api(preflight=False)))
+                tasks.append(('API', deploy_api))
+            if include_frontend:
+                tasks.append(('React', (
+                    (lambda: self._deploy_react(wait_for=wait_for_api)) if wait_for_api else self._deploy_react
+                )))
             if with_cloud_function:
-                tasks.append(('Cloud Function', lambda: self.deploy_cloud_functions(preflight=False)))
+                tasks.append(('Cloud Function', lambda: self.deploy_cloud_functions(
+                    preflight=False, wait_for=wait_for_api,
+                )))
 
             results = ui.run_tasks(f'Deploying to {self.env.project}', tasks)
             return all(results.values())
@@ -332,7 +336,7 @@ class AgogeApp:
 
         return True
 
-    def deploy_cloud_functions(self, preflight: bool = True) -> bool:
+    def deploy_cloud_functions(self, preflight: bool = True, wait_for=None) -> bool:
         if preflight:
             ensure_shared_api_secret_access(self.env)
         # This does not need to be run everytime, but this is here temporarily to make sure it gets set up correctly.
@@ -346,6 +350,9 @@ class AgogeApp:
         # Build cloud_function directory
         staging = self._stage_build(app_type=Commands.AppType.CLOUD_FN)
         try:
+            if wait_for is not None and not wait_for():
+                ui.skip('Not deployed: API deploy failed')
+                return False
             command = self.commands.deploy_cloud_function(source=f'./{staging}/')
             if not self._stream_command_output(command, phase='Building & deploying function'):
                 ui.note("Cloud Function deployment failed")
