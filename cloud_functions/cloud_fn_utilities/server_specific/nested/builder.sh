@@ -260,11 +260,9 @@ fetch_media() {
     curl -fsSL --retry 3 -o "$part" "$(guest_value "$guest" .media.url)" || {
       rm -f "$part"; unlock "$key"; FAIL_MESSAGE="could not download the media"; return 1; }
   else
-    local gcs_path bucket
-    gcs_path=$(guest_value "$guest" .media.gcs_path)
-    bucket=${gcs_path#gs://}
-    bucket=${bucket%%/*}
-    gcs_get "$bucket" "${gcs_path#gs://$bucket/}" "$part" || {
+    # Uploads run to 20 GiB; gcloud storage downloads them in parallel slices with retries,
+    # authenticated as the instance service account (preinstalled on Debian GCE images).
+    gcloud storage cp --no-user-output-enabled "$(guest_value "$guest" .media.gcs_path)" "$part" || {
       rm -f "$part"; unlock "$key"; FAIL_MESSAGE="could not download the uploaded media"; return 1; }
   fi
   actual=$(sha256sum "$part" | cut -d' ' -f1)

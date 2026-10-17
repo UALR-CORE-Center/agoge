@@ -800,6 +800,22 @@ class NestedMediaModel(BaseModel):
     complete: bool = False
 
 
+class NestedMediaCreateRequest(BaseModel):
+    """Request body for POST /compute/images/nested/media/."""
+    model_config = ConfigDict(extra='forbid')
+    # No slashes: the name becomes the last segment of media/<id>/<filename>.
+    filename: str = Field(..., pattern=r'^[A-Za-z0-9][A-Za-z0-9._ ()+-]{0,199}$')
+    size_bytes: int = Field(..., gt=0)
+    os_id: Optional[str] = Field(default=None, description="Catalog entry the medium is for; checks the format")
+
+
+class NestedMediaUploadResponse(BaseModel):
+    media_id: str
+    upload_url: str = Field(..., description="V4 signed URL; POST it with upload_headers to start a resumable upload")
+    upload_headers: Dict[str, str] = Field(..., description="Headers the signature covers; send them unchanged")
+    expires_in: int = Field(..., description="Seconds the upload_url stays valid")
+
+
 class NestedNetworkModel(BaseModel):
     name: str = Field(..., pattern=SLUG15)
     cidr: str = Field(..., description="RFC 1918, /16 to /29")

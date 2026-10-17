@@ -11,8 +11,9 @@ from fastapi import (
 
 from starlette.concurrency import run_in_threadpool
 
-from common.exceptions import NotFound, BadRequest, Conflict, Forbidden, OperationTimeout, ServiceUnavailable, AgogeValidationError, NotReady
-from common.models.agoge import AgogeImageModel, NestedBuildStatusModel, NestedImageCreateRequest
+from common.exceptions import NotFound, BadRequest, Conflict, ContentTooLarge, Forbidden, OperationTimeout, ServiceUnavailable, AgogeValidationError, NotReady
+from common.models.agoge import (AgogeImageModel, NestedBuildStatusModel, NestedImageCreateRequest, NestedMediaCreateRequest,
+                                 NestedMediaModel, NestedMediaUploadResponse)
 from common.models.users import AgogeUser
 from common.models.response import (
     AgogeResponse,
@@ -21,12 +22,14 @@ from common.models.response import (
     ComputeImageListResponse,
     GoogleImageListResponse,
     MachineTypeListResponse,
+    NestedMediaListResponse,
     NestedOsCatalogListResponse,
 )
 from common.constants.enumerators import ImageScopes
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 
 from core.compute.image import ComputeImage
+from core.compute.nested.media import NestedMedia
 from core.compute.nested.nested_image import NestedImage
 from dependencies import teacher_required, admin_required, get_cloud_env
 
@@ -190,6 +193,71 @@ async def list_nested_catalog(
     current_user: AgogeUser = Depends(teacher_required),
 ) -> AgogeResponse[NestedOsCatalogListResponse]:
     return AgogeResponse(data={'items': NestedImage(env_dict).list_catalog()})
+
+
+# The media routes are sync: each one calls Cloud Storage, so it runs in the worker thread pool.
+@compute_image_router.post('/nested/media/')
+def create_nested_media(
+    body: NestedMediaCreateRequest,
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[NestedMediaUploadResponse]:
+    log_args = {'user': current_user.uid, 'filename': body.filename, 'size_bytes': body.size_bytes}
+    try:
+        return AgogeResponse(data=NestedMedia(env_dict).create_upload(current_user, body))
+    except BadRequest as e:
+        logger.error(f'create_nested_media - {e.message}', **log_args)
+        raise HTTPException(status_code=400, detail=e.message)
+    except ContentTooLarge as e:
+        logger.error(f'create_nested_media - {e.message}', **log_args)
+        raise HTTPException(status_code=413, detail=e.message)
+    except ServiceUnavailable as e:
+        logger.error(f'create_nested_media - {e.message}', **log_args)
+        raise HTTPException(status_code=503, detail=e.message)
+
+
+@compute_image_router.get('/nested/media/')
+def list_nested_media(
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[NestedMediaListResponse]:
+    return AgogeResponse(data={'items': NestedMedia(env_dict).list(current_user)})
+
+
+@compute_image_router.put('/nested/media/{media_id}/')
+def complete_nested_media(
+    media_id: str,
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[NestedMediaModel]:
+    log_args = {'user': current_user.uid, 'media_id': media_id}
+    try:
+        return AgogeResponse(data=NestedMedia(env_dict).complete(current_user, media_id))
+    except NotFound as e:
+        raise HTTPException(status_code=404, detail=e.message)
+    except Forbidden as e:
+        raise HTTPException(status_code=403, detail=e.message)
+    except BadRequest as e:
+        logger.error(f'complete_nested_media - {e.message}', **log_args)
+        raise HTTPException(status_code=400, detail=e.message)
+    except ServiceUnavailable as e:
+        logger.error(f'complete_nested_media - {e.message}', **log_args)
+        raise HTTPException(status_code=503, detail=e.message)
+
+
+@compute_image_router.delete('/nested/media/{media_id}/')
+def delete_nested_media(
+    media_id: str,
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[AgogeIDResponse]:
+    try:
+        NestedMedia(env_dict).delete(current_user, media_id)
+        return AgogeResponse(data={'build_id': media_id})
+    except NotFound as e:
+        raise HTTPException(status_code=404, detail=e.message)
+    except Forbidden as e:
+        raise HTTPException(status_code=403, detail=e.message)
 
 
 @compute_image_router.get("/{image_name}/")
