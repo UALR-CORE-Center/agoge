@@ -150,7 +150,7 @@ See `### Nested Guest Contract` in PRD.md.
 - [x] **N12** Offline driver — spec + done-when at PRD.md:1646 (also: a guest rebuild/replant of an offline guest with board flags currently fails its flags with "Could not build the plant payload" and never reverts, because `_nested_host_payload` relays only qemu-agent guests; N12's offline section must honour `revert` the way `agoge_ctf_rebuild_qemu` does)
 - [x] **N13** Nested guests in the spec editor — spec + done-when at PRD.md:1648 (code and vitest here; the browser check is carried by HUMAN)
 - [x] **N14** Guest rows on the Hosts panel — spec + done-when at PRD.md:1650 (`transformToCtfHostRow` drops `guest` today, so guest rows render as duplicate parent rows whose menu resets the parent; hide replant on guest rows with `flag_count == 0`, which the API refuses) (code and vitest here; the browser check is carried by HUMAN)
-- [ ] **N15** Nested host guide — spec + done-when at PRD.md:1652
+- [x] **N15** Nested host guide — spec + done-when at PRD.md:1652
 
 ### Group V — Nested image builder
 See `### Nested Image Builder Contract` and Working Notes 14–23. Independent of the CTF groups except V23. Frontend items use the Group V eslint/tsc gate lines in PRD.md `## Quality Gates`.
@@ -1440,3 +1440,16 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - Group V tsc gate: 0 matches (passes).
   - Group V ESLint gate: fails with "No files matching the pattern src/components/Teacher/ServerManagement/Forms/NestedImage". Those files belong to V16–V21, which are all `[ ]`, so no completed task is responsible.
 - **Reopened:** none.
+
+### Iteration 91 — 2026-10-17
+- **Completed:** N15. Added `## Nested lab hosts` to `docs/guides/game-master-guide.md`:
+  - Parent prep: the `ip_aliases` NIC, the watcher, libvirt, `libguestfs-tools` for `offline`, `virsh autostart`.
+  - Guest prep: the `org.qemu.guest_agent.0` channel, the agent, and the RHEL `/etc/sysconfig/qemu-ga` `guest-exec` block (`BLACKLIST_RPC` / `FILTER_RPC_ARGS`). Also the `agoge-pristine` snapshot.
+  - A spec example, a `nested_guests` field table, the offline Windows limits, and guest reset modes.
+  - Guest `failed` reasons, with message strings taken from `flag_planter.py`.
+  - The warning that root on the parent exposes every guest flag.
+  - Also added a `guest` row to the Flag fields table.
+- **Learned:** the guide's spec example is checked by loading it through `CtfValidator(spec).load()` and `CtfSpecModel` (both passed). The "C: only" offline file rule is enforced at plant time, not by the validator.
+- **Gate results:** docs only; `check.py` reports no affected suites.
+- **Blockers:** none.
+- **Next:** V3 (license on check-in).
