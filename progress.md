@@ -162,8 +162,8 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - [ ] **V6** OS catalog and seeding — spec + done-when at PRD.md:1671 — **BLOCKED (iteration 95):** its done-when needs Open Question V-5 answered first, and V-5 is human research. Microsoft Evaluation Center does not publish SHA-256 values, so each eval ISO (Server 2016/2019/2025, Windows 10/11 Enterprise) must be downloaded and hashed by a person. The Kali cloud image URL and format still need to be confirmed. The loop must not invent hashes. Unblock by recording V-5's answers (URL + sha256 per entry) in progress.md.
 - [x] **V7** Nested host validator — spec + done-when at PRD.md:1673
 - [x] **V8** Manifest and unattend rendering — spec + done-when at PRD.md:1675
-- [ ] **V9** Builder script — spec + done-when at PRD.md:1677
-- [ ] **V10** Runtime service — spec + done-when at PRD.md:1679
+- [ ] **V9** Builder script — spec + done-when at PRD.md:1677 (must install the V10 runtime from `nested_scripts.render_runtime()`/`render_runtime_unit()` and write `/etc/agoge-nested/host.json` in the shape `runtime.sh` documents; see iteration 97)
+- [x] **V10** Runtime service — spec + done-when at PRD.md:1679 (done before V9, which installs it: `render_runtime()`/`render_runtime_unit()` in `cloud_fn_utilities/server_specific/nested_scripts.py`)
 - [ ] **V11** Nested template server provisioning — spec + done-when at PRD.md:1681
 - [ ] **V12** Create route — spec + done-when at PRD.md:1683
 - [ ] **V13** Build monitor — spec + done-when at PRD.md:1685
@@ -1550,6 +1550,33 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - cloud_functions/tests: 699 passed (94.28%).
   - build_files: 319 passed.
   - common/tests: 235 passed.
+  - No frontend files changed.
+- **Blockers:** V6 is still BLOCKED on Open Question V-5.
+- **Next:** V9 (builder script).
+
+### Iteration 97 — 2026-10-17
+- **Completed:** V10, taken before V9 because V9's done-when ("installs and starts the runtime before the first virt-install") needs the runtime to exist.
+  - `cloud_functions/cloud_fn_utilities/server_specific/nested/runtime.sh` and `agoge-nested-runtime.service` use `@@NAME@@` placeholders. `nested_scripts.py` renders them and holds the shared parent paths (`HOST_JSON_PATH`, `RUNTIME_PATH`, `RUNTIME_UNIT_NAME`/`_PATH`, `BRIDGE_PREFIX = 'agb'`).
+  - The runtime is idempotent: it flushes and refills its own chains (`AGOGE-NESTED-IN/-FWD` in filter, `-PRE/-POST` in nat), and each one is jumped to at position 1 only if the jump is missing.
+  - Choices beyond the contract:
+    - INPUT from `agb+` also accepts ESTABLISHED,RELATED, because the Connect dialog's SSH tunnels are parent-initiated.
+    - FORWARD accepts only `--ctstate DNAT` in and ESTABLISHED,RELATED out per exposed guest, so exposing an isolated guest gives it no other route.
+    - `ON_BOOT=ignore` in libvirt-guests, so it does not resume guests out of `start_order`.
+    - The runtime also runs `virsh autostart --disable` for every guest.
+    - `net.ipv4.ip_forward=1` is set when any guest is exposed, because libvirt enables forwarding only for NAT networks.
+    - Alias IPs other than /32 are logged and skipped.
+- **For V9 (builder):**
+  - Write `host.json` with `networks[].name`, `guests[]` (`name`, `nics[].ip`, `autostart`, `start_order`, `start_delay_seconds`), and `exposures` (`[guest, nic]` per slot). For example: `jq '{version,networks,guests:[.guests[]|{name,nics,autostart,start_order,start_delay_seconds}],exposures,console_ports}'` on the manifest.
+  - The libvirt network name must be the spec network name, with bridge `agb<index>`.
+  - Install `jq` and `iptables`.
+  - Do **not** set libvirt autostart (contract step 6 conflicts with runtime step 4; the runtime wins).
+  - On Debian 13, set `firewall_backend = "iptables"` in `/etc/libvirt/network.conf`. Under libvirt's nftables backend, its own reject rules would still drop DNAT'd traffic that our iptables rules accept.
+  - V8 recommended that the Cloud Function render each Windows guest's autounattend.xml into `agoge-nested-secrets` (e.g. key `autounattend`). The builder reads it from `/run/agoge-nested/secrets.json`, and V11 adds it to `build_secrets`.
+- **Tests:** `cloud_functions/tests/test_nested_runtime.py` (16). It runs the rendered script under bash with fake `iptables` (stateful, so `-C`/`-N` behave as they would on a second run), `virsh`, `curl`, `ip`, `systemctl`, `sysctl` and `sleep`, plus real `jq`. `bash -n` passes. The script stays bash 3.2-clean because macOS bash runs it.
+- **Gate results:**
+  - cloud_functions/tests: 715 passed (94.28%).
+  - build_files: 319 passed.
+  - api/unit_tests: not run, since no api or common file changed.
   - No frontend files changed.
 - **Blockers:** V6 is still BLOCKED on Open Question V-5.
 - **Next:** V9 (builder script).
