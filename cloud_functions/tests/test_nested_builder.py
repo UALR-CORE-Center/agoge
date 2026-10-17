@@ -483,6 +483,27 @@ def test_rhel_family_relabels_and_unblocks_guest_exec(builder):
 
 
 @needs_tools
+def test_netplan_default_route_uses_a_cidr_older_netplan_accepts(builder):
+    ubuntu = _entry('ubuntu-18.04', family='linux', group='linux', install_method='cloud_image',
+                    media_url='https://cloud.debian.example/debian-12.qcow2', media_sha256=_sha(DEB_IMAGE),
+                    media_formats=['qcow2'], osinfo='ubuntu18.04', agent=True, net_config='netplan')
+    CATALOG['ubuntu-18.04'] = ubuntu
+    try:
+        result, log = builder(spec=_spec(deb={'os_id': 'ubuntu-18.04'}))
+    finally:
+        del CATALOG['ubuntu-18.04']
+
+    customize = _commands(log, 'virt-customize')[0]
+    assert result.returncode == 0, result.stderr
+    assert '/etc/netplan/90-agoge.yaml' in customize
+    netplan = (builder.root / 'var/lib/agoge-nested/work/net-deb/90-agoge.yaml').read_text()
+    assert 'addresses: ["10.10.0.10/24"]' in netplan
+    # netplan 0.99 (Ubuntu 18.04) has no "default" keyword; 0.0.0.0/0 works on every version.
+    assert 'routes: [{to: 0.0.0.0/0, via: "10.10.0.1"}]' in netplan
+    assert 'to: default' not in netplan
+
+
+@needs_tools
 def test_post_install_runs_through_guest_exec_with_the_script_as_input(builder):
     result, _ = builder()
 

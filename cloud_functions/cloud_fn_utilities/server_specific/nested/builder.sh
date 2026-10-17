@@ -388,7 +388,8 @@ write_network_config() {
             printf '      dhcp4: true\n'
           else
             printf '      dhcp4: false\n      addresses: ["%s/%s"]\n' "$ip" "$prefix"
-            [ "$gateway" != "-" ] && printf '      routes: [{to: default, via: "%s"}]\n' "$gateway"
+            # 0.0.0.0/0, not "default": netplan before 0.103 (Ubuntu 18.04 ships 0.99) rejects the keyword.
+            [ "$gateway" != "-" ] && printf '      routes: [{to: 0.0.0.0/0, via: "%s"}]\n' "$gateway"
             [ "$dns" != "-" ] && printf '      nameservers: {addresses: ["%s"]}\n' "$dns"
           fi
         } >> "$out/90-agoge.yaml"
