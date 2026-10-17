@@ -209,7 +209,7 @@ def test_student_cannot_create(world):
 
 
 @pytest.mark.parametrize('filename, fmt', [
-    ('kali.img.xz', 'img.xz'), ('ova.tar.xz', 'tar.xz'), ('disk.vhdx', 'vhdx'), ('disk.vhd', 'vhd'),
+    ('kali.img.xz', 'img.xz'), ('nano.img.bz2', 'img.bz2'), ('ova.tar.xz', 'tar.xz'), ('disk.vhdx', 'vhdx'), ('disk.vhd', 'vhd'),
     ('WIN.ISO', 'iso'), ('a.7z', '7z'), ('a.xz', None), ('a.exe', None), ('iso', None),
 ])
 def test_media_format_from_extension(filename, fmt):

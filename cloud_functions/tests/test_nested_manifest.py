@@ -175,6 +175,24 @@ def test_manifest_downloads_each_seeded_appliance_iso_by_its_pinned_url(entry):
     assert guest['catalog']['net_config'] == 'none'
 
 
+def _json_downloaded_disk_entries():
+    items = json.loads(CATALOG_JSON.read_text()) if CATALOG_JSON.is_file() else []
+    return [NestedOsCatalogModel(**item) for item in items
+            if item['install_method'] == 'disk_image' and not item['requires_upload']]
+
+
+@pytest.mark.parametrize('entry', _json_downloaded_disk_entries(), ids=lambda entry: entry.id)
+def test_manifest_downloads_each_seeded_appliance_disk_by_its_pinned_url(entry):
+    # builder.sh prepare_disk expands the compressed download in scratch, so the format must be one it knows.
+    spec = _spec([_guest('appliance', entry.id, memory_mb=entry.default_memory_mb, disk_gb=entry.default_disk_gb)])
+    guest = json.loads(render_manifest(spec, {entry.id: entry}, {}))['guests'][0]
+    assert guest['media'] == {'source': 'url', 'url': entry.media_url, 'sha256': entry.media_sha256,
+                              'format': entry.media_formats[0]}
+    assert entry.media_formats[0] in {'qcow2', 'raw', 'img.xz', 'img.bz2'}
+    assert guest['catalog']['install_method'] == 'disk_image'
+    assert guest['catalog']['net_config'] == 'none'
+
+
 def test_manifest_rejects_missing_catalog_entry_and_medium():
     spec = _three_guest_spec()
     with pytest.raises(ValueError, match='legacy: no medium med-1'):

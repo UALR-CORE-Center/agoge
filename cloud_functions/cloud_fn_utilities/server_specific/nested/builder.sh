@@ -39,7 +39,7 @@ BRIDGE_PREFIX=@@BRIDGE_PREFIX@@
 MEDIA_BUCKET_SUFFIX=@@MEDIA_BUCKET_SUFFIX@@
 VIRTIO_WIN_URL=https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio
 HOST_PACKAGES="qemu-system-x86 qemu-utils libvirt-daemon-system virtinst libguestfs-tools genisoimage p7zip-full
-  ovmf swtpm jq iptables curl xz-utils"
+  ovmf swtpm jq iptables curl xz-utils bzip2"
 HEARTBEAT_SECONDS=60
 AGENT_WAIT_MINUTES=20
 WINDOWS_INSTALL_MINUTES=150
@@ -331,6 +331,9 @@ prepare_disk() {
   case "$format" in
     qcow2|raw|vmdk|vhd|vhdx) input=$media; in_format=$format; [ "$format" = "vhd" ] && in_format=vpc ;;
     img.xz) input="$work/disk.img"; in_format=raw; xz -dc "$media" > "$input" ;;
+    # A truncated expansion (parent disk full) would still convert, into a guest that cannot boot.
+    img.bz2) input="$work/disk.img"; in_format=raw
+      bzip2 -dc "$media" > "$input" || { rm -rf "$work"; FAIL_MESSAGE="could not expand the img.bz2 media"; return 1; } ;;
     tar.xz) tar -xJf "$media" -C "$work" && input=$(largest_disk_file "$work") ;;
     ova) tar -xf "$media" -C "$work" && input=$(largest_disk_file "$work") ;;
     zip|7z) 7z x -y -o"$work" "$media" >/dev/null && input=$(largest_disk_file "$work") ;;
