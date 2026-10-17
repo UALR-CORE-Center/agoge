@@ -165,7 +165,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
     - [x] **V6b1** (iteration 116) Ubuntu 20.04, 22.04, 24.04 and 26.04 cloud images, pinned to dated `cloud-images.ubuntu.com/releases/<codename>/release-YYYYMMDD/` files with the SHA-256s from each release's published `SHA256SUMS`.
     - [ ] **V6b2** The rest of V6b (Kali, Debian, Fedora/Rocky/Alma/CentOS, openSUSE/Arch/Alpine, Metasploitable 2, Microsoft evals, appliances). Microsoft and Kali stay BLOCKED on V-5. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file. Debian publishes only SHA512SUMS, so its SHA-256 must come from another source or V-5.
 - [ ] **V6c** (found in iteration 116) Ubuntu 16.04's cloud image needs `net_config: ifupdown`. But its `/etc/network/interfaces` sources only `interfaces.d/*.cfg`, so `builder.sh` `write_network_config` must write `interfaces.d/agoge.cfg`, not `interfaces.d/agoge` (Debian sources `*`, so the rename is safe there). Then add `ubuntu-16.04` (`xenial/release-20211001/ubuntu-16.04-server-cloudimg-amd64-disk1.img`, sha256 `fff2494a70bcaffb59f26f71ec49e137dd87d319341c35832dbe0ea65ff15140`).
-- [ ] **V6d** (found in iteration 116) Ubuntu 18.04 ships netplan.io 0.99 (`bionic/release-20230607` manifest), and `routes: [{to: default}]` needs netplan 0.103+. Make `builder.sh` write `to: 0.0.0.0/0`, which every netplan version accepts. Then add `ubuntu-18.04` (`bionic/release-20230607/ubuntu-18.04-server-cloudimg-amd64.img`, sha256 `8dd2e6b5e5aad20c3f836123b300cba9861249408cbb07c359145a65d6bab6b6`).
+- [x] **V6d** (found in iteration 116; done in iteration 117) Ubuntu 18.04 ships netplan.io 0.99 (`bionic/release-20230607` manifest), and `routes: [{to: default}]` needs netplan 0.103+. Make `builder.sh` write `to: 0.0.0.0/0`, which every netplan version accepts. Then add `ubuntu-18.04` (`bionic/release-20230607/ubuntu-18.04-server-cloudimg-amd64.img`, sha256 `8dd2e6b5e5aad20c3f836123b300cba9861249408cbb07c359145a65d6bab6b6`).
 - [x] **V7** Nested host validator — spec + done-when at PRD.md:1673
 - [x] **V8** Manifest and unattend rendering — spec + done-when at PRD.md:1675
 - [x] **V9** Builder script — spec + done-when at PRD.md:1677 (must install the V10 runtime from `nested_scripts.render_runtime()`/`render_runtime_unit()` and write `/etc/agoge-nested/host.json` in the shape `runtime.sh` documents; see iteration 97)
@@ -2158,3 +2158,17 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. V25 and HUMAN need a person.
 - **Next:** V6d, then V6c. Both are small `builder.sh` fixes plus one catalog entry each. After them, V6b2's Fedora/Rocky/Alma entries, done like V6b1.
+
+### Iteration 117 — 2026-10-17
+- **Completed:** V6d.
+  - `builder.sh` `write_network_config` now writes the netplan gateway route as `to: 0.0.0.0/0`, not `to: default`.
+  - `common/data/nested_os_catalog.json` has 24 entries. The new one, `ubuntu-18.04`, is placed before 20.04 and is pinned to `bionic/release-20230607`.
+- **Learned:** I re-fetched that release's `SHA256SUMS` over https on 2026-10-17, and it matches the queued hash. The file's magic number is `QFI\xfb` (qcow2). Its manifest lists `netplan.io 0.99-0ubuntu3~18.04.5`.
+- **Tests:** `test_nested_builder.py::test_netplan_default_route_uses_a_cidr_older_netplan_accepts` checks the rendered `90-agoge.yaml`. The existing catalog and manifest tests also cover the new entry.
+- **Gate results:**
+  - api/unit_tests: 1654 passed, 97.67%.
+  - cloud_functions/tests: 885 passed, 94.28%.
+  - build_files: 402 passed.
+  - No frontend files changed.
+- **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. V25 and HUMAN need a person.
+- **Next:** V6c (the `interfaces.d/agoge.cfg` rename plus `ubuntu-16.04`), then V6b2's Fedora/Rocky/Alma entries, done like V6b1.
