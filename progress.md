@@ -176,7 +176,7 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
     - [x] **V6b2k** (iteration 132) Alpine Linux 3.23 BIOS cloud-init image (`ifupdown`, osinfo `alpinelinux3.23`), pinned to `dl-cdn.alpinelinux.org/alpine/v3.23/releases/cloud/alpine-3.23.6-x86_64-bios-cloudinit-r0.qcow2`. Alpine publishes only `.sha512`, so the SHA-256 was computed from a download that first matched it. `builder.sh` gains an OpenRC/mdev path for `alpinelinux` osinfo ids.
     - [ ] **V6b2** The rest of V6b (Kali, CentOS Stream 9, Microsoft evals, VyOS). **openSUSE Leap 15.6 is DROPPED (decided 2026-10-18 by the user).** It ships wicked, which no `NestedNetConfig` value covers, and Leap 16.0 (V6b2e) already covers openSUSE. Do not add a Leap 15.6 entry or a `wicked` net_config. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file. **UNBLOCKED 2026-10-17:** V-5 is answered. Every URL and SHA-256 for Kali, CentOS Stream 9, the Microsoft evals and VyOS is in "V-5 answers" below. Use those values exactly and do not re-derive them. Split as V6b2l–V6b2o. V6b2 closes when all four are done.
       - [x] **V6b2l** (iteration 154) Kali: `kali-rolling` (`cloud_image`, `tar.xz`) and `kali-qemu` (`disk_image`, `7z`, default `kali`/`kali`), from "V-5 answers". Confirm `builder.sh` handles a `tar.xz` holding `disk.raw` (25 GiB sparse) and a `7z` holding a qcow2.
-      - [ ] **V6b2m** CentOS Stream 9 GenericCloud (`nm-keyfile`, osinfo `centos-stream9`), like V6b2c, from "V-5 answers".
+      - [x] **V6b2m** (iteration 155) CentOS Stream 9 GenericCloud (`nm-keyfile`, osinfo `centos-stream9`), like V6b2c, from "V-5 answers".
       - [ ] **V6b2n** Microsoft evaluations: `win-server-2016-eval`, `-2019-eval`, `-2022-eval`, `-2025-eval` (`eval_days` 180) and `win-11-enterprise-eval` (`eval_days` 90), from "V-5 answers". Optionally add `win-11-ltsc-eval` too. Windows 10 Enterprise is no longer offered, so leave it upload-only (`win-10`).
       - [ ] **V6b2o** VyOS rolling (`manual_iso`, agentless), from "V-5 answers". VyOS publishes no SHA-256, only a minisign signature. The hash below is from a download whose signature verified against the vyos.net key. Nightly builds are pruned from GitHub, so the URL can stop working. Note this in the entry or the guide.
 
@@ -2696,3 +2696,9 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - CTF eslint: exit 0. CTF tsc grep: 0 matches.
   - Group V eslint: exit 0. Group V tsc grep: 0 matches.
 - **Reopened:** none.
+
+### Iteration 155 — 2026-10-18
+- **Completed:** V6b2m. Added `centos-stream-9` (`cloud_image`, `qcow2`, `nm-keyfile`, osinfo `centos-stream9`, min/default disk 10/20 GB) to `nested_os_catalog.json`, just before `centos-stream-10`. Its URL, SHA-256 and byte size are from "V-5 answers".
+- **Learned:** the published `.SHA256SUM` and the HTTP content-length both match V-5. The qcow2 header (bytes 24–31) gives a virtual size of exactly 10 GiB, so `min_disk_gb` 10 does not under-reserve. `RHEL_FAMILY` in `builder.sh` already matches `centos`, so the image gets an SELinux relabel and needs no builder change. The existing parametrized catalog rules cover the new entry.
+- **Gate results:** api 1662 passed, 97.67%. cloud_functions 926 passed, 94.28%. build_files 527 passed. Frontend 574 passed. CTF and Group V eslint exit 0, and both tsc greps 0.
+- **Next:** V6b2n (Microsoft evaluations), then V6b2o (VyOS).
