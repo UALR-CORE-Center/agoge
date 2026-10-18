@@ -2885,3 +2885,9 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - CTF eslint: exit 0. Group V eslint: exit 0.
   - Scoped tsc grep: 0 matches for CTF and for Group V (90 tsc errors elsewhere, all pre-existing and outside scope).
 - **Reopened:** none.
+
+### Iteration 175 — 2026-10-18
+- **Completed:** none. The queue is unchanged since the verification at 0320692 (PASS), and the tree was clean. The only `[ ]` items are I4b (browser checks), V25 (live acceptance) and HUMAN, and all three need a person.
+- **Gate results:** not run; no code changed since iteration 157, and the verification at 0320692 passed every gate.
+- **Blockers:** I4b, V25 and HUMAN need a person. The N8 plant-watcher gap (progress.md:2827) needs a human decision. `## ALL TASKS COMPLETE` is withheld because those items are still `[ ]`.
+- **Next:** stop the loop. This is the eighteenth no-op iteration in a row. Restart it only after a human runs the I4b/HUMAN browser checks and V25, decides the N8 gap, or adds new tasks.
