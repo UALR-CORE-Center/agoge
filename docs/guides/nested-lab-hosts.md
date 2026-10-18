@@ -121,7 +121,7 @@ Common failures:
 | Message | Fix |
 | --- | --- |
 | "media sha256 mismatch: expected …, got …" | The publisher changed the file. Ask the administrator to update the catalog entry. |
-| "could not download the media" / "could not download the uploaded media" | The URL moved, or the upload was deleted. Check the catalog entry, or upload again. |
+| "could not download the media" / "could not download the uploaded media" | The URL moved, or the upload was deleted. Check the catalog entry, or upload again. VyOS prunes old nightly builds from GitHub, so the VyOS rolling entry's download eventually stops working: upload a VyOS ISO with **Custom ISO**, or ask the administrator to pin a newer build. |
 | "the catalog entry has no media_sha256, …" | See [Before you begin](#before-you-begin). |
 | "virt-customize failed: …" | The cloud image could not be customized, usually because of a package name in **Packages**. |
 | "agoge-nested-secrets is missing; the build cannot continue" | The server restarted after the build's passwords were removed. Delete the image and create it again. |
