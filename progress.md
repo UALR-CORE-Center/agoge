@@ -2714,3 +2714,9 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Learned:** today the GitHub release URL 302s to a 200 whose Content-Length (634388480) matches V-5. The existing parametrized catalog rules (https + SHA-256, recorded size, no rolling `current/`/`latest/` path segment) cover the entry, and the dated `2026.10.17-0025-rolling` segment passes the pin check.
 - **Gate results:** api 1662 passed, 97.67%. cloud_functions 947 passed, 94.28%. build_files 551 passed. Frontend 574 passed. I did not re-run eslint/tsc because no frontend file changed.
 - **Next:** every loop-doable item is `[x]`. I4b, V25 and HUMAN need a person.
+
+### Iteration 158 — 2026-10-18
+- **Completed:** none. Every loop-doable task is `[x]`, and the tree is clean at HEAD 8f05166 (V6b2o). The only open items are I4b (browser checks), V25 (live acceptance, human only) and HUMAN. Each one needs a person on the development project.
+- **Gate results:** not run; no code changed since iteration 157, which passed them all.
+- **Blockers:** I4b, V25 and HUMAN need a person. `## ALL TASKS COMPLETE` is withheld because they are still `[ ]`.
+- **Next:** a human runs the I4b/HUMAN browser checks and V25. The loop can stop until then.
