@@ -2605,3 +2605,23 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** not run, because no code changed.
 - **Blockers:** the same as iteration 133. V-5 (Microsoft hashes; confirm the Kali URL). CentOS Stream 9 and VyOS publish no SHA-256. Leap 15.6 needs the wicked `net_config` decision. I4b, V25 and HUMAN need a person.
 - **Next:** stop the loop until a person unblocks one of these.
+
+### Verification — 2026-10-17 — PASS
+- **Checked:** every `[x]` task. `git diff --stat f851ac4 HEAD` shows only progress.md changed (+118 lines of iteration and verification logs), and the working tree was clean. So no code has changed since the last code-bearing PASS. I still re-inspected the code for the higher-risk items:
+  - BUG3: `_publish_arm` (api/core/ctf/event.py:245-249) calls `future.result(timeout=...)` on each publish future against one shared deadline. Failed futures go into `unpublished` and on to `_fail_unpublished`. The fake test sets `future.set_exception` (test_ctf_event_actions.py:101), with tests at :298 and :311.
+  - BUG5: `_fail_unfinished` goes through `_write_flags`, which re-reads the doc inside the transaction (flag_planter.py:1016). It is tested by `test_error_mid_results_keeps_flags_already_recorded`.
+  - BUG4: `AnonymousAppUser()` constructs. BUG2: `batch_write` runs once, after the image loop. BUG: `SpecEditManager.save` validates before it writes.
+  - E3, E4b, G4b and N11: `CtfHandler.action_map` routes all three actions, passes `guest` through, and an unknown action raises `ValueError`.
+  - I4b's prerequisite routes are present (AppRouter.tsx:99-100).
+  - V6e/V6f: the media reservation is on both the backend and the frontend. V6g: a failed `xz`/`bzip2` expand fails the guest (builder.sh:358,360). V12b: the record is deleted when its publish fails (image.py:508-538). V14b: a stale `finalizing` phase is finalizable (`is_stale_finalize`, NESTED_FINALIZE_TIMEOUT_SECONDS + 900).
+  - Stub scan of the CTF and nested backend and frontend: no TODO, FIXME, `NotImplemented` or pass-only bodies. The only matches are `mktemp` `XXXXXX` templates and MUI `placeholder` props.
+  - `nested_os_catalog.json` has 44 entries and 25 SHA-256 values, all unique 64-character lowercase hex. Every URL is https. No Microsoft entry has a URL or hash, so none was invented.
+  - The open items are still correctly `[ ]` and blocked on a person: I4b, V6, V6b, V6b2, V25 and HUMAN.
+- **Gate results:**
+  - api/unit_tests: 1662 passed, coverage 97.67% (≥85%).
+  - cloud_functions/tests: 921 passed, total coverage 96.19% (≥85%).
+  - build_files: 512 passed.
+  - Frontend `npm test`: 47 files, 574 tests passed, exit 0.
+  - CTF eslint: exit 0. CTF tsc grep: 0 matches.
+  - Group V eslint: exit 0. Group V tsc grep: 0 matches. `tsc --noEmit` itself exits 2, but only on files outside both scopes.
+- **Reopened:** none.
