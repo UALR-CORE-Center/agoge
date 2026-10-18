@@ -92,8 +92,9 @@ def test_downloaded_entries_pin_a_dated_release(entry):
                          ids=lambda entry: entry.id)
 def test_cloud_image_entries_are_linux_disk_images_with_an_agent(entry):
     # builder.sh customize_linux installs qemu-guest-agent and writes net_config into every cloud image.
+    # tar.xz is Kali's: prepare_disk converts the archive's disk.raw.
     assert entry.family == 'linux'
-    assert entry.media_formats[0] in {'qcow2', 'raw', 'img.xz'}
+    assert entry.media_formats[0] in {'qcow2', 'raw', 'img.xz', 'tar.xz'}
     assert entry.net_config in {'networkd', 'netplan', 'nm-keyfile', 'ifupdown'}
     assert entry.agent is True
 
@@ -102,10 +103,24 @@ def test_cloud_image_entries_are_linux_disk_images_with_an_agent(entry):
                          ids=lambda entry: entry.id)
 def test_nm_keyfile_entries_match_the_builders_rhel_family(entry):
     # Only a RHEL_FAMILY osinfo gets --selinux-relabel; unlabelled, the uploaded keyfile is ignored under enforcing SELinux.
+    # Debian-based NetworkManager images (the Kali QEMU VM) run AppArmor, so they need no relabel.
     builder = (Path(__file__).parents[3] / 'cloud_functions' / 'cloud_fn_utilities' / 'server_specific' / 'nested'
                / 'builder.sh').read_text()
     rhel_family = re.search(r"^RHEL_FAMILY='([^']+)'$", builder, re.MULTILINE).group(1)
-    assert re.match(rhel_family, entry.osinfo)
+    assert re.match(rhel_family, entry.osinfo) or entry.osinfo.startswith('debian')
+
+
+# Virtual disk sizes read from the pinned archives (V6b2l): Kali's tar.xz holds a 25 GiB sparse disk.raw, and its
+# 7z holds a qcow2 v3 of 86,000,000,000 bytes.
+ARCHIVE_VIRTUAL_SIZE_BYTES = {'kali-rolling': 26843545600, 'kali-qemu': 86000000000}
+
+
+@pytest.mark.parametrize('entry_id', sorted(ARCHIVE_VIRTUAL_SIZE_BYTES))
+def test_archived_disks_never_get_a_disk_gb_smaller_than_the_image(entry_id):
+    # prepare_disk only grows a disk, so a smaller disk_gb would leave a guest larger than NestedHostValidator reserved.
+    entry = next(entry for entry in _entries() if entry.id == entry_id)
+    assert entry.min_disk_gb * 2 ** 30 >= ARCHIVE_VIRTUAL_SIZE_BYTES[entry_id]
+    assert entry.default_disk_gb >= entry.min_disk_gb
 
 
 @pytest.mark.parametrize('entry', [entry for entry in _entries() if entry.family == 'windows'],

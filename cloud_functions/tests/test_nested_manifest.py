@@ -195,7 +195,11 @@ def test_manifest_downloads_each_seeded_appliance_disk_by_its_pinned_url(entry):
     assert entry.media_formats[0] in {'qcow2', 'raw', 'vmdk', 'vhd', 'vhdx', 'img.xz', 'img.bz2', 'tar.xz', 'ova',
                                       'zip', '7z'}
     assert guest['catalog']['install_method'] == 'disk_image'
-    assert guest['catalog']['net_config'] == 'none'
+    # install_disk_image runs customize_linux (which writes net_config) only for a Linux disk with an agent.
+    if entry.family == 'linux' and entry.agent:
+        assert guest['catalog']['net_config'] in {'networkd', 'netplan', 'nm-keyfile', 'ifupdown'}
+    else:
+        assert guest['catalog']['net_config'] == 'none'
 
 
 def test_manifest_rejects_missing_catalog_entry_and_medium():
