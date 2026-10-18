@@ -2684,3 +2684,15 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Learned:** I checked the real media. Kali's tar.xz holds a single GNU-sparse (`S`) `disk.raw`: 25 GiB virtual and 0.96 GiB of data, so GNU tar restores the holes and it fits in scratch. The image has netplan.io and systemd-resolved, but no ifupdown, NetworkManager or qemu-guest-agent. The 7z holds one 16.0 GB qcow2 v3 with an 86,000,000,000-byte virtual size, and it has network-manager, ifupdown, qemu-guest-agent and grub-pc (BIOS). `prepare_disk` only grows a disk, so the 81 GB minimum keeps the reservation honest. The 16 GB extraction is bigger than the 12 GB scratch, but the thin 81 GB disk it converts into covers it.
 - **Gate results:** api 1662 passed, 97.67%. cloud_functions 925 passed, 94.28%. build_files 522 passed. Frontend 574 passed. CTF and Group V eslint exit 0, and both tsc greps 0.
 - **Next:** V6b2m (CentOS Stream 9), then V6b2n and V6b2o.
+
+### Verification — 2026-10-18 — PASS
+- **Checked:** the only item ticked since the last verification (125b2ad, re-verified at d6b11d9): V6b2l. `git diff --stat 125b2ad HEAD` touches only PRD.md, progress.md, `nested_os_catalog.json` and three test files. The task-queue diff shows V6b2l as the only new `[x]`. Parents V6, V6b and V6b2 stay `[ ]`, and so do V6b2m–o, I4b, V25 and HUMAN.
+  - V6b2l: `kali-rolling` and `kali-qemu` are in `common/data/nested_os_catalog.json`. Their URLs, SHA-256s and byte sizes match the "V-5 answers" table character for character. `builder.sh` already handled both archive types before this commit: `tar.xz` extracts with `tar -xJf` and `7z` with `7z x`, then `largest_disk_file` picks the disk. `install_disk_image` runs `customize_linux` for a Linux guest with an agent, and the nm-keyfile path does `chmod 600` and skips `--selinux-relabel` for a non-RHEL osinfo. That matches what the new builder tests assert, and they exercise the real script, not a stub. The widened catalog/manifest assertions are scoped (only `tar.xz` is added, and nm-keyfile now also accepts a `debian*` osinfo) and line up with the builder's behavior. They are not blanket relaxations. `min_disk_gb` (25 and 81) covers the recorded virtual sizes.
+- **Gate results:**
+  - api/unit_tests: 1662 passed, coverage 97.67% (≥85%).
+  - cloud_functions/tests: 925 passed, coverage 94.28% (≥85%).
+  - build_files: 522 passed.
+  - Frontend `npm test`: 47 files, 574 tests passed.
+  - CTF eslint: exit 0. CTF tsc grep: 0 matches.
+  - Group V eslint: exit 0. Group V tsc grep: 0 matches.
+- **Reopened:** none.
