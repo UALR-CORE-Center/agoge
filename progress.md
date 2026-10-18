@@ -2631,3 +2631,9 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** not run, because no code changed.
 - **Blockers:** the same as iteration 133. V-5 (Microsoft hashes; confirm the Kali URL). CentOS Stream 9 and VyOS publish no SHA-256. Leap 15.6 needs the wicked `net_config` decision. I4b, V25 and HUMAN need a person.
 - **Next:** stop the loop until a person unblocks one of these.
+
+### Iteration 151 — 2026-10-17
+- **Completed:** none. Nothing has changed since iteration 150 (HEAD cee4963 only logged it, and the working tree is clean). V-5 in PRD.md is still `[ ]`, and progress.md has no human answer.
+- **Gate results:** not run, because no code changed.
+- **Blockers:** the same as iteration 133. V-5 (Microsoft hashes; confirm the Kali URL). CentOS Stream 9 and VyOS publish no SHA-256. Leap 15.6 needs the wicked `net_config` decision. I4b, V25 and HUMAN need a person.
+- **Next:** stop the loop until a person unblocks one of these.
