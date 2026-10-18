@@ -2967,3 +2967,11 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** not run; no code changed since iteration 157, and the verification at 0922423 passed every gate.
 - **Blockers:** I4b, V25 and HUMAN need a person. The N8 plant-watcher gap (progress.md:2827) needs a human decision. `## ALL TASKS COMPLETE` is withheld because those items are still `[ ]`.
 - **Next:** stop the loop. This is the twenty-eighth no-op iteration in a row. Restart it only after a human runs the I4b/HUMAN browser checks and V25, decides the N8 gap, or adds new tasks.
+
+### Out-of-loop work — 2026-10-18 (N8 gap, Windows 11 LTSC)
+- **Completed (outside the loop, by hand):**
+  - The N8 plant-watcher gap (progress.md:2827) is closed by the user's decision: install the watcher whenever a server has nested_guests. `LabServerManager._is_linux_nested_host` now also returns true for a Linux server that the unit's `ctf.nested_guests` names, read from the unit `AssessmentManager` already loaded (no extra Firestore read). It maps the instance name `f"{parent_id}-{spec name}"` back to the spec name. Tests are in `test_ctf_plant_watcher.py`.
+  - Added `win-11-ltsc-eval` (Windows 11 Enterprise LTSC 2024 Evaluation, build 26100.1742, `eval_days` 90, `windows_image_index` 1, read from the ISO's `install.wim`; index 2 is the N edition) using the V-5 answers URL and SHA-256. The ISO is already in `gs://test-dev-787001_nested-media/cache/`.
+- **Gate results:** check.py: api ok, cloud_functions ok, build_files ok.
+- **Blockers:** none for the loop. I4b, V25 and HUMAN need a person.
+- **Next:** re-run setup.py 2 → 8 (Synchronize Nested Guest OS Catalog) and redeploy the Cloud Function, then the human checks.

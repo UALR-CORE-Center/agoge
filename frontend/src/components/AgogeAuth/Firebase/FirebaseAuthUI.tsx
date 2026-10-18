@@ -1,6 +1,5 @@
 import { Box, CircularProgress, Typography } from "@mui/material";
 import { GoogleAuthProvider, EmailAuthProvider } from 'firebase/auth';
-import firebase from "firebase/compat";
 import * as firebaseui from "firebaseui";
 import React, {useCallback, useEffect, useState} from "react";
 import { useNavigate } from "react-router-dom";

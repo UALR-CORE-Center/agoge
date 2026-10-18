@@ -140,9 +140,9 @@ def test_windows_older_than_10_and_2016_requires_an_upload(entry):
     assert entry.media_url is None
 
 
-# Evaluation Center ISOs (V6b2n): Server editions run 180 days, Windows 11 Enterprise 90 days.
+# Evaluation Center ISOs (V6b2n): Server editions run 180 days, Windows 11 Enterprise and LTSC 90 days.
 WINDOWS_EVAL_DAYS = {'win-server-2016-eval': 180, 'win-server-2019-eval': 180, 'win-server-2022-eval': 180,
-                     'win-server-2025-eval': 180, 'win-11-enterprise-eval': 90}
+                     'win-server-2025-eval': 180, 'win-11-enterprise-eval': 90, 'win-11-ltsc-eval': 90}
 
 
 def test_downloaded_windows_entries_are_the_evaluations():
