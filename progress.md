@@ -2726,3 +2726,16 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** not run; no code changed since iteration 157, which passed them all.
 - **Blockers:** I4b, V25 and HUMAN need a person. `## ALL TASKS COMPLETE` is withheld because they are still `[ ]`.
 - **Next:** stop the loop until a human runs the I4b/HUMAN browser checks and V25, or adds new tasks.
+
+### Verification — 2026-10-18 — PASS
+- **Checked:** the items ticked since the last verification (35e2a9d): V6b2m, V6b2n and V6b2o, and the parents they close (V6b2, V6b, V6). `git diff --stat 35e2a9d HEAD` touches only `nested_os_catalog.json`, `test_nested_os_catalog_sync.py`, `docs/guides/nested-lab-hosts.md` and progress.md. I4b, V25 and HUMAN are still `[ ]`.
+  - V6b2m/n/o: a script matched every catalog `media_url` against the "V-5 answers" table. All nine V-5 entries in the catalog (`centos-stream-9`, the four `win-server-*-eval`, `win-11-enterprise-eval`, `kali-rolling`, `kali-qemu`, `vyos-rolling-2026.10.17`) have an exact SHA-256 and byte-size match. The only unused row is the optional Windows 11 LTSC eval, which iteration 156 skipped and said why. The eval entries carry `eval_days` (180/90) and image index 2 (Server Standard Desktop) or 1 (Win11), and `win-10` stays upload-only. VyOS is `manual_iso`, agentless, `net_config` none, and both its license note and the guide note that GitHub prunes nightly builds.
+  - V6 done-when (PRD.md:1671): `test_nested_os_catalog_sync.py` validates every entry against the model, checks https + SHA-256 for downloaded entries, Microsoft hosts for Windows URLs, upload-only for Windows older than 10/2016, and a no-op second sync. V-5 is answered. All 34 downloadable entries cover V6b's list, except the Windows 10 eval (no longer offered) and Leap 15.6 (dropped by the user). No TODO or stub found.
+- **Gate results:**
+  - api/unit_tests: 1662 passed, coverage 97.67% (≥85%).
+  - cloud_functions/tests: 947 passed, coverage 94.28% (≥85%).
+  - build_files: 551 passed.
+  - Frontend `npm test`: 47 files, 574 tests passed.
+  - CTF eslint: exit 0. CTF tsc grep: 0 matches.
+  - Group V eslint: exit 0. Group V tsc grep: 0 matches.
+- **Reopened:** none.
