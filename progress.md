@@ -2816,3 +2816,21 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** not run; no code changed since iteration 157, and the verification at bb55a78 passed every gate.
 - **Blockers:** I4b, V25 and HUMAN need a person. `## ALL TASKS COMPLETE` is withheld because they are still `[ ]`.
 - **Next:** stop the loop. This is the twelfth no-op iteration in a row. Restart it only after a human runs the I4b/HUMAN browser checks and V25, or adds new tasks.
+
+### Verification — 2026-10-18 — PASS
+- **Checked:** no code has changed since the last verification (bb55a78). `git diff --stat bb55a78 HEAD` touches only progress.md (no-op iterations 165–169), and no `- [x]`/`- [ ]` lines changed. Three parallel read-only agents checked 31 ticked tasks that earlier verifications had not sampled, against their PRD done-whens and the code:
+  - **Backend:** A3, A5, C2, D2, D4, E3, E5, F4, F6, G2, G5, H5, R2, N5, N9.
+  - **Frontend and nested:** I3, I7, I11, I16, J4, L3, L5, N11, V5, V9, V11, V16, V19, V6f, V12b.
+  - **Handler dispatch:** CTF actions 18, 19 and 20 are each dispatched (ctf_handler.py:60-62), and an unknown action raises ValueError.
+  - All 31 match the PRD. `package.json` has only MUI X Community packages.
+  - C2: `CtfValidator` is skipped on non-CTF partial form saves (edit_manager.py:303-309). The PRD only says to call it when `ctf` is present, so this was accepted again, as at progress.md:1188.
+  - Edge case: the plant watcher is installed only on Linux servers with `ip_aliases` (lab_server_manager.py:354-358). That is the N8 spec as written (PRD.md:1638). A nested-image parent without `ip_aliases`, which N5 allows, would fail guest resets with "Plant watcher did not respond". This is a PRD-level gap, not an unfinished task, and V25 live acceptance may surface it.
+  - A grep for TODO/FIXME/NotImplemented across the CTF and nested modules found only `mktemp` `XXXXXX` templates and a product-key format hint.
+  - I4b, V25 and HUMAN stay `[ ]`, because they need a person.
+- **Gate results:**
+  - api/unit_tests: 1662 passed, coverage 97.67% (≥85%).
+  - cloud_functions/tests: 947 passed, coverage 94.28% (≥85%). This is from a solo rerun; a run in parallel with the api suite shared a `.coverage` file and printed a contaminated 96.19%.
+  - build_files: 551 passed.
+  - Frontend `npm test`: 47 files, 574 tests passed.
+  - CTF eslint: exit 0. Group V eslint: exit 0. Scoped tsc grep: 0 matches for CTF and for Group V (90 tsc errors elsewhere, all pre-existing and outside scope).
+- **Reopened:** none.
