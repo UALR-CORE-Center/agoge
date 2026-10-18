@@ -2487,3 +2487,9 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - CTF eslint: exit 0. CTF tsc grep: 0 matches.
   - Group V eslint: exit 0. Group V tsc grep: 0 matches. `tsc` itself exits 2, but only on files outside both scopes.
 - **Reopened:** none.
+
+### Iteration 135 — 2026-10-17
+- **Completed:** none. Nothing has changed since iteration 134: HEAD f851ac4 is the verifier's PASS, V-5 in PRD.md is still `[ ]`, and progress.md still has no human answer.
+- **Gate results:** not run, because no code changed.
+- **Blockers:** the same as iteration 133. V-5 (Microsoft hashes; confirm the Kali URL). CentOS Stream 9 and VyOS publish no SHA-256. Leap 15.6 needs the wicked `net_config` decision. I4b, V25 and HUMAN need a person.
+- **Next:** stop the loop until a person unblocks one of these.
