@@ -140,6 +140,25 @@ def test_windows_older_than_10_and_2016_requires_an_upload(entry):
     assert entry.media_url is None
 
 
+# Evaluation Center ISOs (V6b2n): Server editions run 180 days, Windows 11 Enterprise 90 days.
+WINDOWS_EVAL_DAYS = {'win-server-2016-eval': 180, 'win-server-2019-eval': 180, 'win-server-2022-eval': 180,
+                     'win-server-2025-eval': 180, 'win-11-enterprise-eval': 90}
+
+
+def test_downloaded_windows_entries_are_the_evaluations():
+    # NestedHostValidator demands a product key from any unattended Windows entry without eval_days, and an
+    # evaluation ISO takes none, so a downloaded Windows entry must always carry eval_days.
+    downloaded = {entry.id: entry for entry in _entries() if entry.family == 'windows' and not entry.requires_upload}
+    assert {entry_id: entry.eval_days for entry_id, entry in downloaded.items()} == WINDOWS_EVAL_DAYS
+    for entry in downloaded.values():
+        assert entry.install_method == 'unattended_iso'
+        assert entry.media_formats == ['iso']
+        # Index 2 is Standard Evaluation (Desktop Experience) on the Server ISOs; the client ISO has one image.
+        assert entry.windows_image_index == (2 if entry.group == 'windows_server' else 1)
+    # Microsoft no longer offers a Windows 10 Enterprise evaluation, so Windows 10 stays upload-only.
+    assert next(entry for entry in _entries() if entry.id == 'win-10').requires_upload is True
+
+
 def test_unattended_windows_entries_carry_an_image_index_and_template():
     unattended = [entry for entry in _entries() if entry.install_method == 'unattended_iso']
     assert unattended
