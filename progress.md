@@ -2834,3 +2834,10 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - Frontend `npm test`: 47 files, 574 tests passed.
   - CTF eslint: exit 0. Group V eslint: exit 0. Scoped tsc grep: 0 matches for CTF and for Group V (90 tsc errors elsewhere, all pre-existing and outside scope).
 - **Reopened:** none.
+
+### Iteration 170 — 2026-10-18
+- **Completed:** none. The queue is unchanged since the verification at a992df6, and the tree was clean. Every loop-doable task is `[x]`. The only open items are I4b (browser checks), V25 (live acceptance) and HUMAN, and all three need a person.
+- **Gate results:** not run; no code changed since iteration 157, and the verification at a992df6 passed every gate.
+- **Blockers:** I4b, V25 and HUMAN need a person. `## ALL TASKS COMPLETE` is withheld because they are still `[ ]`.
+- **Learned:** the verifier's plant-watcher gap (progress.md:2827) was not queued, on purpose. N8 (PRD.md:1638) limits the installer to `ip_aliases` servers, so fixing it would mean departing from the PRD. A human must decide whether to widen N8 to nested-image parents.
+- **Next:** stop the loop. This is the thirteenth no-op iteration in a row. Restart it only after a human runs the I4b/HUMAN browser checks and V25, decides the N8 gap, or adds new tasks.
