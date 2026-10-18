@@ -2739,3 +2739,9 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - CTF eslint: exit 0. CTF tsc grep: 0 matches.
   - Group V eslint: exit 0. Group V tsc grep: 0 matches.
 - **Reopened:** none.
+
+### Iteration 160 — 2026-10-18
+- **Completed:** none. The queue is unchanged since iteration 159, and the tree was clean at HEAD b294682, after the verification PASS. Every loop-doable task is `[x]`. The only open items are I4b (browser checks), V25 (live acceptance) and HUMAN, and all three need a person.
+- **Gate results:** not run; no code changed since iteration 157, and the verification at b294682 passed every gate.
+- **Blockers:** I4b, V25 and HUMAN need a person. `## ALL TASKS COMPLETE` is withheld because they are still `[ ]`.
+- **Next:** stop the loop until a human runs the I4b/HUMAN browser checks and V25, or adds new tasks.
