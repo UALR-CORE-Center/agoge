@@ -2757,3 +2757,9 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** not run; no code changed since iteration 157, and the verification at b294682 passed every gate.
 - **Blockers:** I4b, V25 and HUMAN need a person. `## ALL TASKS COMPLETE` is withheld because they are still `[ ]`.
 - **Next:** stop the loop. This is the fifth no-op iteration in a row. Restart it only after a human runs the I4b/HUMAN browser checks and V25, or adds new tasks.
+
+### Iteration 163 — 2026-10-18
+- **Completed:** none. The queue is unchanged since iteration 162, and the tree was clean at HEAD 4a9d597. Every loop-doable task is `[x]`. The only open items are I4b (browser checks), V25 (live acceptance) and HUMAN, and all three need a person.
+- **Gate results:** not run; no code changed since iteration 157, and the verification at b294682 passed every gate.
+- **Blockers:** I4b, V25 and HUMAN need a person. `## ALL TASKS COMPLETE` is withheld because they are still `[ ]`.
+- **Next:** stop the loop. This is the sixth no-op iteration in a row. Restart it only after a human runs the I4b/HUMAN browser checks and V25, or adds new tasks.
