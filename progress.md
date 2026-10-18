@@ -2921,3 +2921,19 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** not run; no code changed since iteration 157, and the verification at 0320692 passed every gate.
 - **Blockers:** I4b, V25 and HUMAN need a person. The N8 plant-watcher gap (progress.md:2827) needs a human decision. `## ALL TASKS COMPLETE` is withheld because those items are still `[ ]`.
 - **Next:** stop the loop. This is the twenty-third no-op iteration in a row. Restart it only after a human runs the I4b/HUMAN browser checks and V25, decides the N8 gap, or adds new tasks.
+
+### Verification — 2026-10-18 — PASS
+- **Checked:** no code has changed since the last verification (0320692). `git diff --stat 0320692 HEAD` touches only progress.md (no-op iterations 175–180), the tree is clean, and no `- [x]`/`- [ ]` lines changed. A read-only agent re-checked 17 ticked tasks against their PRD done-whens and the code: B1, H1, H2, H3, R4, I10, I13, I14, J1, J3, N1, N2, N14, V3, V7, V15 and V22.
+  - All 17 match the PRD.
+  - V15: incomplete uploads expire 2 days after a Custom-Time stamp, not through an `age` rule. Completing an upload moves Custom-Time to the year 9999. This still meets "delete incomplete `media/` objects after 2 days".
+  - N14: replant on a flagless guest row is disabled with a tooltip, not hidden, and the API also refuses it. PRD.md:1650 asks only for the same reset menu, so this is acceptable.
+  - A grep for TODO/FIXME/NotImplemented across the CTF and nested modules (tests excluded) found nothing.
+  - I4b, V25 and HUMAN stay `[ ]`, because they need a person. The N8 plant-watcher gap (progress.md:2827) is still a PRD-level decision for a human.
+- **Gate results:**
+  - api/unit_tests: 1662 passed, coverage 97.67% (≥85%).
+  - cloud_functions/tests: 947 passed, coverage 94.28% (≥85%).
+  - build_files: 551 passed.
+  - Frontend `npm test`: 47 files, 574 tests passed.
+  - CTF eslint: exit 0. Group V eslint: exit 0.
+  - Scoped tsc grep: 0 matches for CTF and for Group V (90 tsc errors elsewhere, all pre-existing and outside scope).
+- **Reopened:** none.
