@@ -2455,3 +2455,10 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No frontend files changed.
 - **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. CentOS Stream 9 and VyOS publish no SHA-256. Leap 15.6 needs a wicked net_config that `NestedNetConfig` does not have. V25 and HUMAN need a person.
 - **Next:** Every remaining V6b2 entry needs a person (V-5 hashes, or a PRD decision on Leap 15.6's wicked net_config). I4b, V25 and HUMAN are browser or live checks.
+
+### Iteration 133 — 2026-10-17
+- **Completed:** none. No task in the queue can be done by the loop. I4b, V25 and HUMAN are browser or live checks. Every entry left in V6b2 needs a person: the Microsoft evals and Kali wait on V-5, CentOS Stream 9 and VyOS publish no SHA-256, and Leap 15.6 needs a `NestedNetConfig` value the PRD does not define.
+- **Learned (for whoever answers V-5's Kali part):** `https://kali.download/cloud-images/kali-2026.2/` is a dated directory. It holds `kali-linux-2026.2-cloud-genericcloud-amd64.tar.xz`, and its published `SHA256SUMS` gives `3f4ca86ae1eca0dc2bf2092f065a959508e186c6b44f85758813a8e9a0604f3e`. `tar.xz` is already a `NestedMediaFormat`. I did not download the file or seed it, because the queue says V-5 needs a person's answer first. If a person confirms this URL and format in progress.md, the next iteration can seed `kali-2026.2` the way V6b1 did.
+- **Gate results:** not run, because no code changed.
+- **Blockers:** V-5 (Microsoft hashes; confirm the Kali URL above). CentOS Stream 9 and VyOS have no published SHA-256. Leap 15.6 needs the wicked net_config decision. V25 and HUMAN need a person.
+- **Next:** the loop should stop until a person unblocks one of these. Re-running it as things stand only adds empty iterations.
