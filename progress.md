@@ -2468,3 +2468,22 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** not run, because no code changed.
 - **Blockers:** the same as iteration 133. V-5 (Microsoft hashes; confirm the Kali URL). CentOS Stream 9 and VyOS have no published SHA-256. Leap 15.6 needs the wicked net_config decision. I4b, V25 and HUMAN need a person.
 - **Next:** stop the loop until a person unblocks one of these.
+
+### Verification — 2026-10-17 — PASS
+- **Checked:** the items ticked since the last verification: V6b2i, V6b2j and V6b2k. Parent V6, V6b and V6b2 are still `[ ]`, and so are I4b, V25 and HUMAN. Iterations 133–134 changed no code.
+  - V6b2i: `metasploitable-2` is a `disk_image` with `zip` format, `agent: false`, `net_config: none`, an IDE disk and an e1000 NIC. In `prepare_disk`, `zip|7z` extracts with `7z` and picks the disk through `largest_disk_file`, which matches `*.vmdk`. `p7zip-full` is in `HOST_PACKAGES`.
+  - V6b2j: `iso.gz` is in the Python `NestedMediaFormat` Literal and the TS type. `fetch_media` caches the verified gz through `cache_media`, then expands it with `gzip -dc` to `<key>.iso`. It removes the gz, and on failure it cleans up both files and sets `FAIL_MESSAGE`. The cached-file check uses the expanded `.iso` path.
+  - V6b2k: for `^alpinelinux` osinfo ids, `customize_linux` skips `--firstboot-command`. It uploads `/etc/init.d/agoge-boot` (runs `nameif -c /etc/mactab` and links the qemu-ga port) and the self-removing `/etc/local.d/agoge-firstboot.start`. It enables them with `rc-update` and removes the cloud-init OpenRC services. `write_network_config` replaces `/etc/network/interfaces` whole and writes `/etc/mactab` and a static `resolv.conf`.
+  - Catalog hashes, checked independently:
+    - pfSense: Netgate's `.sha256` gives `883fb7bc…cd9e4`, and `Content-Length` is 574277009. Both match the JSON.
+    - Metasploitable 2: SourceForge's files JSON gives sha256 `2ae8788e…85a1ff`, and `Content-Length` is 865084584. Both match the JSON.
+    - Alpine 3.23.6: I downloaded the qcow2 over https. It matched the published `.sha512` (`f85d04d2…d5a6`). Its SHA-256 `23004bcd…f141` and size 167182336 match the JSON.
+  - The diffs of the three commits have no TODO, FIXME or `NotImplemented`. The new tests exist: `test_a_zip_*`, `test_an_iso_gz_*` and `test_alpine_uses_openrc_and_mactab_instead_of_systemd_firstboot_and_udev`.
+- **Gate results:**
+  - api/unit_tests: 1662 passed, coverage 97.67% (≥85%).
+  - cloud_functions/tests: 921 passed, 96.19% (≥85%).
+  - build_files: 512 passed.
+  - Frontend `npm test`: 47 files, 574 tests passed.
+  - CTF eslint: exit 0. CTF tsc grep: 0 matches.
+  - Group V eslint: exit 0. Group V tsc grep: 0 matches. `tsc` itself exits 2, but only on files outside both scopes.
+- **Reopened:** none.
