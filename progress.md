@@ -2865,3 +2865,23 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** not run; no code changed since iteration 157, and the verification at a992df6 passed every gate.
 - **Blockers:** I4b, V25 and HUMAN need a person. The N8 plant-watcher gap (progress.md:2827) needs a human decision. `## ALL TASKS COMPLETE` is withheld because those items are still `[ ]`.
 - **Next:** stop the loop. This is the seventeenth no-op iteration in a row. Restart it only after a human runs the I4b/HUMAN browser checks and V25, decides the N8 gap, or adds new tasks.
+
+### Verification — 2026-10-18 — PASS
+- **Checked:** no code has changed since the last verification (a992df6). `git diff --stat a992df6 HEAD` touches only progress.md (no-op iterations 170–174), the tree is clean, and no `- [x]`/`- [ ]` lines changed. Three parallel read-only agents checked 69 ticked tasks that the last two verifications had not sampled, against their PRD done-whens and the code:
+  - **Backend:** A1, A4, A6, B2, B3, B4, C1, D1, D3, E1, E2, E4, F1, F2, F3, F5, F7, G1, G3, G4, G6, G7, H4, H6, H7, R1, R3.
+  - **Frontend:** 0.1, 0.2, I1, I2, I5, I6, I8, I9, I12, I15, I17, J2, K1, L1, L2, L4, L6.
+  - **Nested:** N3, N4, N6, N7, N8, N10, N12, N13, N15, V1, V2, V4, V6, V8, V10, V13, V14b, V6e, V6g, V17, V18, V20, V21, V23, V24.
+  - All 69 match the PRD.
+  - I6: `CreateCtfButton.tsx` was removed in 83e5abc because L7 (PRD.md:1617) removes the lab-page button. Creating an event now goes through `CreateCtfDialog`, so I6 counts as superseded, not undone.
+  - `package.json` has only MUI X Community packages.
+  - A grep for TODO/FIXME/NotImplemented across the CTF and nested modules found nothing. The one TODO nearby, at `base_compute_manager.py:37`, has been there since the repo's initial commit and has nothing to do with these tasks.
+  - Bookkeeping only: PRD.md:1671 still shows V6 as `[ ]`, but the code meets it. I did not edit the PRD.
+  - I4b, V25 and HUMAN stay `[ ]`, because they need a person. The N8 plant-watcher gap noted at progress.md:2827 is still a PRD-level decision for a human.
+- **Gate results:**
+  - api/unit_tests: 1662 passed, coverage 97.67% (≥85%).
+  - cloud_functions/tests: 947 passed, coverage 94.28% (≥85%). The Python suites ran one after another, so the coverage files did not mix.
+  - build_files: 551 passed.
+  - Frontend `npm test`: 47 files, 574 tests passed.
+  - CTF eslint: exit 0. Group V eslint: exit 0.
+  - Scoped tsc grep: 0 matches for CTF and for Group V (90 tsc errors elsewhere, all pre-existing and outside scope).
+- **Reopened:** none.
