@@ -6,6 +6,7 @@ import base64
 import bz2
 import gzip
 import hashlib
+import io
 import json
 import lzma
 import os
@@ -14,6 +15,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import textwrap
 import zipfile
 
@@ -954,6 +956,66 @@ def test_a_zip_without_a_disk_file_fails_only_that_guest(builder, tmp_path):
     assert '--name fw' not in log
     assert not (builder.root / MEDIA_DIR.lstrip('/') / 'work-fw').exists()
     assert last['guest-deb'] == 'ready'
+
+
+@needs_tools
+@pytest.mark.skipif(shutil.which('tar') is None or shutil.which('xz') is None, reason='needs tar and xz')
+def test_a_tar_xz_cloud_image_converts_its_disk_raw_then_customizes_it(builder, tmp_path):
+    # The kali-rolling shape: a tar.xz holding one disk.raw. The real member is GNU sparse (25 GiB, ~1 GiB of
+    # data), which GNU tar restores with its holes; tarfile cannot write sparse members, so this one is dense.
+    path = tmp_path / 'kali.tar.xz'
+    with tarfile.open(path, 'w:xz') as archive:
+        data = b'\0' * 4096
+        member = tarfile.TarInfo('disk.raw')
+        member.size = len(data)
+        archive.addfile(member, io.BytesIO(data))
+    image = path.read_bytes()
+    (builder.fake / 'web' / 'kali.tar.xz').write_bytes(image)
+    kali = CATALOG['debian-12'].model_copy(update={
+        'media_url': 'https://kali.example/kali.tar.xz', 'media_sha256': _sha(image),
+        'media_formats': ['tar.xz'], 'group': 'kali', 'osinfo': 'debiantesting', 'net_config': 'netplan'})
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(globals(), 'CATALOG', dict(CATALOG, **{'debian-12': kali}))
+        result, log = builder()
+
+    last, _ = _attributes(builder.fake)
+    work = builder.root / MEDIA_DIR.lstrip('/') / 'work-deb'
+    disk = builder.root / 'var/lib/libvirt/images/deb.qcow2'
+    assert result.returncode == 0, result.stderr
+    assert f'qemu-img convert -f raw -O qcow2 {work}/disk.raw {disk}' in log
+    assert any(line.startswith(f'virt-customize -a {disk} ') for line in log.splitlines())
+    assert not work.exists()
+    assert last['guest-deb'] == 'ready'
+
+
+@needs_tools
+def test_a_7z_linux_disk_image_with_an_agent_converts_its_qcow2_then_customizes_it(builder, tmp_path):
+    # The kali-qemu shape: a 7z holding one qcow2 (FAKE_7Z reads zip), customized like a cloud image so the
+    # admin password and qemu-guest-agent are set.
+    vm = _zip(tmp_path, {'kali-linux-qemu-amd64.qcow2': b'QFI\xfb' + b'\0' * 4096})
+    (builder.fake / 'web' / 'kali.7z').write_bytes(vm)
+    kali = CATALOG['opnsense'].model_copy(update={
+        'family': 'linux', 'group': 'kali', 'media_url': 'https://kali.example/kali.7z',
+        'media_sha256': _sha(vm), 'media_formats': ['7z'], 'osinfo': 'debiantesting', 'agent': True,
+        'net_config': 'nm-keyfile', 'default_username': 'kali'})
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(globals(), 'CATALOG', dict(CATALOG, opnsense=kali))
+        result, log = builder(spec=_spec(fw={'os_id': 'opnsense', 'media_id': None, 'admin_username': 'kali'}))
+
+    last, _ = _attributes(builder.fake)
+    work = builder.root / MEDIA_DIR.lstrip('/') / 'work-fw'
+    disk = builder.root / 'var/lib/libvirt/images/fw.qcow2'
+    assert result.returncode == 0, result.stderr
+    # No -f: qemu-img probes the qcow2 header, as for the zip's vmdk.
+    assert f'qemu-img convert -O qcow2 {work}/kali-linux-qemu-amd64.qcow2 {disk}' in log
+    customize = next(line for line in log.splitlines() if line.startswith(f'virt-customize -a {disk} '))
+    assert 'id -u kali' in customize and '--install qemu-guest-agent ' in customize
+    # Kali has no SELinux, so the keyfile needs no relabel (Debian-family osinfo is not RHEL_FAMILY).
+    assert '--selinux-relabel' not in customize
+    assert not work.exists()
+    assert last['guest-fw'] == 'ready'
 
 
 def _gz_firewall_catalog(content):
