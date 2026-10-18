@@ -52,6 +52,9 @@ RHEL_FAMILY='^(rhel|centos|rocky|almalinux|alma|fedora|ol|oraclelinux|opensuse)'
 ARCH_FAMILY='^archlinux'
 # openSUSE's sudoers asks for root's password (Defaults targetpw), and the cloud image's root is locked.
 SUSE_FAMILY='^opensuse'
+# Alpine runs OpenRC and mdev, not systemd and udev: no --firstboot (libguestfs refuses the distro), no .link
+# files, and no useradd or bash in the base image.
+ALPINE_FAMILY='^alpinelinux'
 
 HEARTBEAT_PID=
 
@@ -385,12 +388,19 @@ prepare_disk() {
 
 # Writes guest $1's per-NIC network files under $2 and prints "local:remote" upload pairs.
 write_network_config() {
-  local guest=$1 out=$2 net_config index mac ip prefix gateway dns dhcp file
+  local guest=$1 out=$2 net_config index mac ip prefix gateway dns dhcp file alpine=false
   net_config=$(guest_value "$guest" .catalog.net_config)
+  guest_value "$guest" .catalog.osinfo | grep -Eq "$ALPINE_FAMILY" && alpine=true
   mkdir -p "$out"
   [ "$net_config" = "netplan" ] && printf 'network:\n  version: 2\n  ethernets:\n' > "$out/90-agoge.yaml"
   # .cfg because Ubuntu 16.04 sources only interfaces.d/*.cfg; Debian sources interfaces.d/*.
   [ "$net_config" = "ifupdown" ] && : > "$out/agoge.cfg"
+  if [ "$net_config" = "ifupdown" ] && [ "$alpine" = true ]; then
+    # Alpine's stub /etc/network/interfaces sources nothing, so this file replaces it, loopback included.
+    printf 'auto lo\niface lo inet loopback\n' > "$out/agoge.cfg"
+    : > "$out/mactab"
+    : > "$out/resolv.conf"
+  fi
   while IFS=$'\t' read -r index mac ip prefix gateway dns dhcp; do
     # A NIC with neither a static address nor DHCP is a pure L2 port; leave it unconfigured.
     if [ "$ip" = "-" ] && [ "$dhcp" != "dhcp" ]; then
@@ -444,12 +454,22 @@ write_network_config() {
         echo "$file:/etc/NetworkManager/system-connections/agoge-$index.nmconnection"
         ;;
       ifupdown)
-        # ifupdown cannot match a MAC, so a udev .link file names the NIC first.
-        file="$out/10-agoge-$index.link"
-        printf '[Match]\nMACAddress=%s\n\n[Link]\nName=agoge%s\n' "$mac" "$index" > "$file"
-        echo "$file:/etc/systemd/network/10-agoge-$index.link"
+        # ifupdown cannot match a MAC, so a udev .link file names the NIC first. Alpine has no udev; its
+        # agoge-boot service runs busybox nameif from /etc/mactab instead.
+        if [ "$alpine" = true ]; then
+          printf 'agoge%s %s\n' "$index" "$mac" >> "$out/mactab"
+        else
+          file="$out/10-agoge-$index.link"
+          printf '[Match]\nMACAddress=%s\n\n[Link]\nName=agoge%s\n' "$mac" "$index" > "$file"
+          echo "$file:/etc/systemd/network/10-agoge-$index.link"
+        fi
         {
-          printf 'allow-hotplug agoge%s\n' "$index"
+          # Alpine's networking service raises only "auto" interfaces; mdev sends no hotplug events.
+          if [ "$alpine" = true ]; then
+            printf 'auto agoge%s\n' "$index"
+          else
+            printf 'allow-hotplug agoge%s\n' "$index"
+          fi
           if [ "$ip" = "-" ]; then
             printf 'iface agoge%s inet dhcp\n' "$index"
           else
@@ -458,6 +478,11 @@ write_network_config() {
             [ "$dns" != "-" ] && printf '  dns-nameservers %s\n' "$dns"
           fi
         } >> "$out/agoge.cfg"
+        # Alpine has no resolvconf to apply dns-nameservers; udhcpc writes resolv.conf only for DHCP NICs.
+        if [ "$alpine" = true ] && [ "$ip" != "-" ] && [ "$dns" != "-" ] \
+          && ! grep -qx "nameserver $dns" "$out/resolv.conf"; then
+          printf 'nameserver %s\n' "$dns" >> "$out/resolv.conf"
+        fi
         ;;
     esac
   done < <(jq -r --arg g "$guest" '
@@ -468,8 +493,53 @@ write_network_config() {
        (if $n.mode == "nat" and $n.parent_address then $n.parent_address else "-" end),
        ($n.parent_address // "-"), (if $n.dhcp then "dhcp" else "static" end)] | @tsv' "$MANIFEST")
   [ "$net_config" = "netplan" ] && echo "$out/90-agoge.yaml:/etc/netplan/90-agoge.yaml"
-  [ "$net_config" = "ifupdown" ] && echo "$out/agoge.cfg:/etc/network/interfaces.d/agoge.cfg"
+  if [ "$net_config" = "ifupdown" ] && [ "$alpine" = true ]; then
+    echo "$out/agoge.cfg:/etc/network/interfaces"
+    echo "$out/mactab:/etc/mactab"
+    [ -s "$out/resolv.conf" ] && echo "$out/resolv.conf:/etc/resolv.conf"
+  elif [ "$net_config" = "ifupdown" ]; then
+    echo "$out/agoge.cfg:/etc/network/interfaces.d/agoge.cfg"
+  fi
   return 0
+}
+
+# Writes the OpenRC files an Alpine guest gets in place of udev and --firstboot under $1, and prints
+# "local:remote" upload pairs. agoge-boot runs in the boot runlevel, before networking and the agent.
+write_alpine_boot_files() {
+  local out=$1
+  mkdir -p "$out"
+  cat > "$out/agoge-boot" <<'SCRIPT'
+#!/sbin/openrc-run
+description="Names Agoge NICs from /etc/mactab and links the guest agent port"
+
+depend() {
+  before net networking qemu-guest-agent
+}
+
+start() {
+  ebegin "Preparing Agoge NICs and the guest agent port"
+  [ -s /etc/mactab ] && nameif -c /etc/mactab
+  # qemu-ga opens /dev/virtio-ports/<name>, a link that udev makes and mdev may not.
+  for port in /sys/class/virtio-ports/*; do
+    [ "$(cat "$port/name" 2>/dev/null)" = org.qemu.guest_agent.0 ] || continue
+    mkdir -p /dev/virtio-ports
+    ln -sf "/dev/${port##*/}" /dev/virtio-ports/org.qemu.guest_agent.0
+  done
+  eend 0
+}
+SCRIPT
+  # The local service runs /etc/local.d/*.start late in the default runlevel; this one removes itself.
+  cat > "$out/agoge-firstboot.start" <<'SCRIPT'
+#!/bin/sh
+ssh-keygen -A && rc-service sshd restart
+root=$(findmnt -nvo SOURCE /)
+parent=$(lsblk -no PKNAME "$root")
+[ -n "$parent" ] && growpart "/dev/$parent" "${root##*[!0-9]}"
+resize2fs "$root"
+rm -f "$0"
+SCRIPT
+  echo "$out/agoge-boot:/etc/init.d/agoge-boot"
+  echo "$out/agoge-firstboot.start:/etc/local.d/agoge-firstboot.start"
 }
 
 # virt-customize for a Linux guest: hostname, admin user, agent, network, cloud-init off.
@@ -509,6 +579,13 @@ customize_linux() {
       --write '/etc/sudoers.d/10-agoge-wheel-auth-self:Defaults:%wheel !targetpw'
       --chmod '0440:/etc/sudoers.d/10-agoge-wheel' --chmod '0440:/etc/sudoers.d/10-agoge-wheel-auth-self')
   fi
+  if echo "$osinfo" | grep -Eq "$ALPINE_FAMILY"; then
+    # The cloud image already has openssh-server-pam; plain openssh-server would conflict with it.
+    ssh_package=openssh-server-pam
+    install="$install,bash,shadow,sudo,cloud-utils-growpart,findmnt,lsblk,e2fsprogs-extra"
+    args+=(--write '/etc/sudoers.d/10-agoge-wheel:%wheel ALL=(ALL:ALL) ALL'
+      --chmod '0440:/etc/sudoers.d/10-agoge-wheel')
+  fi
   if [ "$method" = "cloud_image" ]; then
     packages=$(jq -r --arg g "$guest" '.guests[] | select(.name == $g) | .packages | join(",")' "$MANIFEST")
     install="$install,$ssh_package${packages:+,$packages}"
@@ -518,7 +595,17 @@ customize_linux() {
     --run-command "for group in sudo wheel; do getent group \$group >/dev/null && usermod -aG \$group $user; done; true"
     --password "$user:file:$password_file"
     --run-command 'systemctl enable qemu-guest-agent >/dev/null 2>&1 || true')
-  if [ "$method" = "cloud_image" ]; then
+  if echo "$osinfo" | grep -Eq "$ALPINE_FAMILY"; then
+    while IFS= read -r upload; do
+      args+=(--upload "$upload")
+    done < <(write_alpine_boot_files "$WORK_DIR/boot-$guest")
+    # cloud-init's OpenRC services ignore cloud-init.disabled and would rewrite /etc/network/interfaces.
+    args+=(--chmod '0755:/etc/init.d/agoge-boot' --chmod '0755:/etc/local.d/agoge-firstboot.start'
+      --run-command 'rc-update add agoge-boot boot && rc-update add qemu-guest-agent default && rc-update add sshd default && rc-update add local default'
+      --run-command 'for s in cloud-init-local cloud-init cloud-config cloud-final cloud-init-hotplugd; do rc-update -a del $s >/dev/null 2>&1; done; true'
+      --touch /etc/cloud/cloud-init.disabled
+      --run-command 'rm -f /etc/ssh/ssh_host_*')
+  elif [ "$method" = "cloud_image" ]; then
     # Disabled, not purged: a purge also removes the network config the image boots with (Working Note 16).
     args+=(--touch /etc/cloud/cloud-init.disabled
       --run-command 'rm -f /etc/ssh/ssh_host_*'
