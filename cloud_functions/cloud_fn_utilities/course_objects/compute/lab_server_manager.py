@@ -351,11 +351,23 @@ class LabServerManager(BaseComputeManager):
         self.server_spec.metadata = metadata
 
     def _is_linux_nested_host(self) -> bool:
-        """A Linux server with an ip_aliases NIC: the only kind that may run nested guests (N5)."""
+        """A Linux server with an ip_aliases NIC, or one the unit's CTF block names as a nested_guests parent."""
         # Reads the spec, not self.ip_aliases, because _add_nics sets that after _add_metadata runs
         if getattr(self.server_spec, 'os', None) != 'linux':
             return False
-        return any(isinstance(nic, dict) and nic.get('ip_aliases') for nic in getattr(self.server_spec, 'nics', None) or [])
+        if any(isinstance(nic, dict) and nic.get('ip_aliases') for nic in getattr(self.server_spec, 'nics', None) or []):
+            return True
+        return self._declares_nested_guests()
+
+    def _declares_nested_guests(self) -> bool:
+        """True when ctf.nested_guests on the unit (already loaded by AssessmentManager) names this server."""
+        unit = getattr(self.assessment, 'unit', None)
+        if not isinstance(unit, dict):
+            return False
+        guests = (unit.get('ctf') or {}).get('nested_guests') or []
+        # Instance names are f"{parent_id}-{spec name}"; guests reference the spec name
+        spec_name = self.server_spec.name.removeprefix(f"{getattr(self.server_spec, 'parent_id', None)}-")
+        return any(isinstance(guest, dict) and guest.get('server') == spec_name for guest in guests)
 
     @classmethod
     def _add_ctf_watcher(cls, items: list) -> None:

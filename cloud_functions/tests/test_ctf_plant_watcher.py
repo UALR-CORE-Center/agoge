@@ -82,6 +82,39 @@ def test_installer_is_merged_only_for_linux_servers_with_ip_aliases(os_name, nic
     assert script.strip() == LINUX_LOADER.strip()
 
 
+def _unit_with_guests(*servers):
+    return {'ctf': {'nested_guests': [
+        {'name': f'guest-{i}', 'server': server, 'domain': f'guest-{i}', 'operating_system': 'linux'}
+        for i, server in enumerate(servers)
+    ]}}
+
+
+def test_linux_server_named_by_nested_guests_gets_the_installer_without_ip_aliases():
+    manager = _manager(nics=[PLAIN_NIC])
+    manager.server_spec.parent_id = "abcdefghij"
+    manager.assessment.unit = _unit_with_guests('hv-host')
+
+    script = _startup_script(manager)
+
+    assert script.count(WATCHER_INSTALLER.strip()) == 1
+    assert script.index(WATCHER_INSTALLER.strip()) < script.index(LINUX_LOADER.strip())
+
+
+@pytest.mark.parametrize("os_name, unit", [
+    ('linux', _unit_with_guests('other-host')),      # guests belong to a different server
+    ('linux', {'ctf': {'nested_guests': []}}),
+    ('linux', {'ctf': None}),                        # not a CTF unit
+    ('linux', {}),
+    ('windows', _unit_with_guests('hv-host')),       # no systemd to run a watcher
+])
+def test_nested_guests_installer_needs_a_linux_server_the_guests_name(os_name, unit):
+    manager = _manager(os_name=os_name, nics=[PLAIN_NIC])
+    manager.server_spec.parent_id = "abcdefghij"
+    manager.assessment.unit = unit
+
+    assert WATCHER_INSTALLER.strip() not in _startup_script(manager)
+
+
 def test_existing_startup_script_is_kept_ahead_of_the_installer():
     script = _startup_script(_manager(startup_script=CUSTOM_SCRIPT))
 
