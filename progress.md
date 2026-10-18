@@ -2769,3 +2769,20 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** not run; no code changed since iteration 157, and the verification at b294682 passed every gate.
 - **Blockers:** I4b, V25 and HUMAN need a person. `## ALL TASKS COMPLETE` is withheld because they are still `[ ]`.
 - **Next:** stop the loop. This is the seventh no-op iteration in a row. Restart it only after a human runs the I4b/HUMAN browser checks and V25, or adds new tasks.
+
+### Verification — 2026-10-18 — PASS
+- **Checked:** no code has changed since the last verification (b294682): `git diff --stat b294682 HEAD` touches only progress.md (the no-op iterations 160–164), and the tree is clean. Three parallel read-only agents spot-checked 20 ticked tasks against their PRD done-whens and the code:
+  - **Backend:** B1, H1, H2, H3, N1, N2, R4.
+  - **Frontend:** I10, I13, I14, J1, J3, L7, N14.
+  - **Nested images:** V3, V7, V12, V14, V15, V22.
+  - All 20 match the PRD. Product keys are never persisted (V12). Flags are compared in constant time (B1). The award and rate-limit steps run in Firestore transactions (H2/H3). Only MUI X Community grid imports are used.
+  - One agent flagged V15 for downloading `gs://` media with curl. That was wrong: `builder.sh:276` fetches uploaded media with the gcloud CLI copy command as the PRD says, and only the sha256 cache (`gcs_get`, :216) uses curl, as iteration 2d33bea recorded.
+  - A grep for TODO/FIXME/NotImplemented across the CTF and nested modules found only `mktemp` `XXXXXX` templates and a product-key format hint.
+  - I4b, V25 and HUMAN stay `[ ]`, because they need a person.
+- **Gate results:**
+  - api/unit_tests: 1662 passed, coverage 97.67% (≥85%).
+  - cloud_functions/tests: 947 passed, coverage 94.28% (≥85%).
+  - build_files: 551 passed.
+  - Frontend `npm test`: 47 files, 574 tests passed.
+  - CTF eslint: exit 0. Group V eslint: exit 0. Scoped tsc grep: 0 matches (CTF and Group V).
+- **Reopened:** none.
