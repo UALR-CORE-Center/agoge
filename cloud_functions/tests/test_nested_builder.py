@@ -546,6 +546,46 @@ def test_opensuse_relabels_and_lets_wheel_sudo_with_its_own_password(builder):
 
 
 @needs_tools
+def test_alpine_uses_openrc_and_mactab_instead_of_systemd_firstboot_and_udev(builder):
+    alpine = _entry('alpine-3.23', family='linux', group='linux', install_method='cloud_image',
+                    media_url='https://cloud.debian.example/debian-12.qcow2', media_sha256=_sha(DEB_IMAGE),
+                    media_formats=['qcow2'], osinfo='alpinelinux3.23', agent=True, net_config='ifupdown')
+    CATALOG['alpine-3.23'] = alpine
+    try:
+        result, log = builder(spec=_spec(deb={'os_id': 'alpine-3.23'}))
+    finally:
+        del CATALOG['alpine-3.23']
+
+    customize = _commands(log, 'virt-customize')[0]
+    assert result.returncode == 0, result.stderr
+    # useradd comes from shadow and the post-install shell is /bin/bash; neither is in Alpine's base.
+    assert '--install qemu-guest-agent,bash,shadow,sudo,cloud-utils-growpart,findmnt,lsblk,e2fsprogs-extra,' \
+           'openssh-server-pam,nmap' in customize
+    assert '/etc/sudoers.d/10-agoge-wheel:%wheel ALL=(ALL:ALL) ALL' in customize
+    # libguestfs refuses --firstboot on Alpine, so a self-removing local.d script does that work.
+    assert '--firstboot-command' not in customize
+    assert '/etc/local.d/agoge-firstboot.start' in customize
+    assert 'rc-update add agoge-boot boot' in customize and 'rc-update add local default' in customize
+    assert 'rc-update -a del $s' in customize
+    # The stub interfaces file is replaced whole; there is no udev to read a .link file.
+    assert ':/etc/network/interfaces ' in customize + ' ' and '/etc/mactab' in customize
+    assert '.link' not in customize
+    net = builder.root / 'var/lib/agoge-nested/work/net-deb'
+    interfaces = (net / 'agoge.cfg').read_text()
+    assert interfaces.startswith('auto lo\niface lo inet loopback\n')
+    assert 'auto agoge0\niface agoge0 inet static\n  address 10.10.0.10/24\n' in interfaces
+    assert 'allow-hotplug' not in interfaces
+    assert (net / 'mactab').read_text().startswith('agoge0 ')
+    # No resolvconf on Alpine, so a static NIC's DNS server must land in resolv.conf itself.
+    assert (net / 'resolv.conf').read_text() == 'nameserver 10.10.0.1\n'
+    assert '/etc/resolv.conf' in customize
+    boot = (builder.root / 'var/lib/agoge-nested/work/boot-deb/agoge-boot').read_text()
+    assert 'before net networking qemu-guest-agent' in boot and 'nameif -c /etc/mactab' in boot
+    firstboot = (builder.root / 'var/lib/agoge-nested/work/boot-deb/agoge-firstboot.start').read_text()
+    assert 'resize2fs "$root"' in firstboot and firstboot.rstrip().endswith('rm -f "$0"')
+
+
+@needs_tools
 def test_non_arch_guests_skip_the_pacman_setup(builder):
     result, log = builder()
 

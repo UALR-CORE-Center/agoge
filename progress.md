@@ -173,7 +173,8 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
     - [x] **V6b2h** (iteration 129) Debian 11 (`ifupdown`), 12 and 13 (`netplan`) genericcloud images, pinned to dated `cloud.debian.org/images/cloud/<codename>/<build>/` files. Debian publishes only `SHA512SUMS`, so each SHA-256 was computed from a download that first matched the published SHA-512.
     - [x] **V6b2i** (iteration 130) Metasploitable 2 (`disk_image`, `zip`/vmdk, agentless, osinfo `ubuntu8.04`, IDE disk, e1000 NIC), pinned to `downloads.sourceforge.net/project/metasploitable/Metasploitable2/metasploitable-linux-2.0.0.zip` with the SHA-256 SourceForge publishes for the file.
     - [x] **V6b2j** (iteration 131) pfSense CE 2.7.2 (`manual_iso`, agentless, osinfo `freebsd14.0`), pinned to `atxfiles.netgate.com/mirror/downloads/pfSense-CE-2.7.2-RELEASE-amd64.iso.gz` with the SHA-256 from Netgate's published `.sha256`. Adds the `iso.gz` media format: `builder.sh` `fetch_media` caches the verified download, then expands it once and keeps only the ISO.
-    - [ ] **V6b2** The rest of V6b (Kali, CentOS Stream 9, openSUSE Leap 15.6/Alpine, Microsoft evals, VyOS). Leap 15.6's Cloud image (`openSUSE-Leap-15.6-Minimal-VM.x86_64-15.6.0-Cloud-Build19.146.qcow2`, sha256 `0a572041…53bd`, verified) ships wicked, not NetworkManager, so it needs a `NestedNetConfig` value the PRD does not define. Microsoft and Kali stay BLOCKED on V-5. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file.
+    - [x] **V6b2k** (iteration 132) Alpine Linux 3.23 BIOS cloud-init image (`ifupdown`, osinfo `alpinelinux3.23`), pinned to `dl-cdn.alpinelinux.org/alpine/v3.23/releases/cloud/alpine-3.23.6-x86_64-bios-cloudinit-r0.qcow2`. Alpine publishes only `.sha512`, so the SHA-256 was computed from a download that first matched it. `builder.sh` gains an OpenRC/mdev path for `alpinelinux` osinfo ids.
+    - [ ] **V6b2** The rest of V6b (Kali, CentOS Stream 9, openSUSE Leap 15.6, Microsoft evals, VyOS). Leap 15.6's Cloud image (`openSUSE-Leap-15.6-Minimal-VM.x86_64-15.6.0-Cloud-Build19.146.qcow2`, sha256 `0a572041…53bd`, verified) ships wicked, not NetworkManager, so it needs a `NestedNetConfig` value the PRD does not define. Microsoft and Kali stay BLOCKED on V-5. Each Linux distro can be done like V6b1, from a dated release dir with a published SHA-256 file.
 - [x] **V6c** (found in iteration 116; done in iteration 118) Ubuntu 16.04's cloud image needs `net_config: ifupdown`. But its `/etc/network/interfaces` sources only `interfaces.d/*.cfg`, so `builder.sh` `write_network_config` must write `interfaces.d/agoge.cfg`, not `interfaces.d/agoge` (Debian sources `*`, so the rename is safe there). Then add `ubuntu-16.04` (`xenial/release-20211001/ubuntu-16.04-server-cloudimg-amd64-disk1.img`, sha256 `fff2494a70bcaffb59f26f71ec49e137dd87d319341c35832dbe0ea65ff15140`).
 - [x] **V6d** (found in iteration 116; done in iteration 117) Ubuntu 18.04 ships netplan.io 0.99 (`bionic/release-20230607` manifest), and `routes: [{to: default}]` needs netplan 0.103+. Make `builder.sh` write `to: 0.0.0.0/0`, which every netplan version accepts. Then add `ubuntu-18.04` (`bionic/release-20230607/ubuntu-18.04-server-cloudimg-amd64.img`, sha256 `8dd2e6b5e5aad20c3f836123b300cba9861249408cbb07c359145a65d6bab6b6`).
 - [x] **V7** Nested host validator — spec + done-when at PRD.md:1673
@@ -2435,3 +2436,22 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
   - No CTF frontend files changed.
 - **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. CentOS Stream 9 and VyOS publish no SHA-256. Leap 15.6 needs a wicked net_config that `NestedNetConfig` does not have. V25 and HUMAN need a person.
 - **Next:** Alpine (needs builder work for apk/openrc and a net_config). Otherwise the rest of V6b2 needs a person.
+
+### Iteration 132 — 2026-10-17
+- **Completed:** V6b2k, split out of V6b2. `common/data/nested_os_catalog.json` has 44 entries. `alpine-3.23` follows `archlinux`: `cloud_image`, BIOS, virtio, `net_config` `ifupdown`, 512/1024 MB, 2/8 GB disk. Download SHA-512 `f85d04d2…d5a6` matched the published `.sha512`. SHA-256 `23004bcd…f141`, size 167182336, virtual size 216 MiB.
+- **Learned:**
+  - libguestfs `firstboot.ml` errors "guest type alpinelinux is not supported" for `--firstboot-command`, and it supports `apk` for `--install`. So for Alpine, `customize_linux` skips `--firstboot-command`. It uploads a self-removing `/etc/local.d/agoge-firstboot.start` that does the ssh-keygen and root grow, and enables `local`.
+  - Alpine has mdev, not udev, so a `.link` file does nothing. Alpine's `ifupdown` writes `/etc/mactab`, and a boot-runlevel `/etc/init.d/agoge-boot` (`before net networking qemu-guest-agent`) runs busybox `nameif`. busybox has `CONFIG_NAMEIF=y`. The same script links `/dev/virtio-ports/org.qemu.guest_agent.0` from sysfs, because I could not confirm that mdev creates that link.
+  - Alpine's stub `/etc/network/interfaces` sources nothing, so the builder replaces it whole (lo plus `auto agogeN`). Static DNS goes to `/etc/resolv.conf` because Alpine has no resolvconf.
+  - cloud-init's OpenRC services are removed with `rc-update -a del`, because `cloud-init.disabled` alone may not stop them rewriting the interfaces file. The package itself stays (Working Note 16).
+  - The base image already has sudo and `openssh-server-pam`, so `ssh_package` is `openssh-server-pam`. Plain `openssh-server` could conflict with it. `bash` (needed by post-install's `/bin/bash -s`), `shadow` (`useradd`), and the grow tools are added.
+  - 3.24.1 is in the CDN listing, but its files return 404, so the pin is 3.23.6.
+  - Risk for V25: none of the OpenRC path has run on a real guest. Check that nameif renames the NIC, that qemu-ga answers, and that the root grows.
+- **Tests:** `test_nested_builder.py::test_alpine_uses_openrc_and_mactab_instead_of_systemd_firstboot_and_udev`.
+- **Gate results:**
+  - api/unit_tests: 1662 passed, 97.67%.
+  - cloud_functions/tests: 921 passed, 94.28%.
+  - build_files: 512 passed.
+  - No frontend files changed.
+- **Blockers:** V6b2's Microsoft and Kali entries are BLOCKED on V-5. CentOS Stream 9 and VyOS publish no SHA-256. Leap 15.6 needs a wicked net_config that `NestedNetConfig` does not have. V25 and HUMAN need a person.
+- **Next:** Every remaining V6b2 entry needs a person (V-5 hashes, or a PRD decision on Leap 15.6's wicked net_config). I4b, V25 and HUMAN are browser or live checks.
