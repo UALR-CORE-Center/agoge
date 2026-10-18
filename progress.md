@@ -2517,3 +2517,17 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 - **Gate results:** not run, because no code changed.
 - **Blockers:** the same as iteration 133. V-5 (Microsoft hashes; confirm the Kali URL). CentOS Stream 9 and VyOS publish no SHA-256. Leap 15.6 needs the wicked `net_config` decision. I4b, V25 and HUMAN need a person.
 - **Next:** stop the loop until a person unblocks one of these.
+
+### Verification — 2026-10-17 — PASS
+- **Checked:** every `[x]` task, by diffing against the last verified PASS (f851ac4). `git diff --stat f851ac4 HEAD` shows only progress.md changed (+30 lines, from iterations 135–139), and the working tree was clean. So no code has changed since a full PASS. Spot checks:
+  - None of the CTF or nested code has a TODO, FIXME or `NotImplemented`. The scan covered `api/core/ctf*`, `common/utilities/ctf_*`, `course_objects/ctf*`, `handlers/ctf_handler.py`, the frontend Ctf components and services, and the NestedImage form and services.
+  - `common/data/nested_os_catalog.json` has 44 entries and 25 SHA-256 values. All 25 are unique 64-character hex strings, none look like placeholders, and the file has no `http://` URLs.
+  - The open items are still correctly `[ ]` and blocked on a person: I4b, V6, V6b, V6b2, V25 and HUMAN.
+- **Gate results:**
+  - api/unit_tests: 1662 passed, coverage 97.67% (≥85%).
+  - cloud_functions/tests: 921 passed, coverage 94.28% (≥85%).
+  - build_files: 512 passed.
+  - Frontend `npm test`: 47 files, 574 tests passed, exit 0.
+  - CTF eslint: exit 0. CTF tsc grep: 0 matches.
+  - Group V eslint: exit 0. Group V tsc grep: 0 matches. `tsc` itself exits 2, but only on files outside both scopes.
+- **Reopened:** none.
