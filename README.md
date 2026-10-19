@@ -29,7 +29,7 @@ git clone https://github.com/UALR-CORE-Center/agoge.git
 cd agoge
 python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
-PYTHONPATH=.:build_files:cloud_functions ./venv/bin/python setup.py
+./venv/bin/python setup.py
 ```
 
 On Windows, use `py -3.12 -m venv venv` and `.\venv\Scripts\pip install -r requirements.txt`, then see
@@ -103,16 +103,14 @@ Most deployments use the script to 1) create a fresh customer-specific project, 
 Run from the repository root:
 
 ```bash
-PYTHONPATH=.:build_files:cloud_functions ./venv/bin/python setup.py
+./venv/bin/python setup.py
 ```
 
-`PYTHONPATH` is required: the script imports `cloud_deployment` (from `build_files/`),
-`common` (from the repository root), and `cloud_fn_utilities` (from `cloud_functions/`),
-so a bare `python setup.py` fails on import. Use the project virtualenv's interpreter;
+No `PYTHONPATH` is needed: `setup.py` adds the repository root, `build_files/` and
+`cloud_functions/` to `sys.path` itself. Use the project virtualenv's interpreter;
 the system Python lacks the dependencies. On Windows PowerShell:
 
 ```powershell
-$env:PYTHONPATH = ".;build_files;cloud_functions"
 .\venv\Scripts\python setup.py
 ```
 

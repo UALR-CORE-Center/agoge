@@ -1,4 +1,15 @@
 # agoge/setup.py
+# ruff: noqa: E402  -- the source roots below must be on sys.path before the project imports
+import sys
+from pathlib import Path
+
+# Same roots as PYTHONPATH=.:build_files:cloud_functions; cloud_functions is needed because a
+# maintenance operation imported by menu_options pulls in cloud_fn_utilities at module load.
+_ROOT = Path(__file__).resolve().parent
+for _source_root in (_ROOT, _ROOT / 'build_files', _ROOT / 'cloud_functions'):
+    if str(_source_root) not in sys.path:
+        sys.path.insert(0, str(_source_root))
+
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from cloud_deployment.utilities import console as ui
 from cloud_deployment.operations.env_and_quotas.gcloud_environment_manager import GcloudEnvironmentManager
