@@ -80,6 +80,27 @@ Use this optional setup action when you want the WireGuard lab to appear as a
 normal reusable row in the selected site's Lab Catalog. The direct **Build
 WireGuard Lab** shortcut remains available without this step.
 
+The uploader is currently on `feature/wireguard-kit-bootstrap` in [PR #16](https://github.com/UALR-CORE-Center/agoge/pull/16);
+it is not available on `release/2027-spring` until that PR is merged. Before
+running setup, stop any existing setup process and update your local checkout
+from the repository root:
+
+```sh
+git status --short --branch
+git fetch origin
+git switch feature/wireguard-kit-bootstrap
+git pull --ff-only origin feature/wireguard-kit-bootstrap
+```
+
+Preserve any local edits reported by `git status` before switching branches.
+Restart `setup.py` after pulling; an already running process keeps the menu it
+loaded at startup. The updated **Server Images & Build Specs** menu has
+**7. Upload WireGuard Community Lab Template** and **8. Back to Main Menu**.
+If **7** is still **Back to Main Menu**, the running process is using an older
+checkout. In an IDE, check that its script path and source roots point to the
+updated repository. GCP authentication, IAM permissions, and the selected
+project do not control whether this menu option appears.
+
 1. Run `python setup.py` from the Agoge source revision deployed to the site.
 2. Select the target environment. For the test environment, select project
    **`test-dev-787001`**. Confirm the project ID before continuing; selecting an
