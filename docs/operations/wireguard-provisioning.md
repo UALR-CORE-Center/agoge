@@ -80,16 +80,15 @@ Use this optional setup action when you want the WireGuard lab to appear as a
 normal reusable row in the selected site's Lab Catalog. The direct **Build
 WireGuard Lab** shortcut remains available without this step.
 
-The uploader is currently on `feature/wireguard-kit-bootstrap` in [PR #16](https://github.com/UALR-CORE-Center/agoge/pull/16);
-it is not available on `release/2027-spring` until that PR is merged. Before
-running setup, stop any existing setup process and update your local checkout
-from the repository root:
+The uploader was merged into `release/2027-spring` in [PR #16](https://github.com/UALR-CORE-Center/agoge/pull/16).
+Before running setup, stop any existing setup process and update your local
+checkout from the repository root:
 
 ```sh
 git status --short --branch
 git fetch origin
-git switch feature/wireguard-kit-bootstrap
-git pull --ff-only origin feature/wireguard-kit-bootstrap
+git switch release/2027-spring
+git pull --ff-only origin release/2027-spring
 ```
 
 Preserve any local edits reported by `git status` before switching branches.
@@ -100,6 +99,11 @@ If **7** is still **Back to Main Menu**, the running process is using an older
 checkout. In an IDE, check that its script path and source roots point to the
 updated repository. GCP authentication, IAM permissions, and the selected
 project do not control whether this menu option appears.
+
+For repeated backend testing after uploading, use the
+[local API/Cloud Function debug runner](local-backend-debugging.md). It can build
+a lab and claim a student workout from the command line without deploying each
+Python change.
 
 1. Run `python setup.py` from the Agoge source revision deployed to the site.
 2. Select the target environment. For the test environment, select project

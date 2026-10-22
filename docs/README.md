@@ -18,6 +18,7 @@ Agoge documentation is organized by audience. These pages describe the current i
 - [Firebase authentication setup and troubleshooting](operations/firebase-authentication.md)
 - [Community WireGuard example](examples/community-wireguard.md)
 - [Managed WireGuard factory labs and deployment](operations/wireguard-provisioning.md)
+- [Debug API and Cloud Function builds locally](operations/local-backend-debugging.md)
 - [Contributing](../CONTRIBUTING.md)
 - [Security policy](../SECURITY.md)
 - [Release notes](../release-notes/)

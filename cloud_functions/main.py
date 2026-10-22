@@ -9,7 +9,7 @@ from handlers.control_handler import ControlHandler
 logger = Logger(LoggerNames.CLOUD_FN, class_name="main")
 
 
-def agoge_cloud_function(event, context, debug_mode: bool = False):
+def agoge_cloud_function(event, context, debug_mode: bool = False, *, env_dict: dict = None):
     """
     Responds to a Pub/Sub event from other cloud functions to build servers.
 
@@ -21,6 +21,7 @@ def agoge_cloud_function(event, context, debug_mode: bool = False):
          metadata. The `event_id` field contains the Pub/Sub message ID. The
          `timestamp` field contains the publish time.
          debug_mode (bool): Whether to run functions directly or use PubSub
+         env_dict (dict): Optional environment supplied by a local debug runner.
 
     Returns:
         A success status
@@ -39,6 +40,8 @@ def agoge_cloud_function(event, context, debug_mode: bool = False):
             "BUDGET ALERT: Budget exceeded. Cloud Function execution halted.",
             extra={"event_id": context.event_id, "attributes": attributes}
         )
+        if debug_mode:
+            raise RuntimeError('Budget exceeded; the local Cloud Function did not run')
         return
 
     if not attributes:
@@ -61,12 +64,13 @@ def agoge_cloud_function(event, context, debug_mode: bool = False):
     })
 
     try:
+        environment = {'env_dict': env_dict} if env_dict is not None else {}
         if handler == PubSub.Handlers.BUILD:
-            BuildHandler(event['attributes'], debug_mode=debug_mode).route()
+            BuildHandler(event['attributes'], debug_mode=debug_mode, **environment).route()
         elif handler == PubSub.Handlers.CONTROL:
-            ControlHandler(event['attributes'], debug=debug_mode).route()
+            ControlHandler(event['attributes'], debug=debug_mode, **environment).route()
         elif handler == PubSub.Handlers.MAINTENANCE:
-            MaintenanceHandler(debug=debug_mode).route()
+            MaintenanceHandler(debug=debug_mode, **environment).route()
         elif handler == PubSub.Handlers.AGENCY:
             pass
         else:

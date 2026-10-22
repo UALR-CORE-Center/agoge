@@ -1,11 +1,9 @@
 import json
-import datetime
 from enum import Enum
 from json import JSONDecodeError
 from fastapi import Request
 from pydantic import ValidationError
-from typing import List, Union
-from collections import namedtuple
+from typing import Callable, List, Union
 
 from common.constants.build_constants import BuildConstants
 from common.constants.database import (
@@ -35,9 +33,14 @@ from utilities.lms.lms_canvas import LMSCanvas
 class Workout:
     def __init__(
         self,
-        env_dict: dict = None
+        env_dict: dict = None,
+        *,
+        debug_dispatch: Callable[[dict], None] | None = None,
     ) -> None:
         self.class_name = self.__class__.__name__
+        # Local runners explicitly inject the dispatcher. An HTTP request's
+        # debug flag alone must not enable in-process worker execution.
+        self.debug_dispatch = debug_dispatch
         self.log_name = LoggerNames.API
         self.collection = DbCollections.WORKOUT
         self.env = CloudEnv(log_name=self.log_name, env_dict=env_dict)
@@ -582,19 +585,11 @@ class Workout:
         self,
         message_attrs: dict
     ) -> None:
-        """
-        Bypass Pub/Sub and directly invoke the cloud function.
-        Constructs a mock event/context similar to what Cloud Functions receive.
-        """
-        FakeContext = namedtuple("FakeContext", ["event_id", "timestamp"])
-        context = FakeContext(
-            event_id="debug-event-id",
-            timestamp=datetime.datetime.utcnow().isoformat()
-        )
-        # The main Cloud Function expects event["attributes"], so build that structure
-        event = {"attributes": message_attrs}
-
-        # agoge_cloud_function(event, context, debug_mode=True)
+        """Run a local worker only when configured by the calling process."""
+        dispatcher = getattr(self, 'debug_dispatch', None)
+        if dispatcher is None:
+            raise BadRequest('Local debug execution requires a configured local dispatcher')
+        dispatcher(message_attrs)
 
     @staticmethod
     def _safe_to_perform_action(
