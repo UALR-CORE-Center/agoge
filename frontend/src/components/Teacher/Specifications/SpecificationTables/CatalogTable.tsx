@@ -21,6 +21,7 @@ import {specificationService} from '../../../../services/Specification/specifica
 import {SpecificationEditId} from "../../../../services/Specification/specificationEdit.model";
 import {specificationEditService} from '../../../../services/Specification/specificationEdit.service';
 import {unitService} from '../../../../services/Unit/unit.service';
+import {wireguardService} from '../../../../services/WireGuard/wireguard.service';
 import {SpecificationStates} from '../../../../types/AgogeStates';
 import {AppUiObjectNames} from '../../../../types/AppObjectNames';
 import {ActionButton} from "../../../Buttons/ControlButtons/ActionButton";
@@ -119,7 +120,10 @@ const CatalogTable: React.FC = () => {
         setWorkoutModalOpen(false);
         setWaitingModalOpen(true);
         try {
-            const response = await unitService.create(formData);
+            const response = selectedRow?.managed_wireguard
+                ? await wireguardService.createLab({kit_id: formData.kit_id, build_count: formData.build_count,
+                    expires: formData.expires, student_image: formData.student_image})
+                : await unitService.create(formData);
             if (response?.build_id) {
                 navigate(`${URL_TEACHER_UNIT}/${response.build_id}`);
             } else {
@@ -263,6 +267,27 @@ const CatalogTable: React.FC = () => {
 
     const getButtonConfig = () => {
         const buttonConfig: ButtonConfig[] = [
+            {
+                label: "Build WireGuard Lab",
+                variant: 'contained',
+                color: "primary",
+                icon: <Build />,
+                requiresSelection: false,
+                addTooltip: true,
+                tooltip: "Build a shared Ubuntu gateway and student machines for one registered factory kit",
+                onClick: () => {
+                    setSelectedRow({
+                        id: "managed-wireguard",
+                        managed_wireguard: true,
+                        summary: {
+                            name: "WireGuard Factory Lab",
+                            description: "Connect student workstations to one enrolled factory kit through a shared Ubuntu 24.04 WireGuard gateway.",
+                        },
+                        servers: [{wireguard_gateway: true}],
+                    });
+                    setWorkoutModalOpen(true);
+                },
+            },
             {
                 label: "Create New Template",
                 variant: 'contained',
@@ -411,6 +436,7 @@ const CatalogTable: React.FC = () => {
             {selectedRow && (
                 <>
                     <WorkoutModal
+                        key={selectedRow.id}
                         open={workoutModalOpen}
                         user={agogeUser.user}
                         onClose={() => setWorkoutModalOpen(false)}

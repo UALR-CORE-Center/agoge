@@ -1,5 +1,4 @@
 import re
-import secrets
 from typing import Callable, Optional
 
 from pydantic import ValidationError
@@ -24,6 +23,9 @@ class WireGuardEndpointRegistry:
     """Allocate and resolve the public identifiers used by WireGuard gateways."""
 
     MAX_ALLOCATION_ATTEMPTS = 100
+    # Keep each transaction bounded. A full pool may require several scans,
+    # but the cursor advances only over occupied IDs or a newly claimed ID.
+    CIRCULAR_SCAN_SIZE = 100
     PUBLIC_STATUSES = {"active"}
     CLAIMABLE_STATUSES = {"reserved", "active", "error"}
     TOMBSTONE_RETENTION_SECONDS = 24 * 60 * 60
@@ -44,6 +46,8 @@ class WireGuardEndpointRegistry:
         log_name: LoggerNames = LoggerNames.API,
         peer_id_factory: Optional[Callable[[], str]] = None,
         timestamp_factory: Optional[Callable[[], float]] = None,
+        number_min: int = 10000,
+        number_max: int = 99999,
     ) -> None:
         self.env_dict = env_dict
         if db is None:
@@ -58,8 +62,20 @@ class WireGuardEndpointRegistry:
             )
         self.db = db
         self.logger = Logger(log_name=log_name, class_name=self.__class__.__name__)
-        self.peer_id_factory = peer_id_factory or self._new_peer_id
+        # An injected candidate generator is retained for legacy tests and
+        # import tooling. Normal allocation always uses the transactional cursor.
+        self.peer_id_factory = peer_id_factory
         self.timestamp_factory = timestamp_factory or Timestamps.get_current_timestamp_utc
+        if (
+            isinstance(number_min, bool)
+            or isinstance(number_max, bool)
+            or not isinstance(number_min, int)
+            or not isinstance(number_max, int)
+            or not 10000 <= number_min <= number_max <= 99999
+        ):
+            raise BadRequest("WireGuard allocation bounds must be five-digit numbers in ascending order")
+        self.number_min = number_min
+        self.number_max = number_max
 
     def allocate(
         self,
@@ -79,6 +95,11 @@ class WireGuardEndpointRegistry:
                     unit_id,
                     registration["id"],
                 ).public_endpoint()
+
+        if self.peer_id_factory is None:
+            return self._allocate_circular(
+                unit_id, server_name, external_ip_name, expires,
+            )
 
         for _ in range(self.MAX_ALLOCATION_ATTEMPTS):
             peer_id = self.peer_id_factory()
@@ -108,6 +129,88 @@ class WireGuardEndpointRegistry:
                 raise BadRequest(f"Invalid WireGuard endpoint configuration: {error}") from error
 
         raise BadRequest("The WireGuard endpoint ID pool is exhausted or busy; retry the request")
+
+    def _allocate_circular(
+        self,
+        unit_id: str,
+        server_name: str,
+        external_ip_name: Optional[str],
+        expires: Optional[float],
+    ) -> WireGuardEndpointModel:
+        """Claim the first free number at the cursor, wrapping at the pool end.
+
+        The cursor, Unit claim and candidate share one Firestore transaction.
+        Retrying after a concurrent allocation re-reads the cursor and claim;
+        two calls for the same Unit therefore converge on its existing number.
+        Occupied IDs include released tombstones until maintenance purges them.
+        """
+        claim = self._claim_document(unit_id)
+        cursor = self.db.db.collection(DbCollections.WIREGUARD_ENDPOINT_CURSOR.value).document("allocation")
+        remaining = self.number_max - self.number_min + 1
+
+        while remaining:
+            scan_size = min(self.CIRCULAR_SCAN_SIZE, remaining)
+
+            def reserve(transaction):
+                claim_snapshot = claim.get(transaction=transaction)
+                if claim_snapshot.exists:
+                    claimed_id = self._claimed_endpoint_id(claim_snapshot.to_dict(), unit_id)
+                    claimed = self._endpoint_document(claimed_id).get(transaction=transaction)
+                    if not claimed.exists:
+                        raise BadRequest("WireGuard endpoint claim is missing its endpoint")
+                    endpoint = WireGuardEndpointRecordModel(**claimed.to_dict())
+                    self._verify_claim_owner(endpoint, unit_id)
+                    self._verify_claimable(endpoint)
+                    return endpoint
+
+                snapshot = cursor.get(transaction=transaction)
+                next_number = snapshot.to_dict().get("next_number") if snapshot.exists else self.number_min
+                if not isinstance(next_number, int) or isinstance(next_number, bool):
+                    raise BadRequest("WireGuard allocation cursor is invalid")
+                if not self.number_min <= next_number <= self.number_max:
+                    next_number = self.number_min
+
+                for _ in range(scan_size):
+                    peer_id = str(next_number)
+                    candidate = self._endpoint_document(peer_id)
+                    occupied = candidate.get(transaction=transaction).exists
+                    next_number = (
+                        self.number_min if next_number == self.number_max else next_number + 1
+                    )
+                    if occupied:
+                        continue
+
+                    timestamp = self._timestamp()
+                    endpoint = WireGuardEndpointRecordModel(
+                        id=peer_id,
+                        hostname=self._hostname(peer_id),
+                        unit_id=unit_id,
+                        server_name=server_name,
+                        port=self._port(),
+                        external_ip_name=external_ip_name,
+                        status="reserved",
+                        created_timestamp=timestamp,
+                        updated_timestamp=timestamp,
+                        expires=expires,
+                    )
+                    # Firestore requires all reads before any write. No other
+                    # reads occur after the candidate is selected.
+                    transaction.set(candidate, endpoint.model_dump())
+                    transaction.set(claim, self._claim_data(unit_id, peer_id))
+                    transaction.set(cursor, {"next_number": next_number})
+                    return endpoint
+
+                # This bounded slice was completely occupied. Advancing it is
+                # serialized with allocations by the same cursor document.
+                transaction.set(cursor, {"next_number": next_number})
+                return None
+
+            endpoint = self.db.transaction(reserve)
+            if endpoint is not None:
+                return endpoint.public_endpoint()
+            remaining -= scan_size
+
+        raise BadRequest("The WireGuard endpoint ID pool is exhausted; release a lab and wait for its reuse quarantine")
 
     def _claim_existing_endpoint(
         self,
@@ -145,7 +248,7 @@ class WireGuardEndpointRegistry:
         self,
         registration: WireGuardEndpointRecordModel,
     ) -> Optional[WireGuardEndpointRecordModel]:
-        """Atomically reserve both the Unit claim and randomly selected endpoint ID."""
+        """Atomically reserve the Unit claim and an explicitly supplied candidate."""
         claim = self._claim_document(registration.unit_id)
         candidate = self._endpoint_document(registration.id)
 
@@ -455,7 +558,7 @@ class WireGuardEndpointRegistry:
         try:
             return WireGuardEndpointModel(
                 id=peer_id,
-                hostname=f"{prefix}-{peer_id}.{project}.{suffix}.",
+                hostname=f"{prefix}{peer_id}.{project}.{suffix}.",
                 server_name="validation-only",
             ).hostname
         except ValidationError as error:
@@ -507,10 +610,6 @@ class WireGuardEndpointRegistry:
             raise BadRequest(
                 f"WireGuard endpoint claim is not allocatable in state {endpoint.status}"
             )
-
-    @staticmethod
-    def _new_peer_id() -> str:
-        return str(secrets.randbelow(90000) + 10000)
 
     @staticmethod
     def _validate_peer_id(peer_id: str) -> None:

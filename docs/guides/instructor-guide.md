@@ -43,6 +43,21 @@ Only use an LMS provider that your deployment administrator has configured and t
 
 For Canvas, configure the **API Key (Canvas)** and **URL (Canvas)** under **Settings** before building the Lab. LMS-specific setup varies by institution, so do not include credentials in lab instructions or repository files.
 
+## Build a WireGuard factory Lab
+
+In **Teachers → New Lab**, click **Build WireGuard Lab**. Select an available
+registered kit and a checked-in student workstation image, then set the student
+capacity and expiration. Agoge provisions the shared gateway from the official
+Ubuntu image and configures WireGuard and the assigned equipment routes
+automatically. A custom gateway image or hand-edited network specification is
+not needed.
+
+An administrator must first enroll the kit and install its authenticated Pi
+client. Lab details show the assigned kit, lab number, endpoint, and separate
+gateway service and factory tunnel readiness. Students use the usual join-code
+and browser workstation flow. See the [WireGuard deployment and kit setup
+guide](../operations/wireguard-provisioning.md) for prerequisites and troubleshooting.
+
 ## Distribute a join-code Lab
 
 The Lab detail card displays the learner claim URL, **Join Code**, **Copy Join Code**, and current **Capacity**.

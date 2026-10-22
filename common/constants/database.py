@@ -65,3 +65,6 @@ class DbCollections(str, Enum):
     PROJECT_INFO = 'project-info'
     WIREGUARD_ENDPOINT = 'wireguard-endpoint'
     WIREGUARD_ENDPOINT_CLAIM = 'wireguard-endpoint-claim'
+    WIREGUARD_ENDPOINT_CURSOR = 'wireguard-endpoint-cursor'
+    WIREGUARD_KIT = 'wireguard-kit'
+    WIREGUARD_LEASE = 'wireguard-lease'

@@ -5,6 +5,7 @@ import React from "react";
 import {useClipboard} from "../../../hooks/useClipboard";
 import {URL_STUDENT_JOIN} from "../../../router/urls";
 import {absoluteUrl} from "../../../utilities/appContext";
+import {WireGuardLabStatus} from "../../Teacher/WireGuard/WireGuardLabStatus";
 
 interface UnitInfoCardProps {
     data: any;
@@ -13,7 +14,7 @@ interface UnitInfoCardProps {
 
 export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
     const {copy} = useClipboard();
-    const {summary, workspace_settings, join_code, roster, wireguard_endpoint} = props.data;
+    const {summary, workspace_settings, join_code, roster, wireguard_endpoint, wireguard_lease} = props.data;
     const totalCapacity = workspace_settings ? workspace_settings.count : 0;
     const joinUrl = absoluteUrl(URL_STUDENT_JOIN);
     return (
@@ -158,7 +159,7 @@ export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
 
                         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
                             <Typography component="p" sx={{ fontWeight: 800, m: 0 }}>
-                                Endpoint ID:
+                                Lab number:
                             </Typography>
                             <Paper
                                 variant="outlined"
@@ -180,8 +181,7 @@ export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
                                 </Tooltip>
                             </Paper>
                             <Chip
-                                label={wireguard_endpoint.status}
-                                color={wireguard_endpoint.status === 'active' ? 'success' : 'default'}
+                                label={`Endpoint ${wireguard_endpoint.status}`}
                                 size="small"
                             />
                         </Box>
@@ -204,6 +204,7 @@ export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
                                 </span>
                             </Tooltip>
                         </Box>
+                        <WireGuardLabStatus endpoint={wireguard_endpoint} lease={wireguard_lease} />
                     </Box>
                 )}
             </Paper>
