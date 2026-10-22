@@ -20,6 +20,7 @@ export const transformToUnit = (data: any): Unit => {
         unit_type: data.unit_type,
         workspace_settings: data.workspace_settings,
         wireguard_endpoint: data.wireguard_endpoint ?? null,
+        wireguard_lease: data.wireguard_lease ?? null,
     };
 };
 

@@ -8,6 +8,7 @@ from common.utilities.timestamps import Timestamps
 from common.models.agoge import WorkoutModel, UnitModel, ServerModel
 
 from ..unit.unit_dhcp_service import UnitDHCP
+from ...server_specific.guacamole.display_proxy import DisplayProxy
 from .base_workout import BaseWorkout
 from ...gcp.packet_mirroring.packet_mirror_factory import PacketMirrorFactory
 
@@ -82,9 +83,34 @@ class CommunityWorkout(BaseWorkout):
                 )
             self.state_manager.state_transition(self.s.COMPLETED_SERVERS)
 
+        if getattr(self.unit_model, 'wireguard_lease', None):
+            self._build_managed_display_proxy()
+
         self.state_manager.state_transition(self.s.READY)
         self.logger.info(f"{self.class_name}:{self.workout_id} - Finished building {server_build_count} for "
                          f"workout ID")
+
+    def _build_managed_display_proxy(self) -> None:
+        """Give each student a proxy to only that Workout's assigned machines."""
+        students = []
+        for template in self.unit_model.servers or []:
+            if template.community_server:
+                continue
+            server_name = f'{self.workout_id}-{template.name}'
+            record = self.db.get(collection_name=DbCollections.SERVER, doc_id=server_name)
+            if not record:
+                raise LookupError(f'Student server {server_name} is missing its provisioned record')
+            students.append(ServerModel(**record))
+        self.workout.servers = students
+        # Guacamole API and the browser need the actual DHCP addresses, rather
+        # than the address-less templates copied from the Community Unit.
+        self.update_record(doc_id=self.workout_id, data=self.workout, update_keys=['servers'])
+        DisplayProxy(
+            build_id=self.workout_id,
+            build_spec=self.workout,
+            collection=DbCollections.WORKOUT,
+            env_dict=self.env_dict,
+        ).build()
 
     def start(self):
         """
@@ -351,6 +377,9 @@ class CommunityWorkout(BaseWorkout):
             # touched only on the first start or the last stop.
             if not is_community_server or (is_community_server and boundary_workout):
                 servers.append(server_name)
+
+        if getattr(self.unit_model, 'wireguard_lease', None):
+            servers.append(f'{self.workout_id}-display-guacamole-server')
 
         return servers, boundary_workout
 

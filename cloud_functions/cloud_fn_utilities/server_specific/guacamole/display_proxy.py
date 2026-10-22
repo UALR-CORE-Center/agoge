@@ -1,8 +1,10 @@
 from ipaddress import ip_address, ip_network
+import uuid
 from typing import Type, Union
 from pydantic import BaseModel
 from common.constants.database import DbCollections, DatabaseTypes, DATABASE_NAME
 from common.constants.build_constants import BuildConstants
+from common.constants.states import ServerStates
 from common.document_database import DocumentDatabaseFactory, DatabaseMask
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
@@ -11,6 +13,7 @@ from common.models.agoge import WorkoutModel, UnitModel, ServerModel, NicModel, 
 from cloud_fn_utilities.course_objects.compute.factory import ComputeManagerFactory
 from cloud_fn_utilities.state_managers import ServerStateManager
 from cloud_fn_utilities.server_specific.guacamole.guacamole_configuration import GuacamoleConfiguration
+from cloud_fn_utilities.course_objects.unit.unit_dhcp_service import UnitDHCP
 
 
 class DisplayProxy:
@@ -54,6 +57,12 @@ class DisplayProxy:
         self.db_mask = DatabaseMask(logger=self.logger)
         self.guac = GuacamoleConfiguration(self.build_id, env_dict=self.env_dict)
         self.compute_manager = ComputeManagerFactory.create_manager_object(env_dict=self.env_dict)
+        self.managed_community_unit = None
+        if collection == DbCollections.WORKOUT and self.build_model.parent_id:
+            parent = self.db.get(collection_name=DbCollections.UNIT, doc_id=self.build_model.parent_id)
+            if parent and parent.get('wireguard_lease'):
+                self.managed_community_unit = parent['id']
+                self.unit_dhcp = UnitDHCP(unit_id=self.managed_community_unit)
         self._create_network_settings()
 
     def _set_build_type(
@@ -78,7 +87,9 @@ class DisplayProxy:
 
     def build(self):
         self.prepare_server_record()
-        self.compute_manager.load(self.server_id)
+        unit_id = getattr(self, 'managed_community_unit', None)
+        load_kwargs = {'network_prefix': unit_id} if unit_id else {}
+        self.compute_manager.load(self.server_id, **load_kwargs)
         self.compute_manager.build()
 
     def prepare_server_record(self) -> dict:
@@ -92,12 +103,14 @@ class DisplayProxy:
         build_record = self.model(**build_record)
         proxy_configs = []
         proxy_connections = []
-        for server in self.server_specs:
+        for server in self.server_specs or []:
             human_interaction = server.human_interaction
             if human_interaction is not None:
                 for connection in human_interaction:
                     if connection.display:
                         server_ip = server.nics[0].internal_ip
+                        if not server_ip:
+                            raise ValueError(f"Student server {server.name} has no assigned address for its display connection")
                         proxy_config = self.guac.prepare_guac_connection(connection=connection, server_ip=server_ip)
                         proxy_configs.append(proxy_config)
                         proxy_connection = ProxyConnectionModel(
@@ -123,11 +136,12 @@ class DisplayProxy:
 
         build_record_dict = build_record.model_dump()
         update_mask = self.db_mask.get(build_record_dict, keys=['proxy_connections'])
-        self.db.update(
-            collection_name=self.collection,
-            doc_id=self.build_id,
-            data=update_mask
-        )
+        if not self.managed_community_unit:
+            self.db.update(
+                collection_name=self.collection,
+                doc_id=self.build_id,
+                data=update_mask
+            )
 
         # Generate DisplayProxy server object
         guac_startup_script = self.guac.get_guac_startup_script(proxy_configs)
@@ -137,7 +151,7 @@ class DisplayProxy:
             name=self.server_name,
             image=BuildConstants.MachineImages.GUACAMOLE_SSL.format(
                 project=BuildConstants.SharedResourceProjects.MAIN_SHARED_RESOURCE_PROJECT),
-            tags=['student-entry', f"{self.build_id}-student-entry"],
+            tags=['student-entry', f"{self.managed_community_unit or self.build_id}-student-entry"],
             machine_type=BuildConstants.GoogleMachineTypes.E2_MEDIUM.value,
             nics=[
                 NicModel(
@@ -152,6 +166,9 @@ class DisplayProxy:
             guacamole_startup_script=guac_startup_script
         )
         server_record = server_model.model_dump()
+        if self.managed_community_unit:
+            server_record['no_service_account'] = True
+            return self._claim_managed_proxy(server_record, sorted_list)
         self.db.update(
             collection_name=DbCollections.SERVER,
             doc_id=self.server_id,
@@ -159,7 +176,50 @@ class DisplayProxy:
         )
         return server_record
 
+    def _claim_managed_proxy(self, server_record: dict, connections: list) -> dict:
+        """Persist one proxy identity, DHCP claim and UI credentials atomically.
+
+        Duplicate deliveries must not replace credentials after the VM received
+        its startup metadata. The server document retains the original pair of
+        startup script and connection list until that incarnation is deleted.
+        """
+        server_ref = self.db.db.collection(DbCollections.SERVER.value).document(self.server_id)
+        workout_ref = self.db.db.collection(DbCollections.WORKOUT.value).document(self.build_id)
+        candidate_claim_id = uuid.uuid4().hex
+        connection_data = [item.model_dump() for item in connections]
+
+        def claim(transaction):
+            snapshot = server_ref.get(transaction=transaction)
+            existing = snapshot.to_dict() if snapshot.exists else {}
+            candidate = dict(server_record)
+            selected_connections = connection_data
+            if (
+                existing.get('guacamole_startup_script')
+                and existing.get('proxy_connections')
+                and existing.get('state') != ServerStates.DELETED.value
+                and not existing.get(UnitDHCP.LEASE_RELEASED_FIELD)
+            ):
+                candidate['guacamole_startup_script'] = existing['guacamole_startup_script']
+                selected_connections = existing['proxy_connections']
+            candidate['proxy_connections'] = selected_connections
+            # All reads in UnitDHCP's callback precede its writes. This callback
+            # then writes only the matching browser credentials, without reads.
+            claimed = self.unit_dhcp._claim_server_leases(
+                transaction,
+                self.server_id,
+                candidate,
+                candidate_claim_id,
+            )
+            transaction.set(workout_ref, {'proxy_connections': selected_connections}, merge=True)
+            return claimed
+
+        return self.db.transaction(claim)
+
     def _create_network_settings(self) -> None:
+        if self.managed_community_unit:
+            self.network_name = BuildConstants.Networks.WORKOUT_EXTERNAL_NAME
+            self.internal_ip = None  # UnitDHCP chooses and durably claims it.
+            return
         if self.firewalls or self.build_type not in [
             BuildConstants.BuildType.WORKOUT, BuildConstants.BuildType.ESCAPE_ROOM
         ]:

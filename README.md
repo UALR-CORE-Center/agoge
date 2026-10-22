@@ -43,6 +43,7 @@ python setup.py
 - [Instructor Guide](docs/guides/instructor-guide.md)
 - [Learner Guide](docs/guides/learner-guide.md)
 - [Documentation Index](docs/README.md)
+- [Managed WireGuard factory labs](docs/operations/wireguard-provisioning.md)
 
 ## Architecture Overview
 Agoge runs entirely in Google Cloud and uses several managed services:

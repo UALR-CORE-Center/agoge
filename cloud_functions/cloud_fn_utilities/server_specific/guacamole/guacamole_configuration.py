@@ -204,7 +204,7 @@ class GuacamoleConfiguration:
             "connection_name": f"{self.build_id}-{self.connection_ctr}"
         }
 
-        self.logger.debug(f"Prepared Guacamole connection: {connection_dict}")
+        self.logger.debug(f"Prepared Guacamole {protocol} connection to {server_ip}")
         self.connection_ctr += 1
         return connection_dict
 

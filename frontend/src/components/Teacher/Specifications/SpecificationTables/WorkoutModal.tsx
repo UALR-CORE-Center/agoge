@@ -27,6 +27,9 @@ import { SafeAgogeUser, UserCourses } from "../../../../services/User/user.model
 import { userService } from '../../../../services/User/user.service';
 import NumberInputField from '../../../Common/FormInputs/NumberInputField';
 import { TagChip } from "../TagChips";
+import {WireGuardKitSelector} from "../../WireGuard/WireGuardKitSelector";
+import {isWireGuardLab} from "../../../../services/WireGuard/wireguard.utils";
+import {WireGuardStudentImageSelector} from "../../WireGuard/WireGuardStudentImageSelector";
 
 interface WorkoutModalProps {
     open: boolean;
@@ -46,6 +49,12 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
     const [courses, setCourses] = useState<UserCourses>({});
     const [displayedCourses, setDisplayedCourses] = useState([{ value: '', label: '-- Select a LMS --' }]);
     const [displayedCodes, setDisplayedCodes] = useState([{ value: '', label: '-- Select a Course Code --' }]);
+    const [kitId, setKitId] = useState("");
+    const [kitsAvailable, setKitsAvailable] = useState(false);
+    const [studentImage, setStudentImage] = useState("");
+    const [studentImagesAvailable, setStudentImagesAvailable] = useState(false);
+    const wireguardLab = isWireGuardLab(selectedRow);
+    const managedWireguardLab = selectedRow.managed_wireguard === true;
 
     const userId = user ? user.uid : "";
     const summary = selectedRow.summary;
@@ -158,7 +167,8 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
         e.preventDefault();
         if (validateForm()) {
             setErrorMessage(null);
-            onSubmit(formData);
+            onSubmit(wireguardLab ? {...formData, kit_id: kitId,
+                ...(managedWireguardLab ? {student_image: studentImage} : {})} : formData);
         } else {
             setErrorMessage("Please fill out all required fields.");
         }
@@ -166,6 +176,8 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
 
     const validateForm = () => {
         let valid = true;
+        if (wireguardLab && (!kitId || !kitsAvailable)) valid = false;
+        if (managedWireguardLab && (!studentImage || !studentImagesAvailable)) valid = false;
         if (!formData.expires || formData.expires.toUTCString() === "Invalid Date") {
             valid = false;
         }
@@ -189,7 +201,7 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
     return (
         <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth fullScreen={fullScreen}>
             <DialogTitle sx={{ overflowWrap: 'anywhere' }}>
-                {summary.name}#{selectedRow.discriminator}
+                {summary.name}{selectedRow.discriminator ? `#${selectedRow.discriminator}` : ''}
                 <Divider />
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1 }}>
                     {summaryTags && summaryTags.length > 0 && (
@@ -218,6 +230,10 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
                     display={"flex"}
                     flexDirection={"column"}
                 >
+                    {wireguardLab && <WireGuardKitSelector open={open} value={kitId}
+                        onChange={setKitId} onAvailabilityChange={setKitsAvailable} />}
+                    {managedWireguardLab && <WireGuardStudentImageSelector open={open} value={studentImage}
+                        onChange={setStudentImage} onAvailabilityChange={setStudentImagesAvailable} />}
                     <FormControl margin={"normal"} required={true}>
                         <LocalizationProvider
                             dateAdapter={AdapterDateFns}
@@ -245,7 +261,7 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
                         />
                     </FormControl>
 
-                    <FormGroup>
+                    {!managedWireguardLab && <FormGroup>
                         <FormControlLabel
                             control={
                                 <Checkbox
@@ -255,9 +271,9 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
                             }
                             label="Build with LMS"
                         />
-                    </FormGroup>
+                    </FormGroup>}
 
-                    <FormControl margin={"normal"} required={formData.lms_integration}>
+                    {!managedWireguardLab && <FormControl margin={"normal"} required={formData.lms_integration}>
                         <InputLabel id={"lms-select-label"}>Learning Management System</InputLabel>
                         <Select
                             id={"lms-select"}
@@ -271,9 +287,9 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
                                 <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
                             ))}
                         </Select>
-                    </FormControl>
+                    </FormControl>}
 
-                    <FormControl margin={"normal"} required={formData.lms_integration}>
+                    {!managedWireguardLab && <FormControl margin={"normal"} required={formData.lms_integration}>
                         <InputLabel id={"course-code-label"}>Course Code</InputLabel>
                         <Select
                             id={"course-code"}
@@ -289,7 +305,7 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
                                 </MenuItem>
                             ))}
                         </Select>
-                    </FormControl>
+                    </FormControl>}
 
                     <DialogActions >
                         <Button
@@ -304,8 +320,10 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
                             type="submit"
                             variant="contained"
                             color="primary"
+                            disabled={(wireguardLab && (!kitId || !kitsAvailable))
+                                || (managedWireguardLab && (!studentImage || !studentImagesAvailable))}
                         >
-                            Build Workout!
+                            Build Lab
                         </Button>
                     </DialogActions>
                 </Box>

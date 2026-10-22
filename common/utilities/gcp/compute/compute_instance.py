@@ -12,7 +12,8 @@ from google.cloud.compute_v1 import (
     ResetInstanceRequest,
     DetachDiskInstanceRequest,
     Disk,
-    AttachDiskInstanceRequest
+    AttachDiskInstanceRequest,
+    SetMetadataInstanceRequest,
 )
 from googleapiclient.discovery import Resource
 
@@ -170,6 +171,22 @@ class ComputeInstanceAPI(BaseComputeAPI):
 
     def update(self, resource_name: str, wait: bool = True, **kwargs) -> bool:
         raise NotImplemented("Method not yet implemented")
+
+    def set_metadata(self, resource_name: str, metadata, wait: bool = True) -> bool:
+        """Replace metadata using the caller's freshly read fingerprint."""
+        client = self.client()
+        return self._make_request(
+            client_request=client.set_metadata,
+            action='set metadata',
+            resource=resource_name,
+            wait=wait,
+            request=SetMetadataInstanceRequest(
+                instance=resource_name,
+                project=self.project,
+                zone=self.zone,
+                metadata_resource=metadata,
+            ),
+        )
 
     def start(
         self,
