@@ -32,7 +32,7 @@ Choose expiration dates and capacities conservatively. Allow time for late work,
 4. Set **Expires** to the final date and time learners should have access. Include any planned late-work window.
 5. For a join-code Lab, set **Max number of students** from 1 to 100. This is the maximum number of learner Workouts that can be claimed, not merely an expected enrollment.
 6. If the Lab is connected to an LMS, enable **Build with LMS**, select the configured provider, and choose the **Course Code**.
-7. Confirm with **Build Workout!**. This is the build dialog's current button label.
+7. Confirm with the dialog's **Build Lab** button.
 8. Wait for Agoge to open the Lab detail page. The page contains the Lab summary, expiration controls, distribution information, and **Student Lab Workouts** table.
 
 A join-code build creates the Lab record first. Agoge provisions an individual Workout when each learner claims the Lab. An LMS build uses the course roster; select the required learner rows in **Student Lab Workouts** and click **Build** when their Workouts need to be provisioned.
@@ -45,18 +45,53 @@ For Canvas, configure the **API Key (Canvas)** and **URL (Canvas)** under **Sett
 
 ## Build a WireGuard factory Lab
 
-In **Teachers → New Lab**, click **Build WireGuard Lab**. Select an available
-registered kit and a checked-in student workstation image, then set the student
-capacity and expiration. Agoge provisions the shared gateway from the official
-Ubuntu image and configures WireGuard and the assigned equipment routes
-automatically. A custom gateway image or hand-edited network specification is
-not needed.
+An administrator must first register the factory kit under **Admins → Build
+Manager → WireGuard Kits**, authorize your sign-in email, and configure the kit's authenticated Pi
+client. The kit must be enabled and unassigned. A student workstation image must
+already be checked in with a working password-based SSH, RDP, or VNC display
+connection. Agoge uses an official Ubuntu image for the gateway and supplies its
+WireGuard startup code automatically.
 
-An administrator must first enroll the kit and install its authenticated Pi
-client. Lab details show the assigned kit, lab number, endpoint, and separate
-gateway service and factory tunnel readiness. Students use the usual join-code
-and browser workstation flow. See the [WireGuard deployment and kit setup
-guide](../operations/wireguard-provisioning.md) for prerequisites and troubleshooting.
+### Use the uploaded WireGuard template
+
+Ask the deployment operator to run `python setup.py`, select your site's project,
+then choose **Server Images & Build Specs → Upload WireGuard Community Lab
+Template**. The operator selects the student image, your instructor email, and a
+catalog ID; the default ID is `wireguard-factory-lab`. Uploading the template does
+not create a gateway or assign a kit.
+
+1. Sign in to the correct site and open **Teachers → New Lab**. The heading is
+   **Lab Catalog**. Refresh after the operator uploads the template.
+2. Select the checkbox for **WireGuard Factory Lab** and click **Build Lab**.
+3. Select your available **Registered kit**. The template already specifies the
+   student workstation image; the kit supplies the equipment network.
+4. Set **Expires** and **Max number of students**. For your first test, choose one
+   student and a short future expiration. Leave **Build with LMS** disabled.
+5. Click the dialog's **Build Lab** button and wait for the lab detail page.
+6. Verify the assigned kit, lab number, hostname, DNS suffix, and UDP port. Wait
+   for **Gateway service ready** and, with the Pi online, **Factory tunnel
+   connected**. Read any reported error before proceeding.
+7. Copy the claim URL and join code, claim a test Workout, and open its browser
+   workstation. Confirm access to the assigned equipment and isolation from
+   other kits before sharing the lab with learners.
+
+For the test site, the operator selects **`test-dev-787001`** in setup; with
+`project_path=test-dev`, instructors use `https://app.agoge-labs.com/test-dev/`.
+The uploaded catalog record exists only in that selected project.
+
+### Build directly without a catalog upload
+
+1. Open **Teachers → New Lab**, then click **Build WireGuard Lab** without
+   selecting a catalog row.
+2. Select an available **Registered kit** and a checked-in **Student workstation
+   image**. Confirm the Kali image selection if it is supplied by default.
+3. Set the student capacity and expiration, then click **Build Lab**.
+4. Complete the readiness and test-Workout checks above.
+
+Both paths provision the same managed gateway and assigned equipment routes;
+neither requires a custom gateway image or hand-edited network specification.
+See the [WireGuard deployment and kit setup guide](../operations/wireguard-provisioning.md)
+for setup prompts, kit enrollment, readiness checks, and troubleshooting.
 
 ## Distribute a join-code Lab
 
