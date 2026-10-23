@@ -13,6 +13,9 @@ from cloud_deployment.utilities import console as ui
 CLOUD_BUILD_CONFIGS = Path(__file__).resolve().parent / 'cloudbuild'
 
 # Uploaded with neither image nor function source; .env is kept on purpose.
+# gcloud's per-minute API rate limits (e.g. Resource Manager reads) clear on their own.
+QUOTA_ERROR_PATTERN = r'status=\[429\]|Quota exceeded|RESOURCE_EXHAUSTED'
+
 STAGING_IGNORE = ('__pycache__', '*.pyc', '.DS_Store', '*.bak', 'tests', 'unit_tests', '*.http')
 
 
@@ -32,6 +35,13 @@ class Commands:
         "--region={region} "
         "--allow-unauthenticated " 
         "--service-account={service_account}"
+    )
+    # The default TCP probe passes as soon as gunicorn binds the port, before the workers have imported
+    # the app; a min instance then idles half-loaded with throttled CPU and its first request waits ~25 s.
+    # An HTTP probe (api/health.py) keeps startup CPU until a worker actually answers.
+    API_STARTUP_PROBE = (
+        "--startup-probe=httpGet.path=/health/ready,httpGet.port=8080,"
+        "periodSeconds=3,timeoutSeconds=3,failureThreshold=60"
     )
     ADD_DEFAULT_COMPUTE_EDITOR_ROLE = (
         "gcloud projects add-iam-policy-binding {project} "
@@ -123,6 +133,8 @@ class Commands:
             project=self.env.project,
             service_account=service_account
         )
+        if app_type == self.AppType.API:
+            cmd = f"{cmd} {self.API_STARTUP_PROBE}"
         if min_instance:
             return f"{cmd} --min-instances=1"
         return cmd
@@ -354,7 +366,8 @@ class AgogeApp:
                 ui.skip('Not deployed: API deploy failed')
                 return False
             command = self.commands.deploy_cloud_function(source=f'./{staging}/')
-            if not self._stream_command_output(command, phase='Building & deploying function'):
+            if not self._stream_command_output(command, phase='Building & deploying function',
+                                               retry_on=QUOTA_ERROR_PATTERN, attempts=4):
                 ui.note("Cloud Function deployment failed")
                 return False
             return self._set_scheduler()
@@ -401,9 +414,9 @@ class AgogeApp:
         return True
 
     @staticmethod
-    def _stream_command_output(command: str, phase: str | None = None) -> bool:
+    def _stream_command_output(command: str, phase: str | None = None, **retry) -> bool:
         """Run a command on the live task board; its full output goes to the task log."""
-        return ui.run_command(command, phase=phase)
+        return ui.run_command(command, phase=phase, **retry)
 
     def _write_env_files(self, *, include_frontend: bool = True):
         """

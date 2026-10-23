@@ -279,11 +279,9 @@ const ImageListTable: React.FC = () => {
         ))
         setCancelModal({open: false, row: undefined});
         try {
-            if (selectedRow.image_exists || selectedRow.is_shared) {
-                await handlePostRequest(String(PubSub.Actions.CANCEL), selectedRow);
-            } else{
-                await imageService.delete_image(selectedRow.name)
-            }
+            // Always CANCEL, never delete: image_exists can be stale, and deleting on Cancel once removed
+            // a real image (V21b). Cancel keeps the template checked in; Delete has its own confirmation.
+            await handlePostRequest(String(PubSub.Actions.CANCEL), selectedRow);
             showSnackbar('success', 'Cancel changes request accepted. The image list will update when it finishes.');
         } catch (error: any) {
             showSnackbar('error', error.message || 'Failed to cancel changes.');

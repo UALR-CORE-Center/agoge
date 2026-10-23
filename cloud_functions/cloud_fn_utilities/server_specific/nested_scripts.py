@@ -47,6 +47,20 @@ def render_runtime() -> str:
     return _render('runtime.sh', {'HOST_JSON': HOST_JSON_PATH, 'BRIDGE_PREFIX': BRIDGE_PREFIX})
 
 
+def render_direct_connect(slot: int) -> str:
+    """Return startup-script lines that forward outside SSH on the host's primary address to the slot's guest."""
+    return _render('direct_connect.sh', {'HOST_JSON': HOST_JSON_PATH, 'SLOT': str(int(slot))})
+
+
+def direct_connect_slot(human_interaction: list | None) -> int | None:
+    """The jumpbox's alias slot: the first displayed SSH connection to a nested guest, else None."""
+    for connection in human_interaction or []:
+        if (isinstance(connection, dict) and connection.get('display') and connection.get('protocol') == 'ssh'
+                and connection.get('alias_index') is not None):
+            return int(connection['alias_index'])
+    return None
+
+
 def render_runtime_unit() -> str:
     """Return the agoge-nested-runtime systemd unit."""
     return _render(RUNTIME_UNIT_NAME, {'RUNTIME_PATH': RUNTIME_PATH})

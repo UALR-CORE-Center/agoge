@@ -69,17 +69,22 @@ export const fillAliasIps = (
 };
 
 /**
- * Guacamole connections for a nested image's guests, in guest order: an exposed Windows guest gets RDP and an
- * exposed Linux guest SSH, both on its first alias slot with the guest's admin credentials; any other guest
- * with a console gets VNC to the console port on the parent. A guest the catalog does not know is never
- * guessed at: it gets only its console.
+ * Guacamole connections for a nested image's exposed guests, in guest order: a Windows guest gets RDP and a
+ * Linux guest SSH, both on its alias slot with the guest's admin credentials. An exposed guest the catalog does
+ * not know is never guessed at: it gets only its console, VNC to the console port on the parent. Guests that are
+ * not exposed get nothing, so students reach them only from inside the lab. All are `display` so DisplayProxy
+ * registers them with Guacamole.
  */
 export const nestedConnections = (nested: NestedHostSpec, catalog: NestedOsCatalogEntry[]): HumanInteraction[] =>
     nested.guests.flatMap((guest): HumanInteraction[] => {
-        const family = catalog.find(entry => entry.id === guest.os_id)?.family ?? null;
         const slot = nested.exposures.findIndex(([name]) => name === guest.name);
-        if (slot >= 0 && (family === 'windows' || family === 'linux')) {
+        if (slot < 0) {
+            return [];
+        }
+        const family = catalog.find(entry => entry.id === guest.os_id)?.family ?? null;
+        if (family === 'windows' || family === 'linux') {
             return [{
+                display: true,
                 protocol: family === 'windows' ? 'rdp' : 'ssh',
                 username: guest.admin_username,
                 password: guest.admin_password,
@@ -92,12 +97,33 @@ export const nestedConnections = (nested: NestedHostSpec, catalog: NestedOsCatal
             return [];
         }
         return [{
+            display: true,
             protocol: 'vnc',
             password: nested.vnc_passwords[guest.name],
             port,
             nested_guest: guest.name,
         }];
     });
+
+/**
+ * The connections a student is shown for a server. When any is `display` (proxied through Guacamole), only those:
+ * a nested host's own login is hidden behind its exposed guests. Otherwise all, as before, for direct-connect
+ * servers, except on a nested host (NIC 0 alias IPs), which then shows none.
+ */
+export const directConnection = (interactions: HumanInteraction[] | null | undefined): HumanInteraction | undefined =>
+    // Mirrors direct_connect_slot in nested_scripts.py: the guest the host forwards outside SSH to
+    (interactions ?? []).find(interaction =>
+        interaction.display && interaction.protocol === 'ssh' && interaction.alias_index != null);
+
+export const studentConnections = (
+    interactions: HumanInteraction[] | null | undefined,
+    nestedHost = false,
+): HumanInteraction[] => {
+    const all = interactions ?? [];
+    const displayed = all.filter(interaction => interaction.display);
+    // A nested host's undisplayed connection is its own login: never a student's, even with no guest connections
+    return displayed.length || nestedHost ? displayed : all;
+};
 
 // "Add connections" replaces the guest connections it made before and keeps the parent's own
 export const mergeNestedConnections = (

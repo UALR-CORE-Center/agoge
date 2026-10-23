@@ -64,8 +64,7 @@ describe('NestedGuestsPanel', () => {
         await waitFor(() => expect(serverForm.handleServerValueChange).toHaveBeenCalled());
         expect(serverForm.handleServerValueChange).toHaveBeenCalledWith(ServerFormKeys.serverHumanInteraction, [
             {protocol: 'ssh', username: 'root'},
-            {protocol: 'rdp', username: 'admin', password: 'pw', alias_index: 0, nested_guest: 'dc'},
-            {protocol: 'vnc', password: 'vncka001', port: 5902, nested_guest: 'kali'},
+            {display: true, protocol: 'rdp', username: 'admin', password: 'pw', alias_index: 0, nested_guest: 'dc'},
         ], 0);
     });
 

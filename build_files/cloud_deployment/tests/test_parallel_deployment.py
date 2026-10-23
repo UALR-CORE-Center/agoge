@@ -61,6 +61,38 @@ def test_command_output_merges_stderr_into_the_task_log():
     assert tasks[0].state == 'failed'
 
 
+def _run_flaky(tmp_path, monkeypatch, message, attempts=3):
+    # Fails with `message` on the first run only, then succeeds.
+    monkeypatch.setattr(ui.time, 'sleep', MagicMock())
+    marker = tmp_path / 'ran-once'
+    command = f'if [ -e {marker} ]; then exit 0; fi; touch {marker}; echo "{message}"; exit 1'
+    result = ui.run_tasks('Flaky', [('Flaky', lambda: ui.run_command(
+        command, retry_on=app_module.QUOTA_ERROR_PATTERN, attempts=attempts, retry_delay=1,
+    ))])
+    return result['Flaky'], ui.time.sleep
+
+
+def test_command_retries_a_quota_error(tmp_path, monkeypatch):
+    ok, sleep = _run_flaky(tmp_path, monkeypatch, 'ResponseError: status=[429], Quota exceeded')
+    assert ok is True
+    sleep.assert_called_once_with(1)
+
+
+def test_command_does_not_retry_other_errors(tmp_path, monkeypatch):
+    ok, sleep = _run_flaky(tmp_path, monkeypatch, 'ERROR: permission denied')
+    assert ok is False
+    sleep.assert_not_called()
+
+
+def test_command_gives_up_after_its_attempts(monkeypatch):
+    monkeypatch.setattr(ui.time, 'sleep', MagicMock())
+    result = ui.run_tasks('Quota', [('Quota', lambda: ui.run_command(
+        'echo "Quota exceeded"; exit 1', retry_on=app_module.QUOTA_ERROR_PATTERN, attempts=3, retry_delay=1,
+    ))])
+    assert result == {'Quota': False}
+    assert [c.args[0] for c in ui.time.sleep.call_args_list] == [1, 2]
+
+
 @pytest.fixture
 def app(monkeypatch, tmp_path):
     env = SimpleNamespace(project='tenant-project', project_number='123', region='us-east1')

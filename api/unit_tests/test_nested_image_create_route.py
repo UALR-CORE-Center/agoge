@@ -13,6 +13,7 @@ import dependencies
 from common.constants.database import DbCollections
 from common.constants.pub_sub import PubSub
 from common.constants.states import ImageStatus
+from common.models.agoge import AgogeImageModel
 from core.compute import image as image_module
 from core.compute.nested import nested_image as nested_image_module
 from core.compute.nested import validator as validator_module
@@ -24,6 +25,17 @@ from test_nested_host_validator import CATALOG, MEDIA, PRODUCT_KEY, FakeMachineT
 TEACHER = SimpleNamespace(uid='teacher', email='teacher@example.edu', is_authorized=True, is_admin=False)
 STUDENT = SimpleNamespace(uid='student', email='student@example.edu', is_authorized=False, is_admin=False)
 EXISTING = {'name': 'taken', 'machine_type': 'e2-medium'}
+
+
+def _assert_firestore_storable(value, path='record'):
+    # Firestore answers INVALID_ARGUMENT ("invalid nested entity") for an array directly inside an array.
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _assert_firestore_storable(item, f'{path}.{key}')
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            assert not isinstance(item, (list, tuple)), f'{path}[{index}] is an array inside an array'
+            _assert_firestore_storable(item, f'{path}[{index}]')
 
 
 class FakeDb:
@@ -38,6 +50,7 @@ class FakeDb:
         assert collection == DbCollections.IMAGE.value
         if doc_id in self.images:
             raise AlreadyExists('exists')
+        _assert_firestore_storable(data)
         self.images[doc_id] = copy.deepcopy(data)
 
     def _source(self, collection_name):
@@ -90,7 +103,8 @@ def test_valid_request_stores_a_queued_checked_out_record_and_publishes_one_chec
     assert record['machine_type'] == 'n2-standard-8'
     assert record['nested_build']['phase'] == 'queued'
     # Derived: router corp NIC and dc01 corp NIC are exposed; every guest has a console by default.
-    assert [tuple(e) for e in record['nested']['exposures']] == [('router', 0), ('dc01', 0)]
+    assert record['nested']['exposures'] == [{'guest': 'router', 'nic': 0}, {'guest': 'dc01', 'nic': 0}]
+    assert AgogeImageModel(**record).nested.exposures == [('router', 0), ('dc01', 0)]
     assert record['nested']['console_ports'] == {'router': 5901, 'dc01': 5902, 'ws01': 5903}
     assert all(len(p) == 8 for p in record['nested']['vnc_passwords'].values())
     # disk_size is omitted, so the parent disk is the computed minimum for the three guests and their media.

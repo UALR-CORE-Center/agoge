@@ -559,10 +559,13 @@ class Workout:
         self,
         workouts: dict | List
     ) -> dict | List:
-        """Remove any assessment keys and answers from student response object"""
+        """Remove any assessment keys and answers, and any hidden servers, from student response object"""
         if isinstance(workouts, list):
             return [self._clean_object(i) for i in workouts]
         else:
+            # The workout's copy of the spec lists hidden servers too, with their connections
+            if servers := workouts.get('servers'):
+                workouts['servers'] = [server for server in servers if not server.get('hidden', False)]
             if assessment := workouts.get('assessment'):
                 if questions := assessment.get('questions', []):
                     for question in questions:

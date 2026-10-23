@@ -862,6 +862,14 @@ class NestedHostSpecModel(BaseModel):
     console_ports: Dict[str, int] = Field(default_factory=dict, description="guest -> 5901..5908")
     vnc_passwords: Dict[str, str] = Field(default_factory=dict, description="guest -> 8 chars (VNC limit)")
 
+    @field_validator('exposures', mode='before')
+    @classmethod
+    def _exposures_from_record(cls, value):
+        # Stored image records hold {guest, nic} maps, because Firestore rejects arrays of arrays.
+        if isinstance(value, list):
+            return [(item['guest'], item['nic']) if isinstance(item, dict) else item for item in value]
+        return value
+
 
 class NestedBuildStatusModel(BaseModel):
     phase: NestedBuildPhase = 'queued'
@@ -928,6 +936,14 @@ class AgogeImageModel(BaseModel):
     is_shared: bool = False
     source_project: Optional[str] = None
     can_edit_shared: bool = False
+
+    def firestore_dump(self) -> dict:
+        """model_dump() for writing the whole record: Firestore rejects nested.exposures' arrays of arrays."""
+        record = self.model_dump()
+        if record.get('nested'):
+            record['nested']['exposures'] = [{'guest': guest, 'nic': nic}
+                                             for guest, nic in record['nested']['exposures']]
+        return record
 
 
 class SnapshotModel(BaseModel):

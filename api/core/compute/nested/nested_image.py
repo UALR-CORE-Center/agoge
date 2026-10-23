@@ -97,7 +97,7 @@ class NestedImage(ComputeImage):
             nested_build=NestedBuildStatusModel(phase='queued'),
         )
         # product_keys is not a field of the record; it only travels in the CHECK_OUT message.
-        self._create_record(image.model_dump())
+        self._create_record(image.firestore_dump())
         self.logger.info(f"{self.class_name}:{server_name} - Created nested image record",
                          image=server_name, user=user.uid, guests=len(spec.guests))
         extra = None

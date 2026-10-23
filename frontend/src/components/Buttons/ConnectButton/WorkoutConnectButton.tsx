@@ -7,15 +7,19 @@ import {
 import React, {useState} from "react";
 import {URL_STUDENT_WORKOUT} from "../../../router/urls";
 import {WorkoutStates} from "../../../types/AgogeStates";
+import {absoluteUrl} from "../../../utilities/appContext";
+import {studentConnections} from "../../Teacher/Specifications/NewEditor/ServerForm/nestedServer";
 import {BaseConnectButton, ConnectButtonProps} from "./BaseConnectButton";
 import {CustomTabPanel} from "./CustomTabPanel";
-import {absoluteUrl} from "../../../utilities/appContext";
 
 
 export const WorkoutConnectButton: React.FC<ConnectButtonProps> = (props) => {
-    const parsedHumanInteraction = (props.item.human_interaction)[0];
-    const fullInteractions = (props.item.human_interaction) || [];
-    const protocol = parsedHumanInteraction.protocol;
+    const fullInteractions = studentConnections(
+        props.item.human_interaction,
+        !!props.item.nics?.[0]?.ip_aliases?.length,
+    );
+    const parsedHumanInteraction = fullInteractions[0];
+    const protocol = parsedHumanInteraction?.protocol ?? "";
     const isDisabled = () => props.item.state !== WorkoutStates.RUNNING;
 
     const [selectedProtocol, setSelectedProtocol] = useState<string>(protocol);
