@@ -392,6 +392,34 @@ def test_a_lease_that_never_arrives_leaves_only_the_static_addresses(builder):
     assert last['guest-win'] == 'ready'
 
 
+@pytest.mark.parametrize('log, expected', [
+    # apt's first E: line names the mirror; the later ones and libguestfs's -v -x boilerplate do not.
+    ('Err:3 http://mirror.example/kali openssh-client\n'
+     'E: Failed to fetch http://mirror.example/kali/openssh-client.deb  Unable to connect to mirror.example:http:\n'
+     'E: Unable to fetch some archives, maybe run apt update or try with --fix-missing?\n'
+     'virt-customize: error: \n        apt-get install openssh-server\n      : command exited with an error\n\n'
+     'If reporting bugs, run virt-customize with debugging enabled and include the complete output:\n\n'
+     '  virt-customize -v -x [...]\n',
+     'E: Failed to fetch http://mirror.example/kali/openssh-client.deb  Unable to connect to mirror.example:http:'),
+    ('virt-customize: error: libguestfs error: could not create appliance through libvirt.\n\n'
+     'If reporting bugs, run virt-customize with debugging enabled and include the complete output:\n\n'
+     '  virt-customize -v -x [...]\n',
+     'libguestfs error: could not create appliance through libvirt.'),
+    ('virt-customize: error: \n        dnf install foo\n      : command exited with an error\n',
+     'dnf install foo'),
+    ('something odd\n', 'something odd'),
+])
+def test_a_failed_customize_reports_its_cause_not_the_debugging_boilerplate(tmp_path, log, expected):
+    script = render_builder()
+    function = script[script.index('customize_error() {'):]
+    function = function[:function.index('\n}\n') + 3]
+    (tmp_path / 'customize.log').write_text(log)
+    result = subprocess.run(['bash', '-c', f'{function}\ncustomize_error "$1"', '_', str(tmp_path / 'customize.log')],
+                            capture_output=True, text=True)
+
+    assert result.stdout.strip() == expected
+
+
 @needs_tools
 def test_no_secret_reaches_a_command_line(builder):
     secrets = _secrets(_spec())
@@ -1083,7 +1111,10 @@ def test_a_7z_linux_disk_image_with_an_agent_converts_its_qcow2_then_customizes_
     # No -f: qemu-img probes the qcow2 header, as for the zip's vmdk.
     assert f'qemu-img convert -O qcow2 {work}/kali-linux-qemu-amd64.qcow2 {disk}' in log
     customize = next(line for line in log.splitlines() if line.startswith(f'virt-customize -a {disk} '))
-    assert 'id -u kali' in customize and '--install qemu-guest-agent,openssh-server ' in customize
+    # Only the agent is installed: installing openssh-server upgraded OpenSSH from a Kali mirror mid-build,
+    # and an unreachable mirror failed the guest. The sshd Kali ships is enabled instead.
+    assert 'id -u kali' in customize and '--install qemu-guest-agent ' in customize
+    assert 'openssh-server' not in customize
     # Kali ships sshd disabled, yet the exposed guest is the students' SSH jumpbox; its shared host keys go.
     assert 'systemctl enable ssh ' in customize
     assert "--run-command rm -f /etc/ssh/ssh_host_*" in customize
