@@ -192,16 +192,24 @@ the image's name simply to make it look like Kali.
 
 ### If the selected GCP image returns NotFound
 
-Eligibility checks the saved Agoge record first; it does not prove the underlying
-Compute image still exists. Setup then prints the exact source it queries.
-An explicit source such as
-`projects/ualr-agoge/global/images/image-csec3314-powershell` is resolved in
-`ualr-agoge`, even when the catalog upload destination is `test-dev-787001`.
-Older versions incorrectly labeled the final Compute error with the destination
-project. Update the feature branch and restart setup for accurate logs and a
-source-specific diagnostic and image recovery selection.
+Student Compute images can stay in **`agoge-shared-resources`** while the catalog
+and lab VMs belong to **`test-dev-787001`**. The upload and built-in WireGuard API
+builder first try the image source saved in the Agoge record. If it returns
+NotFound, they automatically retry the **same GCP image name** in
+`agoge-shared-resources`, including records with an explicit legacy site URL.
+For example, a missing
+`projects/ualr-agoge/global/images/image-csec3314-powershell` is retried as
+`projects/agoge-shared-resources/global/images/image-csec3314-powershell`.
 
-You can finish the upload through setup without editing Firestore manually:
+The resolved image must be READY and AMD64. Its returned full image URL is saved
+in the catalog or lab specification, so workstations boot directly from the
+published shared image. This requires no copy into the lab project and no manual
+source selection when the shared image has the same name. Update the feature
+branch and restart setup to get this behavior. Older revisions disabled the shared
+retry whenever the record contained an explicit source URL.
+
+If both lookups fail, setup offers image recovery. This also covers images
+published under a different name or in another project:
 
 1. When setup asks **Choose an existing GCP image for this catalog upload instead?**,
    enter **y**.
@@ -225,10 +233,10 @@ The catalog still uploads to the selected environment, such as `test-dev-787001`
 and the gateway still uses its default Ubuntu image. If the original server library
 record also needs repair, use the steps below.
 
-Using the same account selected in setup, verify that example source:
+Using the same account selected in setup, verify the example shared source:
 
 ```powershell
-gcloud compute images describe image-csec3314-powershell --project=ualr-agoge --format="yaml(name,status,architecture,selfLink)"
+gcloud compute images describe image-csec3314-powershell --project=agoge-shared-resources --format="yaml(name,status,architecture,selfLink)"
 ```
 
 If the source is stale, find the actual published image in the project that owns
@@ -239,7 +247,7 @@ gcloud compute images list --project=agoge-shared-resources --no-standard-images
 ```
 
 Use the returned image's exact name and `selfLink`; do not assume it matches the
-Agoge record ID. Correct the selected project's
+Agoge record ID. To clean up the saved server-library metadata, update the selected project's
 `agoge-v1/image/<student template ID>` record to reference that image. `self_link`
 takes precedence, followed by an explicit `image` reference, then the boot disk's
 `initializeParams.sourceImage`. Keep those references consistent and preserve
@@ -247,14 +255,14 @@ the student connection settings. If a local Compute image is not registered yet,
 use **Server Images & Build Specs → Import Custom Images from GCP into App** in
 its project, or prepare and check in the student image through Server Manager.
 
-A copied Firestore record alone cannot recreate a missing Compute image. If the
-image exists but setup still cannot read it, check the setup account's access to
-the source image and that its Application Default Credentials use the intended
-identity. The deployed backend identity also needs access when building student
-VMs. Setup preserves explicit source projects instead of substituting a similarly
-named image elsewhere. These failures occur before any catalog write; rerun the
-upload after correcting the source or access. Updating these local setup
-diagnostics requires no Cloud Run or Cloud Functions deployment.
+If an existing shared image cannot be read, check the setup account's access to
+that image and that its Application Default Credentials use the intended identity.
+The deployed backend identity also needs image access when building student VMs.
+Automatic retry is limited to the configured shared project after a NotFound;
+manually selected recovery references are used exactly as entered. These failures
+occur before any catalog write. Using the updated local setup requires no Cloud
+Run or Cloud Functions deployment. Deploy the updated API when using its built-in
+WireGuard builder, or run it through the local backend debug runner.
 
 References: Google's [image describe command](https://docs.cloud.google.com/sdk/gcloud/reference/compute/images/describe)
 and [image list command](https://docs.cloud.google.com/sdk/gcloud/reference/compute/images/list).
@@ -285,8 +293,8 @@ and [image list command](https://docs.cloud.google.com/sdk/gcloud/reference/comp
    assigned remote devices. Verify that another remote LAN is unreachable before
    distributing the lab to a class.
 
-For example, upload `wireguard-factory-lab` into `test-dev-787001` with the
-compatible Kali image selected in setup, then perform the frontend steps above
+For example, upload `wireguard-factory-lab` into `test-dev-787001` with a
+compatible student image selected in setup, then perform the frontend steps above
 on the `test-dev` site. These are deployment instructions; a successful upload
 and a successful physical remote LAN connection must each be verified in that
 environment.

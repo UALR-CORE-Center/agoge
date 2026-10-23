@@ -51,7 +51,7 @@ class WireGuardLab:
             source = ComputeImageAPI(project=self.env_dict['project'], region=self.env_dict['region'],
                                      zone=self.env_dict['zone']).get(
                 resource=resource, project=explicit.group(1) if explicit else self.env_dict['project'],
-                fallback_to_shared=not bool(explicit))
+                fallback_to_shared=True)
         except Exception:
             raise BadRequest('The student boot image cannot be read in GCP; check its image name and runtime access') from None
         if str(source.status).upper() != 'READY' or str(source.architecture).upper() != 'X86_64':

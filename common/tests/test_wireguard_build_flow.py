@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
+from google.api_core.exceptions import NotFound as GoogleNotFound
+from google.cloud.compute_v1 import Image
 
 from common.constants.database import DbCollections
 from common.exceptions import BadRequest, Unauthorized
@@ -13,6 +15,7 @@ from common.services.wireguard_lab_spec import default_wireguard_spec
 from common.services.wireguard_provisioning import WireGuardProvisioningService
 from common.services.wireguard_startup import render_wireguard_startup
 from common.tests.test_wireguard_provisioning import Database, Secrets, kit_data
+from common.utilities.gcp.compute.compute_image import ComputeImageAPI
 from core.unit import Unit
 from core.wireguard_lab import WireGuardLab
 
@@ -143,7 +146,7 @@ def test_registered_template_name_resolves_and_pins_its_different_compute_source
     flow.image.return_value.get.return_value.self_link = source
     identifier = WireGuardLab(flow.env).build(flow.teacher, {**flow.data, 'student_image': 'kali-template'})
     flow.image.return_value.get.assert_called_once_with(resource='image-kali-custom',
-        project='shared-images', fallback_to_shared=False)
+        project='shared-images', fallback_to_shared=True)
     assert flow.db.collections['unit'][identifier]['servers'][1]['image'] == source
 
 
@@ -156,10 +159,42 @@ def test_builtin_accepts_checked_in_legacy_shared_windows_record(flow):
     flow.image.return_value.get.return_value.self_link = source
     identifier = WireGuardLab(flow.env).build(flow.teacher, {**flow.data, 'student_image': 'cybersecurity1'})
     flow.image.return_value.get.assert_called_once_with(resource='image-cybersecurity1',
-        project='shared-images', fallback_to_shared=False)
+        project='shared-images', fallback_to_shared=True)
     student = flow.db.collections['unit'][identifier]['servers'][1]
     assert student['image'] == source
     assert student['human_interaction'][0]['protocol'] == 'rdp'
+
+
+@pytest.mark.parametrize('changes', [{}, {'status': 'PENDING'}, {'architecture': 'ARM64'}])
+def test_builtin_build_uses_shared_image_when_legacy_site_source_is_missing(flow, changes):
+    record = flow.db.collections['image'].pop('image-kali-linux-2023')
+    record.update(image='image-csec3314-powershell',
+                  self_link='projects/ualr-agoge/global/images/image-csec3314-powershell')
+    flow.db.collections['image']['csec3314-powershell'] = record
+    shared_source = 'https://www.googleapis.com/compute/v1/projects/agoge-shared-resources/global/images/image-csec3314-powershell'
+    shared = Image(**{'name': 'image-csec3314-powershell', 'self_link': shared_source,
+                      'status': 'READY', 'architecture': 'X86_64', **changes})
+    transport = Mock()
+    transport.get.side_effect = [GoogleNotFound('missing legacy site image'), shared]
+    image_api = ComputeImageAPI(flow.env['project'], flow.env['region'], flow.env['zone'])
+    image_api.images_client, image_api.logger = transport, Mock()
+    flow.image.return_value = image_api
+    data = {**flow.data, 'student_image': 'csec3314-powershell'}
+
+    if changes:
+        with pytest.raises(BadRequest, match='ready AMD64'):
+            WireGuardLab(flow.env).build(flow.teacher, data)
+        assert not flow.secrets.payloads
+        assert not flow.db.collections.get('unit')
+    else:
+        identifier = WireGuardLab(flow.env).build(flow.teacher, data)
+        student = flow.db.collections['unit'][identifier]['servers'][1]
+        assert student['image'] == shared_source
+        assert student['human_interaction'][0]['password'] == 'image-password'
+    assert [call.kwargs['request'].project for call in transport.get.call_args_list] == [
+        'ualr-agoge', 'agoge-shared-resources']
+    assert all(call.kwargs['request'].image == 'image-csec3314-powershell'
+               for call in transport.get.call_args_list)
 
 
 @pytest.mark.parametrize('include_legacy', [False, True])

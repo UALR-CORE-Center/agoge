@@ -98,14 +98,18 @@ class WireGuardLabTemplate:
         if not re.fullmatch(r'[a-z0-9][a-z0-9.:-]{0,252}', source_project):
             raise BadRequest('The selected student template has an invalid GCP source project')
         print(f'Validating student Compute image: projects/{source_project}/global/images/{resource}')
+        shared_project = BuildConstants.SharedResourceProjects.MAIN_SHARED_RESOURCE_PROJECT
+        if source_project != shared_project:
+            print(f'A missing saved source will be retried in shared image project {shared_project}.')
         image_api = ComputeImageAPI(self.project, env['region'], env['zone'])
         try:
+            # Legacy records can still name the old site project after the
+            # published student image has moved to the shared image project.
             image = image_api.get(
-                resource=resource, project=source_project, fallback_to_shared=not bool(explicit))
+                resource=resource, project=source_project, fallback_to_shared=True)
         except NotFound:
             projects = [source_project]
-            shared_project = BuildConstants.SharedResourceProjects.MAIN_SHARED_RESOURCE_PROJECT
-            if not explicit and shared_project not in projects:
+            if shared_project not in projects:
                 projects.append(shared_project)
             sources = ', '.join(f'projects/{project}/global/images/{resource}' for project in projects)
             checks = '\n'.join(
@@ -114,7 +118,7 @@ class WireGuardLabTemplate:
             print(
                 f'The selected student Compute image was not found: {sources}.\n'
                 f'Verify with the same account selected in setup:\n{checks}\n'
-                'Copying a Firestore image record does not copy its Compute image.')
+                f'Shared student images are used directly from {shared_project}.')
             recover = input('Choose an existing GCP image for this catalog upload instead? [y/N]: ')
             if recover.strip().lower() not in ('y', 'yes'):
                 raise BadRequest(

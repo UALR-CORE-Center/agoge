@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from google.api_core.exceptions import NotFound as GoogleNotFound
 from google.cloud.compute_v1 import Image
 
 from cloud_deployment import setup_manager as setup_manager_module
@@ -12,6 +13,7 @@ from common.constants.database import DATABASE_NAME, DbCollections
 from common.exceptions import Conflict, NotFound
 from common.models.agoge import CatalogModel
 from common.tests.test_wireguard_endpoint_registry import _FakeDatabase
+from common.utilities.gcp.compute.compute_image import ComputeImageAPI as GCPImageAPI
 
 
 @pytest.fixture
@@ -58,7 +60,7 @@ def test_upload_targets_selected_named_database_and_visible_catalog(upload, caps
     assert not {'wireguard_lease', 'wireguard_endpoint', 'workspace_settings'} & record.keys()
     assert upload.db.records == {} and upload.db.claims == {}
     upload.compute.return_value.get.assert_called_once_with(
-        resource='image-kali-linux-2023', project='shared-images', fallback_to_shared=False)
+        resource='image-kali-linux-2023', project='shared-images', fallback_to_shared=True)
     output = capsys.readouterr().out
     assert 'private-fixture-password' not in output
     assert 'test-dev-787001/agoge-v1/catalog/wireguard-factory-lab' in output
@@ -114,7 +116,7 @@ def test_legacy_shared_windows_image_uses_its_real_source_and_normalizes_rdp(upl
     assert student['image'] == record['self_link']
     assert student['human_interaction'][0]['protocol'] == 'rdp'
     upload.compute.return_value.get.assert_called_once_with(
-        resource='image-cybersecurity1', project='agoge-shared-resources', fallback_to_shared=False)
+        resource='image-cybersecurity1', project='agoge-shared-resources', fallback_to_shared=True)
     output = capsys.readouterr().out
     assert '"cybersecurity1": eligible' in output
     assert 'private-fixture-password' not in output
@@ -192,7 +194,7 @@ def test_cloud_exception_bodies_are_not_logged(upload, capsys):
 
 
 @pytest.mark.parametrize('boot_disk_reference', [False, True])
-def test_missing_explicit_image_reports_source_and_verification_without_fallback(upload, capsys, boot_disk_reference):
+def test_missing_explicit_image_reports_both_sources_after_shared_retry(upload, capsys, boot_disk_reference):
     record = upload.db.collections['image']['kali-template']
     record['self_link'] = 'projects/ualr-agoge/global/images/image-csec3314-powershell'
     if boot_disk_reference:
@@ -202,11 +204,13 @@ def test_missing_explicit_image_reports_source_and_verification_without_fallback
     assert not upload.operation.run()
 
     upload.compute.return_value.get.assert_called_once_with(
-        resource='image-csec3314-powershell', project='ualr-agoge', fallback_to_shared=False)
+        resource='image-csec3314-powershell', project='ualr-agoge', fallback_to_shared=True)
     output = capsys.readouterr().out
     assert 'projects/ualr-agoge/global/images/image-csec3314-powershell' in output
     assert 'gcloud compute images describe image-csec3314-powershell --project=ualr-agoge' in output
-    assert 'Copying a Firestore image record does not copy its Compute image' in output
+    assert 'projects/agoge-shared-resources/global/images/image-csec3314-powershell' in output
+    assert 'gcloud compute images describe image-csec3314-powershell --project=agoge-shared-resources' in output
+    assert 'Shared student images are used directly' in output
     assert 'Check setup credentials, selected-project Firestore' not in output
     assert 'private-fixture-password' not in output
     assert upload.db.collections['catalog'] == {}
@@ -249,6 +253,47 @@ def _published_image(name='actual-powershell', project='agoge-shared-resources',
 def _recovery_inputs(monkeypatch, responses):
     values = iter(['', '', '', 'y', *responses])
     monkeypatch.setattr('builtins.input', lambda prompt: next(values))
+
+
+@pytest.mark.parametrize('boot_disk_reference', [False, True])
+@pytest.mark.parametrize('changes', [{}, {'status': 'PENDING'}, {'architecture': 'ARM64'}])
+def test_upload_retries_legacy_site_reference_in_shared_project_without_recovery_prompt(
+        upload, monkeypatch, capsys, boot_disk_reference, changes):
+    record = upload.db.collections['image'].pop('kali-template')
+    record.update(name='csec3314-powershell', image='image-csec3314-powershell',
+                  self_link='projects/ualr-agoge/global/images/image-csec3314-powershell')
+    if boot_disk_reference:
+        record['disks'] = [{'boot': True, 'initializeParams': {'sourceImage': record.pop('self_link')}}]
+    upload.db.collections['image']['csec3314-powershell'] = record
+    original = deepcopy(upload.db.collections['image'])
+    shared = _published_image('image-csec3314-powershell', **changes)
+    transport = Mock()
+    transport.get.side_effect = [GoogleNotFound('private-sdk-error'), shared]
+    image_api = GCPImageAPI(upload.env.project, upload.env_data['region'], upload.env_data['zone'])
+    image_api.images_client, image_api.logger = transport, Mock()
+    upload.compute.return_value = image_api
+    responses = iter(['csec3314-powershell', '', ''])
+    monkeypatch.setattr('builtins.input', lambda prompt: next(responses))
+
+    assert upload.operation.run() == (not changes)
+
+    assert [call.kwargs['request'].project for call in transport.get.call_args_list] == [
+        'ualr-agoge', 'agoge-shared-resources']
+    assert all(call.kwargs['request'].image == 'image-csec3314-powershell'
+               for call in transport.get.call_args_list)
+    transport.list.assert_not_called()
+    assert upload.db.collections['image'] == original
+    assert upload.db.records == {} and upload.db.claims == {}
+    output = capsys.readouterr().out
+    assert 'private-sdk-error' not in output and 'private-fixture-password' not in output
+    if changes:
+        assert upload.db.collections['catalog'] == {}
+        assert 'READY and AMD64' in output
+    else:
+        catalog = upload.db.collections['catalog']['wireguard-factory-lab']
+        assert catalog['servers'][1]['image'] == shared.self_link
+        assert catalog['servers'][0]['image'].startswith('projects/ubuntu-os-cloud/')
+        assert 'Uploaded: test-dev-787001/agoge-v1/catalog/wireguard-factory-lab' in output
 
 
 @pytest.mark.parametrize('selection', ['1', 'actual-powershell'])
