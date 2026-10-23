@@ -546,6 +546,18 @@ SCRIPT
 
 # virt-customize for a Linux guest: hostname, admin user, agent, network, cloud-init off.
 # Guest names, usernames, and packages are validated by the API (slugs), so they are safe in
+# The informative line of a failed virt-customize log $1: the first package-manager "E:" line (the later ones
+# repeat it less specifically), else the text
+# after the last "virt-customize: error:", else the last line.
+customize_error() {
+  local line
+  line=$(grep -E '^E: ' "$1" | head -n 1)
+  [ -z "$line" ] && line=$(awk '/^virt-customize: error:/ { found = 1; text = $0; sub(/^virt-customize: error: */, "", text); next }
+    found && text == "" && NF { text = $0 } END { print text }' "$1" | sed 's/^ *//')
+  [ -z "$line" ] && line=$(tail -n 1 "$1")
+  echo "$line"
+}
+
 # --run-command strings. The password is read from a root-only file, never passed as an argument.
 customize_linux() {
   local guest=$1 disk=$2 method user osinfo net_config packages install upload password_file ssh_package
@@ -591,9 +603,6 @@ customize_linux() {
   if [ "$method" = "cloud_image" ]; then
     packages=$(jq -r --arg g "$guest" '.guests[] | select(.name == $g) | .packages | join(",")' "$MANIFEST")
     install="$install,$ssh_package${packages:+,$packages}"
-  elif [ "$method" = "disk_image" ]; then
-    # An exposed guest is the students' SSH jumpbox; a prebuilt VM may lack sshd, and installing it is a no-op.
-    install="$install,$ssh_package"
   fi
   args+=(--install "$install"
     --run-command "id -u $user >/dev/null 2>&1 || useradd -m -s /bin/bash $user"
@@ -619,7 +628,9 @@ customize_linux() {
       # btrfs subvolume suffix (Fedora's root is /dev/vda4[/root]), and the resize tool follows the fstype.
       --firstboot-command 'command -v growpart >/dev/null || exit 0; root=$(findmnt -nvo SOURCE /); disk=/dev/$(lsblk -no PKNAME "$root"); growpart "$disk" "${root##*[!0-9]}" && case $(findmnt -no FSTYPE /) in xfs) xfs_growfs / ;; btrfs) btrfs filesystem resize max / ;; *) resize2fs "$root" ;; esac')
   elif [ "$method" = "disk_image" ]; then
-    # Kali ships sshd disabled, and every download of a prebuilt VM carries the same host keys.
+    # Kali ships sshd installed but disabled, and every download of a prebuilt VM carries the same host keys.
+    # The sshd it ships is enabled, not installed: installing would upgrade OpenSSH from the distro's
+    # mirrors mid-build, and one unreachable Kali mirror then failed the whole guest.
     args+=(--run-command 'systemctl enable ssh >/dev/null 2>&1 || systemctl enable sshd >/dev/null 2>&1 || true'
       --run-command 'rm -f /etc/ssh/ssh_host_*'
       --firstboot-command 'ssh-keygen -A && (systemctl restart ssh || systemctl restart sshd)')
@@ -639,7 +650,9 @@ customize_linux() {
   fi
   if ! virt-customize "${args[@]}" >> "$WORK_DIR/virt-customize-$guest.log" 2>&1; then
     rm -f "$password_file"
-    FAIL_MESSAGE="virt-customize failed: $(tail -n 1 "$WORK_DIR/virt-customize-$guest.log")"
+    # The log ends in libguestfs's "run with -v -x" boilerplate; the cause is the first apt/dnf "E:" line or
+    # failed command before it. The full output stays in the log.
+    FAIL_MESSAGE="virt-customize failed: $(customize_error "$WORK_DIR/virt-customize-$guest.log")"
     return 1
   fi
   rm -f "$password_file"
