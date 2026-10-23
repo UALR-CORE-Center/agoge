@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Box, ToggleButton, ToggleButtonGroup, Paper } from '@mui/material';
 import UnitManagerTab from "./UnitManager";
 import WorkoutManagerTab from "./WorkoutManager";
-import {WireGuardKitManager} from "./WireGuard/WireGuardKitManager";
+import {WireGuardRemotePeerManager} from "./WireGuard/WireGuardKitManager";
 
 const ProjectOverviewTabs: React.FC = () => {
     const [view, setView] = useState('activeUnits');
@@ -42,10 +42,10 @@ const ProjectOverviewTabs: React.FC = () => {
                 <ToggleButton value="allUnits">All Units</ToggleButton>
                 <ToggleButton value="activeWorkouts">Active Workouts</ToggleButton>
                 <ToggleButton value="allWorkouts">All Workouts</ToggleButton>
-                <ToggleButton value="wireguardKits">WireGuard Kits</ToggleButton>
+                <ToggleButton value="wireguardRemotePeers">Remote Labs</ToggleButton>
             </ToggleButtonGroup>
             <Paper elevation={1} sx={{width:'100%', minWidth: 0}}>
-                {view === 'wireguardKits' ? <WireGuardKitManager /> : view === 'activeUnits' || view === 'allUnits' ? (
+                {view === 'wireguardRemotePeers' ? <WireGuardRemotePeerManager /> : view === 'activeUnits' || view === 'allUnits' ? (
                     <UnitManagerTab key="unitManager" viewType={view === 'activeUnits' ? 'active' : 'all'} />
                 ) : (
                     <WorkoutManagerTab viewType={view === 'activeWorkouts' ? 'active' : 'all'} />

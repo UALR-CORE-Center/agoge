@@ -145,3 +145,31 @@ def test_registered_template_name_resolves_and_pins_its_different_compute_source
     flow.image.return_value.get.assert_called_once_with(resource='image-kali-custom',
         project='shared-images', fallback_to_shared=False)
     assert flow.db.collections['unit'][identifier]['servers'][1]['image'] == source
+
+
+@pytest.mark.parametrize('include_legacy', [False, True])
+def test_remote_peer_build_input_selects_authorized_existing_record(flow, include_legacy):
+    data = {**flow.data, 'remote_peer_id': 'kit-one'}
+    if not include_legacy:
+        data.pop('kit_id')
+    identifier = WireGuardLab(flow.env).build(flow.teacher, data)
+    lease = flow.db.collections['unit'][identifier]['wireguard_lease']
+    assert lease['remote_peer_id'] == lease['kit_id'] == 'kit-one'
+    assert lease['remote_network_cidr'] == '172.30.0.0/24'
+
+
+def test_conflicting_remote_peer_build_inputs_fail_before_any_allocation(flow):
+    with pytest.raises(BadRequest, match='conflicts'):
+        WireGuardLab(flow.env).build(flow.teacher, {**flow.data, 'remote_peer_id': 'other-peer'})
+    assert not flow.secrets.payloads
+    assert not flow.db.collections['wireguard-endpoint']
+
+
+def test_catalog_unit_build_also_rejects_conflicting_remote_peer_aliases(flow):
+    with pytest.raises(BadRequest, match='conflicts'):
+        flow.manager.build(flow.teacher, {**flow.data, 'remote_peer_id': 'other-peer',
+            'build_file': 'builtin-wireguard-factory'}, catalog_override=default_wireguard_spec(
+                'projects/agoge-test/global/images/image-kali-linux-2023',
+                [{'display': True, 'protocol': 'ssh', 'username': 'student', 'password': 'image-password'}]))
+    assert not flow.secrets.payloads
+    assert not flow.db.collections['wireguard-endpoint']

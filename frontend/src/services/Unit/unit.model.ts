@@ -24,9 +24,11 @@ export interface Unit {
 export interface WireGuardLease {
     unit_id: string;
     kit_id: string;
+    remote_peer_id?: string;
     device_id: string;
     endpoint_id: string;
     equipment_subnet: string;
+    remote_network_cidr?: string;
     student_subnets: string[];
     gateway_public_key: string;
     peer_public_key: string;
@@ -43,6 +45,7 @@ export interface WireGuardLease {
 
 export interface WireGuardEndpoint {
     id: string;
+    connection_id?: string | null;
     hostname: string;
     server_name: string;
     port: number;

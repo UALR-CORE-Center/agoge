@@ -16,6 +16,7 @@ class WireGuardEndpointModel(BaseModel):
     """Instructor-visible information for a Unit's WireGuard gateway."""
 
     id: str = Field(..., pattern=r"^[1-9][0-9]{4}$")
+    connection_id: Optional[str] = Field(default=None, max_length=200)
     hostname: str
     server_name: str
     port: int = Field(default=51820, ge=1, le=65535)
@@ -58,6 +59,7 @@ class WireGuardEndpointRecordModel(WireGuardEndpointModel):
             **self.model_dump(
                 include={
                     "id",
+                    "connection_id",
                     "hostname",
                     "server_name",
                     "port",

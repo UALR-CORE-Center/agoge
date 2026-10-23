@@ -52,7 +52,9 @@ def ready_lab(local):
     unit_id = 'abcdefghij'
     local.db.collections[DbCollections.UNIT][unit_id] = {
         'id': unit_id, 'state': UnitStates.READY.value, 'join_code': '123456',
-        'workspace_settings': {'count': 2}, 'wireguard_endpoint': {'hostname': 'wg.example.edu', 'port': 51820}}
+        'workspace_settings': {'count': 2}, 'wireguard_endpoint': {'id': '10000', 'hostname': 'old.example.edu', 'port': 51820}}
+    local.db.collections[DbCollections.WIREGUARD_ENDPOINT]['10000'] = {
+        'id': '10000', 'unit_id': unit_id, 'hostname': 'wg.example.edu', 'port': 51820}
     return unit_id
 
 
@@ -63,12 +65,27 @@ def test_create_lab_commits_through_api_then_dispatches_local_worker(local):
     result = local.backend.create_lab(args)
     local.unit_class.assert_called_once_with(env_dict=local.env, debug=True)
     data = local.unit_class.return_value.build.call_args.kwargs['data']
-    assert data['build_file'] == 'wireguard-factory-lab' and data['kit_id'] == 'kit-one'
+    assert data['build_file'] == 'wireguard-factory-lab' and data['remote_peer_id'] == 'kit-one'
     assert data['test'] and data['build_count'] == 1 and not data['lms_integration']
     local.users_class.return_value.get_user.assert_called_once_with(user_email='teacher@example.edu')
     attrs, env = local.worker.call_args.args
     assert env is local.env and attrs['course_object'] == str(PubSub.CourseObjects.UNIT.value)
     assert attrs['build_id'] == unit_id and result['state_name'] == 'READY'
+    assert result['connection_id'] == f'{cli.TEST_PROJECT}:{unit_id}'
+    assert result['endpoint']['hostname'] == 'wg.example.edu'
+
+
+def test_remote_peer_cli_name_preserves_legacy_flag_alias():
+    for flag in ('--remote-peer-id', '--kit-id'):
+        args = cli.parser().parse_args(['create-lab', '--instructor', 'teacher@example.edu', flag, 'remote-lab-01'])
+        assert args.remote_peer_id == 'remote-lab-01'
+
+
+def test_status_never_falls_back_to_stale_dns_for_reused_gateway_number(local):
+    unit_id = ready_lab(local)
+    local.db.collections[DbCollections.WIREGUARD_ENDPOINT]['10000']['unit_id'] = 'anotherlab'
+    status = local.backend.status(unit_id)
+    assert status['connection_id'] is None and status['endpoint']['hostname'] is None
 
 
 def test_claim_executes_real_api_decisions_locally_without_publishing(local):

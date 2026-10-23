@@ -14,9 +14,9 @@ application, so a previous gcloud project selection cannot redirect the build.
 
 ## Prepare once
 
-1. Use a checkout containing `debug_lab.py`. While this follow-up is under
-   review, it is on `feature/local-backend-debug`, based on
-   `release/2027-spring`. Fetch, switch to that branch, and pull its latest
+1. Use a checkout containing `debug_lab.py`. These changes are on
+   `feature/local-backend-debug`, based on `release/2027-spring`, and have not
+   been merged into the release. Fetch, switch to that branch, and pull its latest
    changes before running the commands below.
 2. From the repository root, install the combined local dependencies into the
    interpreter used by your IDE. In PowerShell:
@@ -35,9 +35,12 @@ application, so a previous gcloud project selection cannot redirect the build.
    Community Lab Template**. The examples below use its default catalog ID,
    `wireguard-factory-lab`. See the [upload instructions](wireguard-provisioning.md#upload-a-starter-template-with-setuppy).
 5. Have an existing Agoge instructor/admin account in test-dev and an enabled,
-   unassigned kit authorized for that instructor. The CLI uses the actual user
-   record and the usual kit authorization/lease checks; it does not invent an
+   unassigned remote peer authorized for that instructor. The CLI uses the actual user
+   record and the usual remote peer authorization/lease checks; it does not invent an
    admin account. The Agoge instructor email can differ from the GCP operator.
+   Administrators register the private LAN under **Admins → Build Manager →
+   Remote Labs**, including its **Remote LAN (IPv4 CIDR)** and authorized
+   instructor emails. The CLI derives routing from that registration.
 6. Prepare the [project settings and permissions](wireguard-provisioning.md#deploy-this-release)
    and install/enroll the [Pi client](../../build_files/server_config/wireguard_pi/README.md).
    Running a build locally does not enable missing APIs or grant operator IAM
@@ -46,14 +49,14 @@ application, so a previous gcloud project selection cannot redirect the build.
 
 ## Create a lab and one student workout
 
-Run from the repository root. Replace `factory-kit-01` with your enrolled kit ID
+Run from the repository root. Replace `remote-lab-01` with your enrolled remote peer ID
 and the instructor email with its authorized Agoge account:
 
 ```powershell
 .\venv\Scripts\python.exe debug_lab.py create-lab `
   --template wireguard-factory-lab `
   --instructor pdhuff@ar-core.org `
-  --kit-id factory-kit-01 `
+  --remote-peer-id remote-lab-01 `
   --count 1 `
   --expires-hours 2 `
   --student-email wireguard-test@example.com
@@ -62,7 +65,7 @@ and the instructor email with its authorized Agoge account:
 The runner:
 
 1. Calls `Unit.build(..., debug=True)` in the local API code to create a test lab,
-   reserve the kit/endpoint, and prepare its secret.
+   reserve the remote peer/endpoint, and prepare its secret.
 2. Invokes `cloud_functions.main.agoge_cloud_function(..., debug_mode=True)`
    locally to provision the shared gateway and network. Nested build/control
    operations use their synchronous debug paths.
@@ -75,6 +78,11 @@ begins. Copy it for status, retries, and cleanup. The final output includes
 workout ID/state and WireGuard status, without printing configuration secrets.
 `--student-email` is optional: omit it to debug the gateway build first. The
 student email identifies a claimed workout; it does not send an invitation.
+
+Use `--remote-peer-id` to select the enrolled remote peer. The older `--kit-id`
+flag remains an alias for existing commands. The catalog ID
+`wireguard-factory-lab` remains unchanged; an older uploaded template may still
+be labeled **WireGuard Factory Lab**.
 
 ## Claim another workout on an existing lab
 
@@ -100,7 +108,7 @@ Create a **Python** run/debug configuration:
 | Script path | Your checkout's `debug_lab.py` |
 | Python interpreter | Your checkout's `venv\Scripts\python.exe` |
 | Working directory | Your Agoge repository root |
-| Parameters, new lab | `create-lab --instructor pdhuff@ar-core.org --kit-id factory-kit-01 --count 1 --expires-hours 2 --student-email wireguard-test@example.com` |
+| Parameters, new lab | `create-lab --instructor pdhuff@ar-core.org --remote-peer-id remote-lab-01 --count 1 --expires-hours 2 --student-email wireguard-test@example.com` |
 | Parameters, existing lab | `create-workout --unit-id abcdefghij --student-email wireguard-test@example.com` |
 
 Start with the IDE's **Debug** button. Useful breakpoint locations:
@@ -152,7 +160,7 @@ To debug those HTTP endpoints locally too:
    ```powershell
    .\venv\Scripts\python.exe debug_lab.py `
      --wireguard-api-url https://your-debug-api.example.com `
-     create-lab --instructor pdhuff@ar-core.org --kit-id factory-kit-01
+     create-lab --instructor pdhuff@ar-core.org --remote-peer-id remote-lab-01
    ```
 
 4. Point the Pi client's `api_url` at the same public API base URL. The local
@@ -185,10 +193,17 @@ gateway readiness check; continue promptly or expect a timeout.
 .\venv\Scripts\python.exe debug_lab.py unit-action --unit-id abcdefghij --action delete
 ```
 
+Status includes `remote_peer_id`, `remote_network_cidr`, and the non-secret
+`connection_id` (`<project>:<unit-id>`), together with the current gateway
+hostname/DNS details and readiness. For example, `test-dev-787001:abcdefghij`
+continues to identify the same lab after a gateway restart changes its public
+IP. This identifier is not a device credential. A shared HMI lookup/polling API
+is deferred; the status command does not implement that future integration.
+
 Stopping at a breakpoint or receiving an exception leaves existing resources in
 place for inspection. Status lists workout IDs even if a build failed before
 returning one. Use `workout-action --action build` with that ID to resume an
-incomplete student build. Delete the lab when finished so its kit is released.
+incomplete student build. Delete the lab when finished so its remote peer is released.
 The normal Cloud Function budget check also applies to the local entry point;
 budget blocks and provisioning failures are surfaced to the debugger.
 

@@ -17,7 +17,19 @@ from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollection
 from common.exceptions import BadRequest, Conflict, NotFound, NotReady, Unauthorized
 from common.models.wireguard_provisioning import (
     WireGuardHealthReport, WireGuardKitCreate, WireGuardKitModel, WireGuardLeaseModel,
+    WireGuardRemotePeerCreate, WireGuardRemotePeerModel,
 )
+
+
+def resolve_remote_peer_id(data: dict) -> str:
+    """Accept old build requests without silently preferring conflicting inputs."""
+    canonical, legacy = data.get('remote_peer_id'), data.get('kit_id')
+    if canonical is not None and legacy is not None and canonical != legacy:
+        raise BadRequest('remote_peer_id conflicts with legacy kit_id')
+    identifier = canonical if canonical is not None else legacy
+    if not isinstance(identifier, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,39}', identifier):
+        raise BadRequest('Select a registered remote peer for this WireGuard Lab')
+    return identifier
 
 
 class WireGuardSecretStore:
@@ -109,7 +121,7 @@ class WireGuardProvisioningService:
 
     def enroll(self, data, requester):
         if not requester.is_admin:
-            raise Unauthorized('Only administrators can enroll WireGuard kits')
+            raise Unauthorized('Only administrators can enroll remote WireGuard peers')
         kit = data if isinstance(data, WireGuardKitCreate) else WireGuardKitCreate(**data)
         token = secrets.token_urlsafe(48)
         record = {**kit.model_dump(), 'enabled': True, 'assigned_unit_id': None,
@@ -121,7 +133,7 @@ class WireGuardProvisioningService:
         def create(transaction):
             snapshots = [ref.get(transaction=transaction) for ref in (document, identity, peer_key)]
             if any(snapshot.exists for snapshot in snapshots):
-                raise Conflict('This kit ID, device identity, or peer key is already enrolled')
+                raise Conflict('This remote peer ID, device identity, or peer key is already enrolled')
             transaction.set(document, record)
             transaction.set(identity, {'kit_id': kit.id})
             transaction.set(peer_key, {'kit_id': kit.id})
@@ -134,14 +146,27 @@ class WireGuardProvisioningService:
         return [self._safe_kit(record) for record in records
                 if requester.is_admin or email in record.get('authorized_instructors', [])]
 
+    def list_remote_peers(self, requester):
+        return [WireGuardRemotePeerModel(**kit.model_dump()) for kit in self.list_kits(requester)]
+
+    def enroll_remote_peer(self, data, requester):
+        peer = data if isinstance(data, WireGuardRemotePeerCreate) else WireGuardRemotePeerCreate(**data)
+        result = self.enroll(peer, requester)
+        return {'remote_peer': WireGuardRemotePeerModel(**result['kit'].model_dump()),
+                'enrollment_token': result['enrollment_token']}
+
+    def get_authorized_remote_peer(self, remote_peer_id, requester):
+        kit = self.get_authorized_kit(remote_peer_id, requester)
+        return WireGuardRemotePeerModel(**kit.model_dump())
+
     def get_authorized_kit(self, kit_id, requester):
         if not isinstance(kit_id, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,39}', kit_id):
-            raise BadRequest('Invalid WireGuard kit ID')
+            raise BadRequest('Invalid remote WireGuard peer ID')
         record = self.db.get(collection_name=DbCollections.WIREGUARD_KIT, doc_id=kit_id)
         if not record or not record.get('enabled'):
-            raise NotFound('Enabled WireGuard kit not found')
+            raise NotFound('Enabled remote WireGuard peer not found')
         if not requester.is_admin and (requester.email or '').lower() not in record.get('authorized_instructors', []):
-            raise Unauthorized('Instructor is not authorized to use this WireGuard kit')
+            raise Unauthorized('Instructor is not authorized to use this remote WireGuard peer')
         return self._safe_kit(record)
 
     def _health_url(self, unit_id):
@@ -166,7 +191,7 @@ class WireGuardProvisioningService:
             raise BadRequest('Invalid WireGuard lab ID')
         kit = self.get_authorized_kit(kit_id, requester)
         if not unit.wireguard_endpoint:
-            raise BadRequest('Allocate a WireGuard endpoint before reserving its kit')
+            raise BadRequest('Allocate a WireGuard endpoint before reserving its remote peer')
         subnets = sorted({str(ipaddress.ip_network(subnet.ip_subnet, strict=True))
                           for network in unit.networks or [] for subnet in network.subnets or []})
         if not subnets:
@@ -197,7 +222,7 @@ class WireGuardProvisioningService:
             ('equipment_subnet', kit.equipment_subnet), ('student_subnets', subnets),
             ('listen_port', unit.wireguard_endpoint.port),
         )):
-            raise Conflict('Existing gateway configuration does not match this lab and kit')
+            raise Conflict('Existing gateway configuration does not match this lab and remote peer')
         lease = WireGuardLeaseModel(
             unit_id=unit.id, kit_id=kit.id, device_id=kit.device_id,
             endpoint_id=unit.wireguard_endpoint.id, equipment_subnet=kit.equipment_subnet,
@@ -214,15 +239,15 @@ class WireGuardProvisioningService:
             lease_snapshot = lease_doc.get(transaction=transaction)
             current = kit_snapshot.to_dict() if kit_snapshot.exists else None
             if not current or not current.get('enabled'):
-                raise NotFound('Enabled WireGuard kit not found')
+                raise NotFound('Enabled remote WireGuard peer not found')
             if not requester.is_admin and (requester.email or '').lower() not in current.get('authorized_instructors', []):
-                raise Unauthorized('Instructor authorization changed before kit assignment')
+                raise Unauthorized('Instructor authorization changed before remote peer assignment')
             if current.get('assigned_unit_id') not in (None, unit.id):
-                raise Conflict('This kit is assigned to another lab')
+                raise Conflict('This remote peer is assigned to another lab')
             if lease_snapshot.exists:
                 stored = WireGuardLeaseModel(**lease_snapshot.to_dict())
                 if stored.status == 'released' or stored.kit_id != kit.id:
-                    raise Conflict('This lab already has a different or released kit lease')
+                    raise Conflict('This lab already has a different or released remote peer lease')
                 return stored
             transaction.set(lease_doc, {**lease.model_dump(), 'callback_token_digest': self._digest(payload['callback_token'])})
             transaction.set(kit_doc, {'assigned_unit_id': unit.id}, merge=True)
@@ -309,9 +334,9 @@ class WireGuardProvisioningService:
     def pi_configuration(self, kit_id, bearer_token):
         kit = self.db.get(collection_name=DbCollections.WIREGUARD_KIT, doc_id=kit_id)
         if not kit or not bearer_token or not hmac.compare_digest(self._digest(bearer_token), kit.get('token_digest', '')):
-            raise Unauthorized('Invalid kit credentials')
+            raise Unauthorized('Invalid remote peer credentials')
         if not kit.get('enabled') or not kit.get('assigned_unit_id'):
-            raise NotReady('This kit has no active lab assignment')
+            raise NotReady('This remote peer has no active lab assignment')
         lease = self.get_lease(kit['assigned_unit_id'])
         endpoint = self.db.get(collection_name=DbCollections.WIREGUARD_ENDPOINT, doc_id=lease.endpoint_id)
         unit = self.db.get(collection_name=DbCollections.UNIT, doc_id=lease.unit_id)

@@ -154,26 +154,27 @@ export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
                             sx={{ fontWeight: 800 }}
                             gutterBottom
                         >
-                            WireGuard Gateway
+                            Remote lab connection
                         </Typography>
 
                         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
                             <Typography component="p" sx={{ fontWeight: 800, m: 0 }}>
-                                Lab number:
+                                Connection ID:
                             </Typography>
                             <Paper
                                 variant="outlined"
                                 sx={{ display: 'flex', alignItems: 'center', px: 1, minWidth: 0, maxWidth: '100%' }}
-                                aria-label="WireGuard endpoint ID container"
+                                aria-label="Remote lab connection ID container"
                             >
                                 <Typography component="span" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere', minWidth: 0 }}>
-                                    {wireguard_endpoint.id}
+                                    {wireguard_endpoint.connection_id || "Pending"}
                                 </Typography>
-                                <Tooltip title="Copy WireGuard Endpoint ID" leaveDelay={200} arrow describeChild>
+                                <Tooltip title="Copy remote lab connection ID" leaveDelay={200} arrow describeChild>
                                     <span>
                                         <IconButton
-                                            aria-label="Copy WireGuard endpoint ID"
-                                            onClick={() => copy(wireguard_endpoint.id)}
+                                            aria-label="Copy remote lab connection ID"
+                                            disabled={!wireguard_endpoint.connection_id}
+                                            onClick={() => copy(wireguard_endpoint.connection_id)}
                                         >
                                             <CopyAll />
                                         </IconButton>
@@ -186,18 +187,22 @@ export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
                             />
                         </Box>
 
+                        <Typography variant="body2" sx={{mb: 1}}>
+                            Gateway number: {wireguard_endpoint.id}
+                        </Typography>
+
                         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
                             <Typography component="p" sx={{ fontWeight: 800, m: 0 }}>
-                                Endpoint:
+                                Gateway DNS:
                             </Typography>
                             <Typography component="span" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere', minWidth: 0 }}>
-                                {wireguard_endpoint.hostname}:{wireguard_endpoint.port}
+                                {wireguard_endpoint.hostname.replace(/\.$/, "")}:{wireguard_endpoint.port}
                             </Typography>
-                            <Tooltip title="Copy WireGuard Endpoint" leaveDelay={200} arrow describeChild>
+                            <Tooltip title="Copy gateway DNS and port" leaveDelay={200} arrow describeChild>
                                 <span>
                                     <IconButton
-                                        aria-label="Copy WireGuard endpoint"
-                                        onClick={() => copy(`${wireguard_endpoint.hostname}:${wireguard_endpoint.port}`)}
+                                        aria-label="Copy gateway DNS and port"
+                                        onClick={() => copy(`${wireguard_endpoint.hostname.replace(/\.$/, "")}:${wireguard_endpoint.port}`)}
                                     >
                                         <CopyAll />
                                     </IconButton>

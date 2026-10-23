@@ -287,3 +287,78 @@ def test_direct_unit_call_cannot_inject_kit_document_paths(context, kit_id):
     with pytest.raises(BadRequest):
         context.service.get_authorized_kit(kit_id, context.instructor)
     assert not context.secrets.payloads
+
+
+def test_remote_peer_enrollment_uses_private_lan_alias_without_migrating_storage(context):
+    from common.models.wireguard_provisioning import WireGuardRemotePeerCreate
+    body = kit_data('remote-lab-two', key_number=2)
+    body['remote_network_cidr'] = body.pop('equipment_subnet')
+    result = context.service.enroll_remote_peer(WireGuardRemotePeerCreate(**body), context.admin)
+    public = result['remote_peer'].model_dump(by_alias=True)
+    assert public['remote_network_cidr'] == '172.30.0.0/24'
+    assert 'equipment_subnet' not in public and 'token_digest' not in public
+    stored = context.db.collections['wireguard-kit']['remote-lab-two']
+    assert stored['equipment_subnet'] == '172.30.0.0/24'
+    assert 'remote_network_cidr' not in stored
+    peers = context.service.list_remote_peers(context.instructor)
+    assert {peer.id for peer in peers} == {'kit-one', 'remote-lab-two'}
+    assert context.service.get_authorized_remote_peer('remote-lab-two', context.instructor).remote_network_cidr == '172.30.0.0/24'
+
+
+@pytest.mark.parametrize('canonical', [False, True])
+def test_remote_peer_model_accepts_legacy_network_field(context, canonical):
+    from common.models.wireguard_provisioning import WireGuardRemotePeerCreate
+    data = kit_data()
+    if canonical:
+        data['remote_network_cidr'] = data['equipment_subnet']
+    peer = WireGuardRemotePeerCreate(**data)
+    assert peer.remote_network_cidr == '172.30.0.0/24'
+
+
+def test_remote_peer_model_rejects_conflicting_network_aliases():
+    from common.models.wireguard_provisioning import WireGuardRemotePeerCreate
+    with pytest.raises(ValidationError, match='conflicts'):
+        WireGuardRemotePeerCreate(**kit_data(), remote_network_cidr='192.168.1.0/24')
+
+
+@pytest.mark.parametrize('network', ['192.0.2.0/24', '0.0.0.0/0', 'fd00::/64'])
+def test_remote_peer_model_requires_private_lan(network):
+    from common.models.wireguard_provisioning import WireGuardRemotePeerCreate
+    body = kit_data()
+    body['remote_network_cidr'] = network
+    body.pop('equipment_subnet')
+    with pytest.raises(ValidationError):
+        WireGuardRemotePeerCreate(**body)
+
+
+@pytest.mark.parametrize('data', [
+    {'remote_peer_id': 'remote-one'}, {'kit_id': 'remote-one'},
+    {'remote_peer_id': 'remote-one', 'kit_id': 'remote-one'},
+])
+def test_build_remote_peer_selection_accepts_canonical_and_equal_legacy(data):
+    from common.services.wireguard_provisioning import resolve_remote_peer_id
+    assert resolve_remote_peer_id(data) == 'remote-one'
+
+
+@pytest.mark.parametrize('data', [
+    {'remote_peer_id': 'remote-one', 'kit_id': 'remote-two'},
+    {'remote_peer_id': 'remote-one', 'kit_id': ''}, {'remote_peer_id': ''},
+    {'remote_peer_id': '../other'}, {'remote_peer_id': 12}, {},
+])
+def test_build_remote_peer_selection_rejects_conflicts_and_invalid_identifiers(data):
+    from common.services.wireguard_provisioning import resolve_remote_peer_id
+    with pytest.raises(BadRequest):
+        resolve_remote_peer_id(data)
+
+
+def test_legacy_lease_serializes_additive_remote_peer_aliases(context):
+    target = unit(context)
+    lease = context.service.reserve(target, 'kit-one', context.instructor)
+    public = lease.model_dump()
+    assert public['remote_peer_id'] == public['kit_id'] == 'kit-one'
+    assert public['remote_network_cidr'] == public['equipment_subnet'] == '172.30.0.0/24'
+    # Old stored documents deserialize without backfilling or rewriting identifiers.
+    public.pop('remote_peer_id')
+    public.pop('remote_network_cidr')
+    from common.models.wireguard_provisioning import WireGuardLeaseModel
+    assert WireGuardLeaseModel(**public).remote_peer_id == 'kit-one'

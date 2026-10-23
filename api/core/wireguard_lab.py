@@ -8,7 +8,7 @@ from common.exceptions import BadRequest
 from common.utilities.gcp.compute.compute_image import ComputeImageAPI
 from common.utilities.gcp.compute.image_ownership import image_source
 from common.services.wireguard_lab_spec import DEFAULT_STUDENT_IMAGE, default_wireguard_spec
-from common.services.wireguard_provisioning import WireGuardProvisioningService
+from common.services.wireguard_provisioning import WireGuardProvisioningService, resolve_remote_peer_id
 from core.unit import Unit
 
 
@@ -19,9 +19,7 @@ class WireGuardLab:
     def build(self, requester, data: dict) -> str:
         if not requester.is_authorized:
             raise BadRequest("An instructor account is required")
-        kit_id = data.get("kit_id")
-        if not isinstance(kit_id, str) or not kit_id:
-            raise BadRequest("Select a registered factory kit")
+        kit_id = resolve_remote_peer_id(data)
         WireGuardProvisioningService(self.env_dict).get_authorized_kit(kit_id, requester)
         count = data.get("build_count", 1)
         if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 100:

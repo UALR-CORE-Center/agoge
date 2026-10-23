@@ -1,9 +1,9 @@
-"""Validated, credential-free contracts for enrolled WireGuard kits and leases."""
+"""Validated, credential-free remote peer contracts with legacy kit compatibility."""
 import base64
 import ipaddress
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 
 class WireGuardKitCreate(BaseModel):
@@ -55,6 +55,33 @@ class WireGuardKitModel(WireGuardKitCreate):
     assigned_unit_id: str | None = None
 
 
+class WireGuardRemotePeerCreate(WireGuardKitCreate):
+    """Canonical API language; legacy equipment_subnet remains the storage key."""
+    equipment_subnet: str = Field(
+        validation_alias=AliasChoices('remote_network_cidr', 'equipment_subnet'),
+        serialization_alias='remote_network_cidr',
+        description='Private IPv4 LAN reachable through the remote WireGuard peer',
+    )
+
+    @model_validator(mode='before')
+    @classmethod
+    def reject_conflicting_network_aliases(cls, values):
+        if not isinstance(values, dict) or 'remote_network_cidr' not in values or 'equipment_subnet' not in values:
+            return values
+        if values['remote_network_cidr'] != values['equipment_subnet']:
+            raise ValueError('remote_network_cidr conflicts with legacy equipment_subnet')
+        return {key: value for key, value in values.items() if key != 'equipment_subnet'}
+
+    @property
+    def remote_network_cidr(self) -> str:
+        return self.equipment_subnet
+
+
+class WireGuardRemotePeerModel(WireGuardRemotePeerCreate):
+    enabled: bool = True
+    assigned_unit_id: str | None = None
+
+
 class WireGuardLeaseModel(BaseModel):
     """Only public keys and non-secret runtime information may enter Unit records."""
     model_config = ConfigDict(extra='ignore')
@@ -77,6 +104,16 @@ class WireGuardLeaseModel(BaseModel):
     health_timestamp: float | None = None
     latest_handshake: int = 0
     health_error: str | None = None
+
+    @computed_field
+    @property
+    def remote_peer_id(self) -> str:
+        return self.kit_id
+
+    @computed_field
+    @property
+    def remote_network_cidr(self) -> str:
+        return self.equipment_subnet
 
     def is_ready(self, now: float, max_age: int = 120) -> bool:
         return bool(self.status != 'released' and self.service_ready and self.health_timestamp

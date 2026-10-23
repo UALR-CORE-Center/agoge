@@ -165,3 +165,46 @@ def test_instructor_can_create_lab_through_authorized_route(http, monkeypatch):
     assert response.status_code == 201
     assert response.json()['data']['build_id'] == 'abcdefghij'
     manager.build.assert_called_once_with(requester=user, data=body)
+
+
+def test_remote_peer_inventory_and_enrollment_preserve_authorization_boundaries(http):
+    assert http.client.get('/wireguard/remote-peers/').status_code == 403
+    body = enrollment()
+    body['remote_network_cidr'] = body.pop('equipment_subnet')
+    assert http.client.post('/wireguard/remote-peers/', json=body).status_code == 403
+    http.service.list_remote_peers.assert_not_called()
+    http.service.enroll_remote_peer.assert_not_called()
+
+
+def test_remote_peer_inventory_exposes_private_lan_with_canonical_name(http):
+    from common.models.wireguard_provisioning import WireGuardRemotePeerModel
+    http.app.dependency_overrides[teacher_required] = lambda: SimpleNamespace(is_admin=False)
+    http.service.list_remote_peers.return_value = [WireGuardRemotePeerModel(**enrollment())]
+    response = http.client.get('/wireguard/remote-peers/')
+    assert response.status_code == 200
+    peer = response.json()['data']['items'][0]
+    assert peer['remote_network_cidr'] == '172.30.0.0/24'
+    assert 'equipment_subnet' not in peer and 'token_digest' not in peer
+
+
+def test_admin_remote_peer_enrollment_uses_canonical_response_and_one_time_token(http):
+    from common.models.wireguard_provisioning import WireGuardRemotePeerModel
+    http.app.dependency_overrides[admin_required] = lambda: SimpleNamespace(is_admin=True)
+    http.service.enroll_remote_peer.return_value = {
+        'remote_peer': WireGuardRemotePeerModel(**enrollment()), 'enrollment_token': 'one-time-token'}
+    body = enrollment()
+    body['remote_network_cidr'] = body.pop('equipment_subnet')
+    response = http.client.post('/wireguard/remote-peers/', json=body)
+    assert response.status_code == 201
+    assert response.headers['cache-control'] == 'no-store'
+    assert response.json()['data']['remote_peer']['remote_network_cidr'] == '172.30.0.0/24'
+    assert response.json()['data']['enrollment_token'] == 'one-time-token'
+    http.service.enroll_remote_peer.assert_called_once()
+
+
+def test_remote_peer_http_conflicting_lan_aliases_are_rejected(http):
+    http.app.dependency_overrides[admin_required] = lambda: SimpleNamespace(is_admin=True)
+    response = http.client.post('/wireguard/remote-peers/', json={
+        **enrollment(), 'remote_network_cidr': '192.168.1.0/24'})
+    assert response.status_code == 422
+    http.service.enroll_remote_peer.assert_not_called()

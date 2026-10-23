@@ -56,7 +56,7 @@ class LocalBackend:
         instructor = self.users_class().get_user(user_email=args.instructor)
         if not instructor.is_authorized:
             raise ValueError('The instructor must have an existing Agoge instructor or admin account')
-        data = {'build_file': args.template, 'kit_id': args.kit_id, 'build_count': args.count,
+        data = {'build_file': args.template, 'remote_peer_id': args.remote_peer_id, 'build_count': args.count,
                 'expires': (datetime.now(timezone.utc) + timedelta(hours=args.expires_hours)).isoformat(),
                 'registration_required': False, 'lms_integration': False, 'test': True}
         manager = self.unit_class(env_dict=self.env_dict, debug=True)
@@ -115,17 +115,25 @@ class LocalBackend:
         unit = self._unit(unit_id)
         workouts = self.db.query(collection_name=DbCollections.WORKOUT,
                                  filters=[('parent_id', '==', unit_id)])
-        endpoint = unit.get('wireguard_endpoint') or {}
+        endpoint_snapshot = unit.get('wireguard_endpoint') or {}
+        endpoint = (self.db.get(collection_name=DbCollections.WIREGUARD_ENDPOINT,
+                                doc_id=endpoint_snapshot['id']) if endpoint_snapshot.get('id') else {})
+        # A reused gateway number must not advertise a different lab's DNS.
+        if endpoint.get('unit_id') != unit_id:
+            endpoint = {}
         lease = self.db.get(collection_name=DbCollections.WIREGUARD_LEASE, doc_id=unit_id) or {}
         try:
             state_name = UnitStates(unit.get('state')).name
         except ValueError:
             state_name = 'UNKNOWN'
         return {'project': TEST_PROJECT, 'unit_id': unit_id, 'join_code': unit.get('join_code'),
+                'connection_id': f'{TEST_PROJECT}:{unit_id}' if endpoint else None,
                 'state': unit.get('state'), 'state_name': state_name,
                 'endpoint': {key: endpoint.get(key) for key in ('hostname', 'port')},
-                'wireguard': {key: lease.get(key) for key in
-                              ('kit_id', 'status', 'service_ready', 'tunnel_ready', 'health_timestamp')},
+                'wireguard': {'remote_peer_id': lease.get('remote_peer_id') or lease.get('kit_id'),
+                              'remote_network_cidr': lease.get('remote_network_cidr') or lease.get('equipment_subnet'),
+                              **{key: lease.get(key) for key in
+                                 ('status', 'service_ready', 'tunnel_ready', 'health_timestamp')}},
                 'workouts': [{'workout_id': w['id'], 'state': w.get('state'),
                               'student_email': w.get('student_email')} for w in workouts]}
 
@@ -203,7 +211,8 @@ def parser():
     lab = commands.add_parser('create-lab', help='Create a lab from the uploaded catalog template')
     lab.add_argument('--template', default='wireguard-factory-lab')
     lab.add_argument('--instructor', required=True, type=_email)
-    lab.add_argument('--kit-id', required=True)
+    lab.add_argument('--remote-peer-id', '--kit-id', dest='remote_peer_id', required=True,
+                     help='Registered remote peer ID (--kit-id is a compatibility alias)')
     lab.add_argument('--count', default=1, type=_count)
     lab.add_argument('--expires-hours', default=2, type=_hours)
     lab.add_argument('--student-email', type=_email, help='Also claim and build one student workout')

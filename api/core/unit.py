@@ -29,7 +29,7 @@ from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.utilities.id_generator import IdGenerator
 from common.services.wireguard_endpoint import WireGuardEndpointRegistry
 from common.services.wireguard_lab_spec import configure_kit_topology
-from common.services.wireguard_provisioning import WireGuardProvisioningService
+from common.services.wireguard_provisioning import WireGuardProvisioningService, resolve_remote_peer_id
 from common.utilities.timestamps import Timestamps
 
 from utilities.lms.lms_canvas import LMSSpecCanvas
@@ -278,9 +278,7 @@ class Unit:
             try:
                 gateways = [server for server in unit.servers or [] if server.wireguard_gateway]
                 if gateways:
-                    kit_id = data.get('kit_id')
-                    if not isinstance(kit_id, str) or not kit_id:
-                        raise BadRequest('Select a registered factory kit for this WireGuard Lab')
+                    kit_id = resolve_remote_peer_id(data)
                     provisioning = WireGuardProvisioningService(self.env_dict, db=self.db)
                     kit = provisioning.get_authorized_kit(kit_id, requester)
                     equipment_subnet = (kit.get('equipment_subnet') if isinstance(kit, dict)

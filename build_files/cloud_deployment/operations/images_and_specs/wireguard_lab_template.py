@@ -32,7 +32,7 @@ class WireGuardLabTemplate:
 
     def run(self) -> bool:
         print(f'Upload destination: {self.project}/{DATABASE_NAME}/catalog.')
-        print('This uploads a reusable template; it does not build VMs or assign a factory kit.')
+        print('This uploads a reusable template; it does not build VMs or assign a remote peer.')
         try:
             env = CloudEnv(project=self.project)
             if env.project != self.project:
@@ -69,8 +69,8 @@ class WireGuardLabTemplate:
             destination = f'{self.project}/{DATABASE_NAME}/catalog/{catalog_id}'
             print(f'{"Uploaded" if created else "Already current"}: {destination}')
             print('In this site, open Teachers → New Lab, refresh the Lab Catalog, select '
-                  'WireGuard Factory Lab, and click Build Lab.')
-            print('Select an enrolled authorized kit, student capacity, and expiration, then submit the build.')
+                  'WireGuard Remote Lab, and click Build Lab.')
+            print('Select an authorized remote peer, student capacity, and expiration, then submit the build.')
             return True
         except (BadRequest, Conflict) as error:
             print(f'WireGuard template upload did not finish: {error.message}')
@@ -99,9 +99,9 @@ class WireGuardLabTemplate:
         unit = UnitModel(id=identifier, instructor_id=[instructor],
                          **default_wireguard_spec(source, connections))
         # A catalog is deliberately unassigned. The placeholder equipment route
-        # is replaced from the authorized registered kit on every Unit build.
+        # is replaced from the authorized remote peer's private LAN on every Unit build.
         configure_kit_topology(unit, '172.30.0.0/24', port)
-        unit.summary.description += (' Build with an enrolled factory kit; its equipment network and '
+        unit.summary.description += (' Build with a registered remote peer; its private LAN and '
                                      'WireGuard settings are assigned automatically. One Kali/workstation per student.')
         return CatalogModel.model_validate({**unit.model_dump(), 'discriminator': 'wireguard-starter'}).model_dump()
 

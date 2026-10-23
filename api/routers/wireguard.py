@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from common.exceptions import BadRequest, Conflict, NotFound, NotReady, Unauthorized
 from common.models.response import AgogeResponse
 from common.models.wireguard import WireGuardPublicEndpointModel
-from common.models.wireguard_provisioning import WireGuardHealthReport, WireGuardKitCreate
+from common.models.wireguard_provisioning import WireGuardHealthReport, WireGuardKitCreate, WireGuardRemotePeerCreate
 from common.services.wireguard_endpoint import WireGuardEndpointRegistry
 from common.services.wireguard_provisioning import WireGuardProvisioningService
 from dependencies import get_cloud_env, teacher_required, admin_required
@@ -68,6 +68,30 @@ async def enroll_wireguard_kit(
     response.headers['Cache-Control'] = 'no-store'
     try:
         return AgogeResponse(data=WireGuardProvisioningService(env_dict).enroll(data, current_user))
+    except (BadRequest, Conflict, Unauthorized) as error:
+        raise _http_error(error)
+
+
+@wireguard_router.get('/remote-peers/')
+async def list_wireguard_remote_peers(
+    env_dict: dict = Depends(get_cloud_env), current_user=Depends(teacher_required),
+):
+    """Instructor inventory uses remote-peer names without migrating legacy records."""
+    peers = WireGuardProvisioningService(env_dict).list_remote_peers(current_user)
+    return AgogeResponse(data={'items': [peer.model_dump(by_alias=True) for peer in peers],
+                               'total': len(peers)})
+
+
+@wireguard_router.post('/remote-peers/', status_code=201)
+async def enroll_wireguard_remote_peer(
+    data: WireGuardRemotePeerCreate, response: Response,
+    env_dict: dict = Depends(get_cloud_env), current_user=Depends(admin_required),
+):
+    response.headers['Cache-Control'] = 'no-store'
+    try:
+        result = WireGuardProvisioningService(env_dict).enroll_remote_peer(data, current_user)
+        return AgogeResponse(data={'remote_peer': result['remote_peer'].model_dump(by_alias=True),
+                                   'enrollment_token': result['enrollment_token']})
     except (BadRequest, Conflict, Unauthorized) as error:
         raise _http_error(error)
 
