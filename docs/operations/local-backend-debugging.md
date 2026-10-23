@@ -147,17 +147,17 @@ settings for each test build:
 }
 ```
 
-Then build the lab and optional student workout with a short command:
+For the repeated build/start/stop/delete loop, run the profile interactively:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py create-lab --profile .local/debug-lab/profile.json
+.\venv\Scripts\python.exe debug_lab.py run-lab --profile .local/debug-lab/profile.json
 ```
 
 An explicit command-line flag overrides its profile value. For example, test
 with two workstations and a one-hour expiration:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py create-lab `
+.\venv\Scripts\python.exe debug_lab.py run-lab `
   --profile .local/debug-lab/profile.json --count 2 --expires-hours 1
 ```
 
@@ -178,7 +178,73 @@ provisioning. If that check fails, inspect `list-peers` or enroll the missing pe
 with the administrator account. Peer enrollment data stays in the registration;
 the profile only references its ID.
 
+## Run an interactive lifecycle
+
+`run-lab` uses the same profile and lab settings as `create-lab`, then guides
+you through a complete test in one debugger session:
+
+1. List recent test labs for the **same instructor and remote peer**, then ask
+   whether to delete them before building. The default window is the last
+   **24 hours**, based on each lab's creation time. Completed deletions are
+   excluded; older records marked deleted with incomplete cleanup can be retried.
+   Stop any other build/debugger using those labs before approving deletion.
+2. Build the new shared lab and its optional student workout. The new lab ID is
+   printed as soon as it is saved, before VM provisioning.
+3. Prompt to **start** the lab and the student workout created by this run.
+4. Prompt to **stop** that workout and the lab.
+5. Prompt to **delete** the new lab and its managed resources, then verify
+   cleanup and release of the remote peer's assignment.
+
+At the start and stop prompts, press **Enter** or answer `y` to continue.
+Answering `n` or `q` ends the sequence and keeps the lab for inspection.
+Deletion prompts default to **No**: answer `y` to delete. Declining the initial
+recent-lab cleanup continues to the new build; declining the final deletion
+keeps the new lab. Answer `q` at the initial cleanup prompt to cancel before
+building anything.
+
+A fresh build already starts its VMs. The first explicit start tests the start
+lifecycle path for an already running lab and may skip the Compute Engine start
+request. The runner also starts and stops the student workout explicitly so its
+display proxy and lifecycle state are handled along with the shared gateway.
+Omit `student_email` from the profile to exercise only the shared lab. Use
+`--duration-hours 2` to set the workout's start duration; the default is two
+hours, and values from 1 through 10 are supported.
+
+Choose how to handle previous runs at the beginning:
+
+```powershell
+# Ask about recent labs, then prompt between lifecycle steps.
+.\venv\Scripts\python.exe debug_lab.py run-lab --profile .local/debug-lab/profile.json
+
+# Delete matching recent labs automatically before building.
+.\venv\Scripts\python.exe debug_lab.py run-lab --profile .local/debug-lab/profile.json --delete-recent
+
+# Skip the recent-lab check and begin the new build.
+.\venv\Scripts\python.exe debug_lab.py run-lab --profile .local/debug-lab/profile.json --skip-cleanup
+```
+
+`--delete-recent` and `--skip-cleanup` are mutually exclusive. They control only
+the initial cleanup; prompts between build, start, stop, and final deletion
+remain. Add `--recent-hours 48` to include matching labs created in the last
+48 hours; the supported window is more than zero and at most 168 hours. These
+controls are command-line options, not JSON profile fields. Even for an
+administrator, the automatic selection stays within the selected instructor's
+test labs and selected peer in test-dev. Review other or older runs with
+[the explicit listing/cleanup commands below](#list-and-delete-previous-debug-runs).
+A peer assigned to an older lab still needs that lab cleaned up before reuse.
+
+If pre-build cleanup fails, the new build does not begin. A failed build,
+interrupted operation, or declined lifecycle step leaves the new lab available
+for debugging; the runner does not delete it unconditionally on exit. Keep the
+printed ID, inspect it with `status`, and use `delete-labs` when finished.
+The sequence runs from the local checkout without deploying the API or Cloud
+Function for each test. Gateway callbacks still need the
+[reachable HTTPS API described below](#gateway-health-and-pi-configuration-still-use-https).
+
 ## Create a lab and one student workout
+
+Use `create-lab` when you want only the build step and will control the lab
+separately. It also accepts `--profile .local/debug-lab/profile.json`.
 
 Run from the repository root. Replace `remote-lab-01` with your enrolled remote peer ID
 and the instructor email with its authorized Agoge account:
@@ -239,7 +305,8 @@ Create a **Python** run/debug configuration:
 | Script path | Your checkout's `debug_lab.py` |
 | Python interpreter | Your checkout's `venv\Scripts\python.exe` |
 | Working directory | Your Agoge repository root |
-| Parameters, new lab | `create-lab --profile .local/debug-lab/profile.json` |
+| Parameters, full lifecycle | `run-lab --profile .local/debug-lab/profile.json` |
+| Parameters, build only | `create-lab --profile .local/debug-lab/profile.json` |
 | Parameters, existing lab | `create-workout --unit-id abcdefghij --student-email wireguard-test@example.com` |
 
 Start with the IDE's **Debug** button. Useful breakpoint locations:

@@ -22,6 +22,14 @@ ROOT = Path(__file__).resolve().parent
 TEST_PROJECT = 'test-dev-787001'
 
 
+class DebugLabStageError(RuntimeError):
+    """A locally generated state diagnostic, safe to include in run output."""
+
+
+class DebugLabInputError(ValueError):
+    """A locally generated account/peer diagnostic, safe to show to the user."""
+
+
 def invoke_local_worker(attributes: dict, env_dict: dict) -> None:
     # Use the qualified module name: both API and function folders have main.py.
     from cloud_functions.main import agoge_cloud_function
@@ -56,9 +64,9 @@ class LocalBackend:
         requester = self.users_class().get_user(user_email=email)
         if admin:
             if not requester.is_admin:
-                raise ValueError('Peer enrollment requires an existing Agoge admin account')
+                raise DebugLabInputError('Peer enrollment requires an existing Agoge admin account')
         elif not requester.is_authorized:
-            raise ValueError('The instructor must have an existing Agoge instructor or admin account')
+            raise DebugLabInputError('The instructor must have an existing Agoge instructor or admin account')
         return requester
 
     def _peer_service(self):
@@ -127,7 +135,12 @@ class LocalBackend:
             if remote_peer_id and summary['remote_peer_id'] != remote_peer_id:
                 continue
             items.append(summary)
-        items.sort(key=lambda item: (item['creation_timestamp'] or 0, item['unit_id']), reverse=True)
+        def sort_key(item):
+            timestamp = item['creation_timestamp']
+            return (timestamp if type(timestamp) in (int, float) and math.isfinite(timestamp) else 0,
+                    item['unit_id'])
+
+        items.sort(key=sort_key, reverse=True)
         return {'project': TEST_PROJECT, 'items': items, 'total': len(items)}
 
     def _cleanup_confirmation(self, unit):
@@ -195,29 +208,203 @@ class LocalBackend:
         return {'project': TEST_PROJECT, 'dry_run': False, 'items': items,
                 'total': len(items), 'deleted': deleted, 'failed': len(items) - deleted}
 
-    def create_lab(self, args):
+    def recent_labs(self, instructor, remote_peer_id, hours=24):
+        from common.constants.states import UnitStates
+
+        now = datetime.now(timezone.utc).timestamp()
+        cutoff = now - hours * 3600
+        listing = self.list_labs(instructor, remote_peer_id, include_deleted=True)
+        items = []
+        for item in listing['items']:
+            owners = item.get('instructor_id') or []
+            if isinstance(owners, str):
+                owners = [owners]
+            timestamp = item.get('creation_timestamp')
+            # Admin visibility must not expand automatic cleanup to someone
+            # else's labs. Missing/future timestamps are never selected.
+            if (instructor.lower() not in {owner.lower() for owner in owners if isinstance(owner, str)}
+                    or item.get('remote_peer_id') != remote_peer_id
+                    or type(timestamp) not in (int, float) or not math.isfinite(timestamp)
+                    or not cutoff <= timestamp <= now):
+                continue
+            if (item.get('state') == UnitStates.DELETED.value
+                    and self._cleanup_confirmation(self._unit(item['unit_id']))['deleted']):
+                continue
+            items.append(item)
+        return {**listing, 'items': items, 'total': len(items)}
+
+    def _verify_lab_stage(self, unit_id, stage):
+        from common.constants.database import DbCollections, DbOperators
+        from common.constants.states import ServerStates, UnitStates, WorkoutStates
+
+        status = self.status(unit_id)
+        expected_unit = ({UnitStates.READY.value, UnitStates.RUNNING.value} if stage == 'build'
+                         else {UnitStates.RUNNING.value} if stage == 'start' else {UnitStates.READY.value})
+        expected_workout = ({WorkoutStates.READY.value, WorkoutStates.RUNNING.value} if stage == 'build'
+                            else {WorkoutStates.RUNNING.value} if stage == 'start' else {WorkoutStates.READY.value})
+        expected_server = ServerStates.STOPPED.value if stage == 'stop' else ServerStates.RUNNING.value
+        if status['state'] not in expected_unit:
+            raise DebugLabStageError(f'Lab {unit_id} did not complete {stage}; state is {status["state_name"]}')
+        workouts = status['workouts']
+        for workout in workouts:
+            if workout.get('state') not in expected_workout:
+                raise DebugLabStageError(f'Workout {workout["workout_id"]} did not complete {stage}')
+
+        unit = self._unit(unit_id)
+        expected = set()
+        for server in unit.get('servers') or []:
+            parents = [unit_id] if server.get('community_server') else [w['workout_id'] for w in workouts]
+            expected.update(f'{parent}-{server["name"]}' for parent in parents)
+        if unit.get('wireguard_lease'):
+            expected.update(f'{w["workout_id"]}-display-guacamole-server' for w in workouts)
+        # Include dynamically created resources such as display proxies and
+        # firewalls, rather than accepting a READY parent with BROKEN servers.
+        for parent in [unit_id, *(w['workout_id'] for w in workouts)]:
+            records = self.db.query(collection_name=DbCollections.SERVER,
+                                    filters=[('parent_id', DbOperators.EQUAL, parent)]) or []
+            expected.update(record['name'] if record['name'].startswith(f'{parent}-')
+                            else f'{parent}-{record["name"]}' for record in records
+                            if record.get('name') and record.get('state') != ServerStates.DELETED.value)
+        for name in sorted(expected):
+            record = self.db.get(collection_name=DbCollections.SERVER, doc_id=name) or {}
+            if record.get('state') != expected_server:
+                raise DebugLabStageError(f'Server {name} did not complete {stage}; expected state {expected_server}')
+        return status
+
+    def run_lab(self, args, read_input=None):
+        """Run one prompted lifecycle, retaining failed runs for inspection."""
+        read_input = input if read_input is None else read_input
+        result = {'project': TEST_PROJECT, 'unit_id': None, 'outcome': 'kept',
+                  'completed_steps': [], 'exit_code': 0}
+        stage = 'recent cleanup'
+
+        def confirm(message, default=False):
+            while True:
+                answer = read_input(message).strip().lower()
+                if not answer:
+                    return default
+                if answer in ('y', 'yes'):
+                    return True
+                if answer in ('n', 'no'):
+                    return False
+                if answer in ('q', 'quit'):
+                    return None
+                print('Enter y, n, or q to quit.', flush=True)
+
+        def created(unit_id):
+            result['unit_id'] = unit_id
+
+        try:
+            if args.recent_cleanup != 'skip':
+                recent = self.recent_labs(args.instructor, args.remote_peer_id, args.recent_hours)
+                if recent['items']:
+                    print(f'Recent test labs for {args.instructor} / {args.remote_peer_id} '
+                          f'in the last {args.recent_hours:g} hours:', flush=True)
+                    for item in recent['items']:
+                        print(f'  {item["unit_id"]}: {item["state_name"]} ({item.get("name") or "unnamed"})', flush=True)
+                    approved = (True if args.recent_cleanup == 'delete' else
+                                confirm('Delete these labs before building? [y/N/q]: '))
+                    if approved is None:
+                        result['outcome'] = 'cancelled'
+                        return result
+                    if approved:
+                        # Recheck scope after the prompt; never add a newly
+                        # discovered lab to the set the user saw and approved.
+                        current = {item['unit_id'] for item in self.recent_labs(
+                            args.instructor, args.remote_peer_id, args.recent_hours)['items']}
+                        identifiers = [item['unit_id'] for item in recent['items'] if item['unit_id'] in current]
+                        if identifiers:
+                            result['cleanup'] = self.delete_labs(args.instructor, identifiers, execute=True)
+                            print(json.dumps(result['cleanup'], indent=2), flush=True)
+                            if result['cleanup'].get('failed', 0):
+                                result.update(outcome='failed', exit_code=1, failed_step=stage)
+                                return result
+                else:
+                    print('No matching recent test labs need cleanup.', flush=True)
+
+            stage = 'build'
+            built = self.create_lab(args, on_created=created)
+            created(built['unit_id'])
+            unit_id = result['unit_id']
+            status = self._verify_lab_stage(unit_id, 'build')
+            workout_ids = [workout['workout_id'] for workout in status['workouts']]
+            result['completed_steps'].append('build')
+            print(json.dumps(status, indent=2), flush=True)
+
+            stage = 'start'
+            if not confirm(f'Start lab {unit_id} and its workouts? [Y/n/q]: ', default=True):
+                return result
+            self.action('unit', unit_id, 'start')
+            for workout_id in workout_ids:
+                self.action('workout', workout_id, 'start', args.duration_hours)
+            status = self._verify_lab_stage(unit_id, 'start')
+            result['completed_steps'].append('start')
+            print(json.dumps(status, indent=2), flush=True)
+
+            stage = 'stop'
+            if not confirm(f'Stop lab {unit_id} and its workouts? [Y/n/q]: ', default=True):
+                return result
+            for workout_id in workout_ids:
+                self.action('workout', workout_id, 'stop')
+            self.action('unit', unit_id, 'stop')
+            status = self._verify_lab_stage(unit_id, 'stop')
+            result['completed_steps'].append('stop')
+            print(json.dumps(status, indent=2), flush=True)
+
+            stage = 'delete'
+            if confirm(f'Delete test lab {unit_id} and its managed resources? [y/N/q]: '):
+                result['deletion'] = self.delete_labs(args.instructor, [unit_id], execute=True)
+                if result['deletion'].get('failed', 0):
+                    result.update(outcome='failed', exit_code=1, failed_step=stage)
+                else:
+                    result['completed_steps'].append('delete')
+                    result['outcome'] = 'deleted'
+        except KeyboardInterrupt:
+            result.update(outcome='cancelled', exit_code=130, failed_step=stage)
+        except EOFError:
+            print('Input ended; lifecycle execution stopped.', flush=True)
+            result.update(outcome='cancelled', exit_code=1, failed_step=stage)
+        except Exception as error:
+            # Keep SDK error bodies out of the summary. Worker logs and status
+            # identify the failure; preserve the lab for interactive debugging.
+            print(f'Lifecycle stopped during {stage} ({type(error).__name__}).', flush=True)
+            result.update(outcome='failed', exit_code=1, failed_step=stage, error=type(error).__name__)
+            if isinstance(error, (DebugLabStageError, DebugLabInputError)):
+                result['detail'] = str(error)
+                print(result['detail'], flush=True)
+        finally:
+            if result['unit_id'] and result['outcome'] != 'deleted':
+                print(f'Lab {result["unit_id"]} was retained. Inspect it with debug_lab.py status '
+                      f'--unit-id {result["unit_id"]}.', flush=True)
+                print(f'Cleanup: debug_lab.py delete-labs --instructor {args.instructor} '
+                      f'--unit-id {result["unit_id"]} --yes', flush=True)
+        return result
+
+    def create_lab(self, args, *, on_created=None):
         from common.exceptions import NotFound, Unauthorized
 
         instructor = self._requester(args.instructor)
         try:
             peer = self._peer_service().get_authorized_remote_peer(args.remote_peer_id, instructor)
         except NotFound:
-            raise ValueError(
+            raise DebugLabInputError(
                 f"Remote peer '{args.remote_peer_id}' is not registered or enabled in {TEST_PROJECT}. "
                 'Register it with enroll-peer or Admins → Build Manager → Remote Labs. '
                 f'Use list-peers --instructor {args.instructor} to inspect authorized peers.') from None
         except Unauthorized:
-            raise ValueError(
+            raise DebugLabInputError(
                 f"Instructor {args.instructor} is not authorized for remote peer '{args.remote_peer_id}'. "
                 'Ask an Agoge administrator to authorize this instructor.') from None
         if peer.assigned_unit_id:
-            raise ValueError(f"Remote peer '{peer.id}' is already assigned to lab {peer.assigned_unit_id}. "
+            raise DebugLabInputError(f"Remote peer '{peer.id}' is already assigned to lab {peer.assigned_unit_id}. "
                              'Delete that lab to release it, or select another available remote peer.')
         data = {'build_file': args.template, 'remote_peer_id': args.remote_peer_id, 'build_count': args.count,
                 'expires': (datetime.now(timezone.utc) + timedelta(hours=args.expires_hours)).isoformat(),
                 'registration_required': False, 'lms_integration': False, 'test': True}
         manager = self.unit_class(env_dict=self.env_dict, debug=True)
         unit_id = manager.build(requester=instructor, data=data)
+        if on_created is not None:
+            on_created(unit_id)
         # Print before provisioning so failures/breakpoints retain a resumable ID.
         print(f'Created lab {unit_id}; provisioning locally.', flush=True)
         self._build_unit(unit_id)
@@ -406,7 +593,7 @@ class DebugArgumentParser(argparse.ArgumentParser):
     def parse_args(self, args=None, namespace=None):
         parsed = super().parse_args(args, namespace)
         try:
-            if parsed.command == 'create-lab':
+            if parsed.command in ('create-lab', 'run-lab'):
                 self._lab_profile(parsed)
             else:
                 parsed.project = getattr(parsed, 'project', TEST_PROJECT)
@@ -460,7 +647,7 @@ class DebugArgumentParser(argparse.ArgumentParser):
         values = {**defaults, **profile, **{key: value for key, value in vars(args).items() if key in allowed}}
         for name in ('instructor', 'remote_peer_id'):
             if name not in values:
-                raise ValueError(f'create-lab requires --{name.replace("_", "-")} or {name} in --profile')
+                raise ValueError(f'{args.command} requires --{name.replace("_", "-")} or {name} in --profile')
         for name in ('project', 'template', 'instructor', 'remote_peer_id', 'student_email', 'wireguard_api_url'):
             value = values[name]
             if value is None and name in ('student_email', 'wireguard_api_url'):
@@ -494,17 +681,32 @@ def parser():
     result.add_argument('--wireguard-api-url', type=_https_url, default=argparse.SUPPRESS,
                         help='HTTPS callback base for a new lab; defaults to the project API')
     commands = result.add_subparsers(dest='command', required=True)
-    lab = commands.add_parser('create-lab', help='Create a lab from the uploaded catalog template')
-    lab.add_argument('--profile', type=_absolute_path, help='JSON debug profile; explicit flags override its values')
-    lab.add_argument('--project', default=argparse.SUPPRESS, choices=[TEST_PROJECT])
-    lab.add_argument('--wireguard-api-url', type=_https_url, default=argparse.SUPPRESS)
-    lab.add_argument('--template', default=argparse.SUPPRESS)
-    lab.add_argument('--instructor', default=argparse.SUPPRESS, type=_email)
-    lab.add_argument('--remote-peer-id', '--kit-id', dest='remote_peer_id', default=argparse.SUPPRESS, type=_remote_peer_id,
-                     help='Registered remote peer ID (--kit-id is a compatibility alias)')
-    lab.add_argument('--count', default=argparse.SUPPRESS, type=_count)
-    lab.add_argument('--expires-hours', default=argparse.SUPPRESS, type=_hours)
-    lab.add_argument('--student-email', default=argparse.SUPPRESS, type=_email, help='Also claim and build one student workout')
+    for name, description in (
+            ('create-lab', 'Create a lab from the uploaded catalog template'),
+            ('run-lab', 'Build, start, stop, and delete a lab with prompts between stages')):
+        lab = commands.add_parser(name, help=description)
+        lab.add_argument('--profile', type=_absolute_path, help='JSON debug profile; explicit flags override its values')
+        lab.add_argument('--project', default=argparse.SUPPRESS, choices=[TEST_PROJECT])
+        lab.add_argument('--wireguard-api-url', type=_https_url, default=argparse.SUPPRESS)
+        lab.add_argument('--template', default=argparse.SUPPRESS)
+        lab.add_argument('--instructor', default=argparse.SUPPRESS, type=_email)
+        lab.add_argument('--remote-peer-id', '--kit-id', dest='remote_peer_id', default=argparse.SUPPRESS, type=_remote_peer_id,
+                        help='Registered remote peer ID (--kit-id is a compatibility alias)')
+        lab.add_argument('--count', default=argparse.SUPPRESS, type=_count)
+        lab.add_argument('--expires-hours', default=argparse.SUPPRESS, type=_hours)
+        lab.add_argument('--student-email', default=argparse.SUPPRESS, type=_email,
+                         help='Also claim and build one student workout')
+        if name == 'run-lab':
+            lab.set_defaults(recent_cleanup='ask')
+            cleanup_mode = lab.add_mutually_exclusive_group()
+            cleanup_mode.add_argument('--delete-recent', dest='recent_cleanup', action='store_const', const='delete',
+                                      help='Automatically delete recent test labs for this instructor and peer')
+            cleanup_mode.add_argument('--skip-cleanup', dest='recent_cleanup', action='store_const', const='skip',
+                                      help='Bypass the recent-lab check; lifecycle prompts still apply')
+            lab.add_argument('--recent-hours', type=_hours, default=24,
+                             help='Recent cleanup window in hours, more than zero and at most 168 (default: 24)')
+            lab.add_argument('--duration-hours', type=int, default=2, choices=range(1, 11),
+                             help='Student workout runtime when starting (default: 2)')
     peers = commands.add_parser('list-peers', help='List remote peers authorized for an Agoge instructor or admin')
     peers.add_argument('--instructor', required=True, type=_email)
     labs = commands.add_parser('list-labs', help='List authorized test labs from previous debug runs')
@@ -542,6 +744,8 @@ def main(argv=None):
         backend = load_backend(args.project, args.wireguard_api_url)
         if args.command == 'create-lab':
             result = backend.create_lab(args)
+        elif args.command == 'run-lab':
+            result = backend.run_lab(args)
         elif args.command == 'list-peers':
             result = backend.list_peers(args.instructor)
         elif args.command == 'list-labs':
@@ -561,6 +765,8 @@ def main(argv=None):
         print(f'Error: {error}', file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2))
+    if args.command == 'run-lab':
+        return result['exit_code']
     return 1 if args.command == 'delete-labs' and result.get('failed', 0) else 0
 
 
