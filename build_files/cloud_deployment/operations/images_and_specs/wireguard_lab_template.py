@@ -98,8 +98,9 @@ class WireGuardLabTemplate:
         if not re.fullmatch(r'[a-z0-9][a-z0-9.:-]{0,252}', source_project):
             raise BadRequest('The selected student template has an invalid GCP source project')
         print(f'Validating student Compute image: projects/{source_project}/global/images/{resource}')
+        image_api = ComputeImageAPI(self.project, env['region'], env['zone'])
         try:
-            image = ComputeImageAPI(self.project, env['region'], env['zone']).get(
+            image = image_api.get(
                 resource=resource, project=source_project, fallback_to_shared=not bool(explicit))
         except NotFound:
             projects = [source_project]
@@ -110,17 +111,79 @@ class WireGuardLabTemplate:
             checks = '\n'.join(
                 f'  gcloud compute images describe {resource} --project={project} '
                 '--format="yaml(name,status,architecture,selfLink)"' for project in projects)
-            raise BadRequest(
+            print(
                 f'The selected student Compute image was not found: {sources}.\n'
                 f'Verify with the same account selected in setup:\n{checks}\n'
-                'Copying a Firestore image record does not copy its Compute image. '
-                'Correct the selected image record\'s source reference (self_link, or boot disk '
-                'initializeParams.sourceImage) to the existing published image, or import/check in '
-                'a student image first. Confirm image read access if the source is correct. '
-                'No catalog template was written.') from None
+                'Copying a Firestore image record does not copy its Compute image.')
+            recover = input('Choose an existing GCP image for this catalog upload instead? [y/N]: ')
+            if recover.strip().lower() not in ('y', 'yes'):
+                raise BadRequest(
+                    'Correct the selected image record\'s source reference (self_link, image, or boot disk '
+                    'initializeParams.sourceImage) to the existing published image, or import/check in '
+                    'a student image first. Confirm image read access if the source is correct. '
+                    'No catalog template was written.') from None
+            image = self._choose_student_source(image_api)
         if str(image.status).upper() != 'READY' or str(image.architecture).upper() != 'X86_64':
             raise BadRequest('The selected student boot image must be READY and AMD64 for E2')
+        print(f'Student boot source for this catalog: {image.self_link}')
         return image.self_link
+
+    @staticmethod
+    def _choose_student_source(image_api):
+        """Choose a verified source for this catalog without editing image records."""
+        default_project = BuildConstants.SharedResourceProjects.MAIN_SHARED_RESOURCE_PROJECT
+        print('Student connection settings will come from the selected Agoge template. '
+              'Choose an image that accepts its saved username/password and connection protocol.')
+        while True:
+            value = input(f'Source GCP project or full image reference [{default_project}] '
+                          '(cancel to stop): ').strip() or default_project
+            if value.lower() == 'cancel':
+                raise BadRequest('Image selection canceled. No catalog template was written.')
+            explicit = re.search(r'(?:^|/)projects/([^/]+)/global/images/([a-z][a-z0-9-]{0,62})$', value)
+            project = explicit.group(1) if explicit else value
+            if not re.fullmatch(r'[a-z0-9][a-z0-9.:-]{0,252}', project):
+                print('Enter a GCP project ID or a concrete projects/PROJECT/global/images/IMAGE reference.')
+                continue
+            if explicit:
+                resource = explicit.group(2)
+            else:
+                try:
+                    images = image_api.list(project=project)
+                except Exception as error:
+                    print(f'Could not list images in {project} ({type(error).__name__}). '
+                          'Check image list access, enter another project, or paste an exact image reference.')
+                    continue
+                names = sorted({
+                    image.name for image in images
+                    if str(image.status).upper() == 'READY' and str(image.architecture).upper() == 'X86_64'
+                    and re.fullmatch(r'[a-z][a-z0-9-]{0,62}', image.name)
+                })
+                if not names:
+                    print(f'No READY AMD64 images found in {project}. Choose another source project or cancel.')
+                    continue
+                print(f'Available READY AMD64 images in {project}:')
+                numbered_names = {str(index): name for index, name in enumerate(names, 1)}
+                for index, name in numbered_names.items():
+                    print(f'  {index}. {name}')
+                while True:
+                    resource = input('GCP image number or exact name '
+                                     '(Enter for another project, cancel to stop): ').strip()
+                    if resource.lower() == 'cancel':
+                        raise BadRequest('Image selection canceled. No catalog template was written.')
+                    if not resource:
+                        break
+                    resource = numbered_names.get(resource, resource)
+                    if resource in names:
+                        break
+                    print('Choose an image from the numbered list.')
+                if not resource:
+                    continue
+            try:
+                # Re-read the selected image and never substitute a different project.
+                return image_api.get(resource=resource, project=project, fallback_to_shared=False)
+            except NotFound:
+                print(f'Image projects/{project}/global/images/{resource} was not found. '
+                      'Choose another source project or image reference.')
 
     @staticmethod
     def _catalog(identifier: str, source: str, connections: list, instructor: str, port: int) -> dict:

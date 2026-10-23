@@ -199,7 +199,31 @@ An explicit source such as
 `ualr-agoge`, even when the catalog upload destination is `test-dev-787001`.
 Older versions incorrectly labeled the final Compute error with the destination
 project. Update the feature branch and restart setup for accurate logs and a
-source-specific diagnostic.
+source-specific diagnostic and image recovery selection.
+
+You can finish the upload through setup without editing Firestore manually:
+
+1. When setup asks **Choose an existing GCP image for this catalog upload instead?**,
+   enter **y**.
+2. Enter the GCP project that actually contains your published student image.
+   Press Enter to browse **`agoge-shared-resources`**, or enter another project ID.
+   You can also paste an exact `projects/PROJECT/global/images/IMAGE` reference or
+   full Compute image URL to select it directly without listing the project.
+3. When browsing, setup lists only **READY AMD64** images. Choose the actual student
+   image by its number or exact GCP image name. A blank selection returns to the
+   project prompt; **cancel** stops the upload. If listing fails or the project has
+   no compatible images, enter another project or an exact image reference.
+4. Setup rechecks the selected image and prints the student boot source saved in
+   the catalog, then completes the upload. Choose an image prepared with the saved
+   Agoge template's username, password, and connection protocol. Selecting a different
+   image does not configure accounts or enable RDP/SSH/VNC inside it.
+
+Recovery uses the selected Compute image in this catalog only and copies the
+student connection settings from the chosen Agoge template. It leaves the
+`agoge-v1/image` records as saved, so other labs using those records are unaffected.
+The catalog still uploads to the selected environment, such as `test-dev-787001`,
+and the gateway still uses its default Ubuntu image. If the original server library
+record also needs repair, use the steps below.
 
 Using the same account selected in setup, verify that example source:
 

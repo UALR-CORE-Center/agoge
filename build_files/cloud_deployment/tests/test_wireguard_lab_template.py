@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from google.cloud.compute_v1 import Image
 
 from cloud_deployment import setup_manager as setup_manager_module
 from cloud_deployment.operations.images_and_specs import wireguard_lab_template as module
@@ -235,6 +236,118 @@ def test_missing_firestore_document_is_not_misreported_as_missing_compute_image(
     assert 'gcloud compute images describe' not in output
     assert 'private-fixture-password' not in output
     upload.compute.assert_not_called()
+
+
+def _published_image(name='actual-powershell', project='agoge-shared-resources', **changes):
+    return Image(name=name, **{
+        'status': 'READY', 'architecture': 'X86_64',
+        'self_link': f'https://www.googleapis.com/compute/v1/projects/{project}/global/images/{name}',
+        **changes,
+    })
+
+
+def _recovery_inputs(monkeypatch, responses):
+    values = iter(['', '', '', 'y', *responses])
+    monkeypatch.setattr('builtins.input', lambda prompt: next(values))
+
+
+@pytest.mark.parametrize('selection', ['1', 'actual-powershell'])
+def test_recovery_browses_real_images_and_uses_selected_source_only_in_catalog(upload, monkeypatch, capsys, selection):
+    original = deepcopy(upload.db.collections['image'])
+    actual = _published_image()
+    client = upload.compute.return_value
+    client.get.side_effect = [NotFound('private-sdk-error'), actual]
+    client.list.return_value = [
+        _published_image('arm-image', architecture='ARM64'), actual,
+        _published_image('pending-image', status='PENDING'),
+    ]
+    _recovery_inputs(monkeypatch, ['', '0', 'wrong-name', selection])
+
+    assert upload.operation.run()
+
+    client.list.assert_called_once_with(project='agoge-shared-resources')
+    assert client.get.call_count == 2
+    assert client.get.call_args.kwargs == {
+        'resource': 'actual-powershell', 'project': 'agoge-shared-resources', 'fallback_to_shared': False}
+    student = upload.db.collections['catalog']['wireguard-factory-lab']['servers'][1]
+    assert student['image'] == actual.self_link
+    assert len(student['human_interaction']) == 1
+    for key, value in original['kali-template']['human_interaction'][0].items():
+        assert student['human_interaction'][0][key] == value
+    assert upload.db.collections['image'] == original
+    assert upload.db.records == {} and upload.db.claims == {}
+    output = capsys.readouterr().out
+    assert '1. actual-powershell' in output
+    assert 'arm-image' not in output and 'pending-image' not in output
+    assert 'private-sdk-error' not in output and 'private-fixture-password' not in output
+
+
+@pytest.mark.parametrize('prefix', ['', 'https://www.googleapis.com/compute/v1/'])
+def test_recovery_accepts_exact_image_reference_without_listing_or_fallback(upload, monkeypatch, prefix):
+    actual = _published_image(project='another-image-project')
+    upload.compute.return_value.get.side_effect = [NotFound('missing'), actual]
+    _recovery_inputs(monkeypatch, [prefix + 'projects/another-image-project/global/images/actual-powershell'])
+
+    assert upload.operation.run()
+
+    upload.compute.return_value.list.assert_not_called()
+    upload.compute.return_value.get.assert_called_with(
+        resource='actual-powershell', project='another-image-project', fallback_to_shared=False)
+    assert upload.db.collections['catalog']['wireguard-factory-lab']['servers'][1]['image'] == actual.self_link
+
+
+@pytest.mark.parametrize('responses', [['cancel'], ['', 'cancel']])
+def test_recovery_cancel_preserves_existing_catalog_and_image_records(upload, monkeypatch, responses):
+    existing = {'id': 'wireguard-factory-lab', 'summary': {'name': 'Existing lab'}}
+    upload.db.collections['catalog']['wireguard-factory-lab'] = deepcopy(existing)
+    before = deepcopy(upload.db.collections)
+    upload.compute.return_value.get.side_effect = NotFound('missing')
+    upload.compute.return_value.list.return_value = [_published_image()]
+    _recovery_inputs(monkeypatch, responses)
+
+    assert not upload.operation.run()
+    assert upload.db.collections == before
+
+
+@pytest.mark.parametrize('list_error', [False, True])
+def test_recovery_can_move_to_another_project_or_exact_reference_after_empty_or_failed_list(upload, monkeypatch, capsys, list_error):
+    client = upload.compute.return_value
+    actual = _published_image(project='actual-source-project')
+    client.get.side_effect = [NotFound('missing'), actual]
+    if list_error:
+        client.list.side_effect = RuntimeError('private-list-error')
+    else:
+        client.list.return_value = []
+    _recovery_inputs(monkeypatch, ['old-image-project', 'projects/actual-source-project/global/images/actual-powershell'])
+
+    assert upload.operation.run()
+
+    client.list.assert_called_once_with(project='old-image-project')
+    client.get.assert_called_with(resource='actual-powershell', project='actual-source-project', fallback_to_shared=False)
+    output = capsys.readouterr().out
+    assert ('Could not list images' if list_error else 'No READY AMD64 images') in output
+    assert 'private-list-error' not in output
+
+
+@pytest.mark.parametrize('changes', [{'status': 'PENDING'}, {'architecture': 'ARM64'}])
+def test_recovery_rechecks_compatibility_of_exact_image_before_catalog_write(upload, monkeypatch, changes):
+    upload.compute.return_value.get.side_effect = [NotFound('missing'), _published_image(**changes)]
+    _recovery_inputs(monkeypatch, ['projects/agoge-shared-resources/global/images/actual-powershell'])
+    assert not upload.operation.run()
+    assert upload.db.collections['catalog'] == {}
+
+
+def test_recovery_can_cancel_if_listed_image_disappears_before_selection(upload, monkeypatch, capsys):
+    client = upload.compute.return_value
+    client.get.side_effect = [NotFound('missing original'), NotFound('private-second-error')]
+    client.list.return_value = [_published_image()]
+    _recovery_inputs(monkeypatch, ['', '1', 'cancel'])
+    assert not upload.operation.run()
+    client.get.assert_called_with(resource='actual-powershell', project='agoge-shared-resources', fallback_to_shared=False)
+    output = capsys.readouterr().out
+    assert 'projects/agoge-shared-resources/global/images/actual-powershell was not found' in output
+    assert 'private-second-error' not in output
+    assert upload.db.collections['catalog'] == {}
 
 
 def test_new_menu_operation_is_project_scoped_and_needs_no_deployment(monkeypatch):
