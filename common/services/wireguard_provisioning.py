@@ -33,11 +33,16 @@ def resolve_remote_peer_id(data: dict) -> str:
 
 
 class WireGuardSecretStore:
+    _GRANT_RETRY_DELAYS = (1, 2, 4, 8, 16, 32, 32)
+
     def __init__(self, project, client=None):
+        from common.utilities.gcp.cloud_logger import Logger, LoggerNames
+
         if client is None:
             from google.cloud import secretmanager
             client = secretmanager.SecretManagerServiceClient()
         self.client, self.project = client, project
+        self.logger = Logger(log_name=LoggerNames.CLOUD_FN, class_name=self.__class__.__name__)
 
     def ensure(self, unit_id, payload):
         """Only the creator adds the initial version; retries reuse its identity."""
@@ -66,17 +71,65 @@ class WireGuardSecretStore:
         return json.loads(response.payload.data.decode('utf-8'))
 
     def grant(self, version_name, email):
+        from google.api_core.exceptions import InvalidArgument
+
         resource = version_name.split('/versions/')[0]
-        policy = self.client.get_iam_policy(request={'resource': resource})
         member = f'serviceAccount:{email}'
-        for binding in policy.bindings:
-            if binding.role == 'roles/secretmanager.secretAccessor' and not binding.condition.expression:
-                if member not in binding.members:
-                    binding.members.append(member)
-                break
-        else:
-            policy.bindings.add(role='roles/secretmanager.secretAccessor', members=[member])
-        self.client.set_iam_policy(request={'resource': resource, 'policy': policy})
+        max_attempts = len(self._GRANT_RETRY_DELAYS) + 1
+        for attempt in range(1, max_attempts + 1):
+            operation = 'secretmanager.get_iam_policy'
+            try:
+                # A retry must read a fresh policy and etag, including any
+                # conditional bindings, rather than replaying a stale write.
+                policy = self.client.get_iam_policy(request={
+                    'resource': resource, 'options': {'requested_policy_version': 3},
+                })
+                for binding in policy.bindings:
+                    if binding.role == 'roles/secretmanager.secretAccessor' and not binding.HasField('condition'):
+                        if member in binding.members:
+                            self.logger.info('WireGuard gateway secret access is already granted.',
+                                             operation=operation, attempt=attempt, max_attempts=max_attempts)
+                            return
+                        binding.members.append(member)
+                        break
+                else:
+                    policy.bindings.add(role='roles/secretmanager.secretAccessor', members=[member])
+                operation = 'secretmanager.set_iam_policy'
+                self.client.set_iam_policy(request={'resource': resource, 'policy': policy})
+            except Exception as error:
+                missing_principal = (isinstance(error, InvalidArgument)
+                                     and self._is_unpropagated_identity(error, email))
+                fields = {'operation': operation, 'attempt': attempt, 'max_attempts': max_attempts,
+                          'error_type': type(error).__name__,
+                          'code': 'INVALID_ARGUMENT' if isinstance(error, InvalidArgument) else None}
+                if not missing_principal or attempt == max_attempts:
+                    self.logger.error('WireGuard gateway secret access grant failed.', **fields)
+                    raise
+                delay = self._GRANT_RETRY_DELAYS[attempt - 1]
+                self.logger.warning(
+                    'Waiting for the new gateway service account to become visible before granting secret access.',
+                    **fields, retry_delay_seconds=delay)
+                time.sleep(delay)
+            else:
+                self.logger.info('WireGuard gateway secret access granted.', operation=operation,
+                                 attempt=attempt, max_attempts=max_attempts)
+                return
+
+    @staticmethod
+    def _is_unpropagated_identity(error, email):
+        """Recognize only a missing-principal response for this exact identity."""
+        target = rf'(?<![a-z0-9_.@-]){re.escape(email)}(?![a-z0-9_@-]|\.[a-z0-9_-])'
+        delimiter = r'''[\s:'"`<>\[\]]*'''
+        principal = r'\b(?:service\s*account|principal)'
+        missing = r'(?:does\s+not\s+exist|(?:was\s+)?not\s+found)\b'
+        patterns = (
+            rf'{principal}{delimiter}{target}{delimiter}{missing}',
+            rf'\bunknown\s+service\s*account{delimiter}{target}',
+            rf'{principal}\s+{missing}{delimiter}{target}',
+        )
+        # Inspect the response only for classification; never put its arbitrary
+        # message, policy contents, or referenced credentials into logs.
+        return any(re.search(pattern, str(error), re.IGNORECASE) for pattern in patterns)
 
     def delete(self, version_name):
         from google.api_core.exceptions import NotFound as GoogleNotFound

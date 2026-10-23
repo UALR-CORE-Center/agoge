@@ -148,6 +148,40 @@ def test_status_uses_firestore_query_and_safely_reports_health(cleanup, timestam
     query.stream.assert_called_once_with()
 
 
+@pytest.mark.parametrize('state,expected', [(11, 'BROKEN'), (None, 'UNKNOWN')])
+def test_status_distinguishes_gateway_failure_from_parent_build_stage(cleanup, state, expected):
+    add_lab(cleanup, servers=[{'name': 'wireguard', 'wireguard_gateway': True}])
+    if state is not None:
+        cleanup.db.collections[DbCollections.SERVER]['abcdefghij-wireguard'] = {
+            'state': state, 'metadata': 'private-bootstrap-value', 'password': 'private-server-password'}
+
+    result = cleanup.backend.status('abcdefghij')
+
+    assert result['state_name'] == 'BUILDING_SERVERS'
+    assert result['gateway'] == {'server_name': 'abcdefghij-wireguard', 'state': state, 'state_name': expected}
+    assert 'private-bootstrap-value' not in json.dumps(result)
+    assert 'private-server-password' not in json.dumps(result)
+
+
+def test_unit_action_sdk_failure_prints_safe_location_without_sdk_body(monkeypatch, capsys):
+    from google.api_core.exceptions import InvalidArgument
+
+    def fail(*args, **kwargs):
+        raise InvalidArgument('private-sdk-error-body')
+
+    backend = Mock()
+    backend.action.side_effect = fail
+    monkeypatch.setattr(cli, 'load_backend', Mock(return_value=backend))
+
+    code = cli.main(['unit-action', '--unit-id', 'abcdefghij', '--action', 'build'])
+
+    output = capsys.readouterr()
+    assert code == 1 and 'InvalidArgument' in output.err
+    assert 'test_debug_lab_cleanup.py:' in output.err and 'in fail' in output.err
+    assert 'private-sdk-error-body' not in output.out + output.err
+    assert str(cli.ROOT) not in output.out + output.err
+
+
 def test_actual_admin_can_list_other_instructors_test_labs(cleanup):
     cleanup.user.is_admin = True
     add_lab(cleanup, instructor_id=['other@example.edu'])

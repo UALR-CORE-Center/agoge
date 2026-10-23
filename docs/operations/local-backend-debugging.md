@@ -374,6 +374,45 @@ cannot be used as the callback URL because the gateway would interpret it as
 the gateway VM itself. Breakpoints in the HTTP callback handler can delay the
 gateway readiness check; continue promptly or expect a timeout.
 
+## Diagnose a failure before gateway VM creation
+
+The Unit state `BUILDING_SERVERS` records the last build stage reached; it does
+not prove that a VM is running. `status` also reports the gateway's own
+`server_name`, `state`, and `state_name` under `gateway`. Bootstrap work such as
+granting the gateway service account access to its configuration secret occurs
+before VM creation. If that work fails, `health_timestamp` can remain null
+because no guest has started; guest journal logs cannot diagnose that failure.
+
+An `InvalidArgument` error at this point can have several causes. A newly
+created service account not yet recognized by Secret Manager IAM is one
+possibility, rather than a conclusion from the exception class alone. The
+[Google IAM creation guide](https://docs.cloud.google.com/iam/docs/service-accounts-create)
+documents that a new account can take 60 seconds or more to become visible.
+The secret-access grant retries only the specific response that identifies the
+expected service account as nonexistent: at most eight attempts, with delays
+of 1, 2, 4, 8, 16, 32, and 32 seconds (95 seconds total, plus request time).
+Progress identifies the request operation, exception class, and attempt.
+Other invalid requests and permission denials fail immediately.
+
+`run-lab` failures and unexpected `unit-action` errors print repository-relative
+frame locations for tracing the failing call. These diagnostics omit source
+lines, local variables, and exception response bodies. Preserve the printed
+lab ID and resume the existing build after correcting the cause. For example:
+
+```powershell
+.\venv\Scripts\python.exe debug_lab.py unit-action --unit-id uljrlxqhjm --action build
+.\venv\Scripts\python.exe debug_lab.py status --unit-id uljrlxqhjm
+```
+
+Use this resume command directly; starting a new `run-lab --delete-recent` run
+would select the retained lab for cleanup. When the existing lab reaches
+`READY` or `RUNNING`, create the student workout separately if the original run
+failed before creating it:
+
+```powershell
+.\venv\Scripts\python.exe debug_lab.py create-workout --unit-id uljrlxqhjm --student-email wireguard-test@example.com
+```
+
 ## Tell startup progress from a stalled health callback
 
 A message such as **Successfully built server!** confirms that Compute Engine
@@ -401,7 +440,7 @@ Read the `wireguard` status fields together:
 
 | Status | What to inspect next |
 | --- | --- |
-| `health_timestamp` is null | No health report has been accepted for this boot. Check guest startup, Secret Manager access, and the configured HTTPS health endpoint. |
+| `health_timestamp` is null | First check the gateway's own state and whether VM creation completed. After the guest starts, check startup, Secret Manager access, and the configured HTTPS health endpoint. |
 | A report exists, but `service_ready` is false | Inspect `health_error` and guest service logs. The callback reached the API, but the guest is not reporting a healthy service. |
 | `health_age_seconds` keeps increasing | Check the guest health timer and API/network connectivity; an old successful report cannot establish current readiness. |
 | `service_ready` is true with fresh health, but `tunnel_ready` is false | The gateway service is ready. Check the remote device, its actual public key, polling configuration, and connectivity for the tunnel test. |

@@ -30,6 +30,17 @@ class DebugLabInputError(ValueError):
     """A locally generated account/peer diagnostic, safe to show to the user."""
 
 
+def report_error_location(error):
+    from common.utilities.debug_error_trace import safe_error_trace
+
+    frames = safe_error_trace(error, ROOT)
+    if frames:
+        print('Repository call trace (argument values omitted):', file=sys.stderr)
+        for frame in frames:
+            print(f'  {frame["file"]}:{frame["line"]} in {frame["function"]}', file=sys.stderr)
+    return frames
+
+
 def invoke_local_worker(attributes: dict, env_dict: dict) -> None:
     # Use the qualified module name: both API and function folders have main.py.
     from cloud_functions.main import agoge_cloud_function
@@ -369,6 +380,7 @@ class LocalBackend:
             # identify the failure; preserve the lab for interactive debugging.
             print(f'Lifecycle stopped during {stage} ({type(error).__name__}).', flush=True)
             result.update(outcome='failed', exit_code=1, failed_step=stage, error=type(error).__name__)
+            result['error_trace'] = report_error_location(error)
             if isinstance(error, (DebugLabStageError, DebugLabInputError)):
                 result['detail'] = str(error)
                 print(result['detail'], flush=True)
@@ -454,7 +466,7 @@ class LocalBackend:
 
     def status(self, unit_id):
         from common.constants.database import DbCollections, DbOperators
-        from common.constants.states import UnitStates
+        from common.constants.states import ServerStates, UnitStates
 
         unit = self._unit(unit_id)
         workouts = self.db.query(collection_name=DbCollections.WORKOUT,
@@ -472,6 +484,18 @@ class LocalBackend:
         health_error = lease.get('health_error')
         if health_error and health_error not in ('wireguard_service_unready', 'bootstrap_failed'):
             health_error = 'other_error'
+        gateway = {}
+        for server in unit.get('servers') or []:
+            if server.get('wireguard_gateway') is True:
+                server_name = f'{unit_id}-{server["name"]}'
+                record = self.db.get(collection_name=DbCollections.SERVER, doc_id=server_name) or {}
+                try:
+                    server_state_name = ServerStates(record.get('state')).name
+                except ValueError:
+                    server_state_name = 'UNKNOWN'
+                gateway = {'server_name': server_name, 'state': record.get('state'),
+                           'state_name': server_state_name}
+                break
         try:
             state_name = UnitStates(unit.get('state')).name
         except ValueError:
@@ -479,6 +503,7 @@ class LocalBackend:
         return {'project': TEST_PROJECT, 'unit_id': unit_id, 'join_code': unit.get('join_code'),
                 'connection_id': f'{TEST_PROJECT}:{unit_id}' if endpoint else None,
                 'state': unit.get('state'), 'state_name': state_name,
+                'gateway': gateway,
                 'endpoint': {key: endpoint.get(key) for key in ('hostname', 'port', 'status')},
                 'wireguard': {'remote_peer_id': lease.get('remote_peer_id') or lease.get('kit_id'),
                               'remote_network_cidr': lease.get('remote_network_cidr') or lease.get('equipment_subnet'),
@@ -763,6 +788,10 @@ def main(argv=None):
             result = backend.action(scope, getattr(args, f'{scope}_id'), args.action, args.duration_hours)
     except (ValueError, OSError, BaseAgogeException) as error:
         print(f'Error: {error}', file=sys.stderr)
+        return 1
+    except Exception as error:
+        print(f'Error: {type(error).__name__}', file=sys.stderr)
+        report_error_location(error)
         return 1
     print(json.dumps(result, indent=2))
     if args.command == 'run-lab':
