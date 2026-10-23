@@ -144,8 +144,9 @@ async def list_project_images(
         raise HTTPException(status_code=400, detail=e.message)
 
 
+# Sync: listing calls Compute, so it runs in the worker thread pool instead of blocking the event loop.
 @compute_image_router.get('/machine-types/')
-async def list_machine_types(
+def list_machine_types(
     nested: bool = False,
     env_dict: dict = Depends(get_cloud_env),
     current_user: AgogeUser = Depends(teacher_required)
@@ -187,8 +188,9 @@ def create_nested_image(
         raise HTTPException(status_code=400, detail=e.message)
 
 
+# Sync: the catalog is a Firestore read, so it runs in the worker thread pool.
 @compute_image_router.get('/nested/catalog/')
-async def list_nested_catalog(
+def list_nested_catalog(
     env_dict: dict = Depends(get_cloud_env),
     current_user: AgogeUser = Depends(teacher_required),
 ) -> AgogeResponse[NestedOsCatalogListResponse]:

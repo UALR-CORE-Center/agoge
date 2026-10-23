@@ -33,6 +33,7 @@ export const ServerConnectButton: React.FC<ConnectButtonProps> = ({ item }) => {
                 {item.nested && (
                     <NestedTunnelHints
                         spec={item.nested}
+                        build={item.nested_build}
                         hostname={item.dns_record || item.hostname}
                         username={parentSsh?.username}
                     />

@@ -4,8 +4,9 @@ Lives in common/ because both deployables call it: the API on every status poll,
 QuarterHourlyMaintenance over every active build, so a build nobody watches still gets its
 secrets removed and still fails when it stalls.
 """
+import ipaddress
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Dict, Optional
 
 from common.constants.database import DbCollections, DbOperators, DatabaseTypes, DATABASE_NAME
 from common.constants.nested import NESTED_BUILD_MAX_MINUTES, NESTED_BUILD_STALL_MINUTES, NESTED_FINALIZE_STALE_SECONDS
@@ -26,6 +27,7 @@ ATTRIBUTE_PHASE = 'phase'
 ATTRIBUTE_MESSAGE = 'message'
 ATTRIBUTE_HEARTBEAT = 'heartbeat'
 ATTRIBUTE_GUEST_PREFIX = 'guest-'
+ATTRIBUTE_ADDRESSES_PREFIX = 'addresses-'
 SECRETS_METADATA_KEY = 'agoge-nested-secrets'
 
 # Phases the builder owns. `queued` is not here: nothing runs until the check-out does.
@@ -136,6 +138,10 @@ class NestedBuildMonitor:
         if heartbeat := self._heartbeat(attributes.get(ATTRIBUTE_HEARTBEAT)):
             updated.heartbeat_at = heartbeat
         for key, value in attributes.items():
+            if key.startswith(ATTRIBUTE_ADDRESSES_PREFIX):
+                if addresses := self._addresses(value):
+                    updated.guest_addresses[key.removeprefix(ATTRIBUTE_ADDRESSES_PREFIX)] = addresses
+                continue
             if not key.startswith(ATTRIBUTE_GUEST_PREFIX):
                 continue
             # `failed:<message>` carries the reason; the builder's `message` attribute already names the guest.
@@ -143,6 +149,18 @@ class NestedBuildMonitor:
             if status in GUEST_STATUSES:
                 updated.guests[key.removeprefix(ATTRIBUTE_GUEST_PREFIX)] = status
         return updated
+
+    @staticmethod
+    def _addresses(value: Optional[str]) -> Dict[str, str]:
+        """`0=192.168.100.166,1=10.20.0.20` -> {'0': '192.168.100.166', ...}; malformed pairs are dropped."""
+        addresses = {}
+        for pair in (value or '').split(','):
+            index, _, address = pair.partition('=')
+            try:
+                addresses[str(int(index))] = str(ipaddress.IPv4Address(address.strip()))
+            except ValueError:
+                continue
+        return addresses
 
     @staticmethod
     def _heartbeat(value: Optional[str]) -> Optional[str]:

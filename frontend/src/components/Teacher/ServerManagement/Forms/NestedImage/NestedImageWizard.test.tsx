@@ -52,6 +52,19 @@ describe("NestedImageWizard", () => {
     });
     afterEach(cleanup);
 
+    it("says the machine types are loading while the request is pending", async () => {
+        let resolve: (types: typeof machineTypes) => void = () => undefined;
+        vi.mocked(nestedService.list_machine_types).mockReturnValue(new Promise(done => {
+            resolve = done;
+        }));
+        renderWizard();
+
+        expect(screen.getAllByText("Loading machine types…")).toHaveLength(2);
+        resolve(machineTypes);
+        expect(await screen.findByRole("combobox", {name: /Build machine type/})).toHaveTextContent("n2-standard-8");
+        expect(screen.queryByText("Loading machine types…")).not.toBeInTheDocument();
+    });
+
     it("loads nested machine types and pre-selects the default build type", async () => {
         renderWizard();
 

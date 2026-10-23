@@ -147,7 +147,7 @@ export interface NestedTunnel {
 
 const RDP_PORT = 3389;
 const SSH_PORT = 22;
-// Local ends for guest tunnels, offset per exposure so several can be open at once. 2222 keeps clear of a
+// Local ends for guest tunnels, offset per guest so several can be open at once. 2222 keeps clear of a
 // local sshd on 22, and 13389 of a local RDP service on 3389.
 const LOCAL_RDP_BASE = 13389;
 const LOCAL_SSH_BASE = 2222;
@@ -156,12 +156,31 @@ const LOCAL_SSH_BASE = 2222;
 export const guestFamily = (osId: string, catalog: NestedOsCatalogEntry[]): NestedOsCatalogEntry['family'] | null =>
     catalog.find(item => item.id === osId)?.family ?? null;
 
-// Template servers have no alias IPs, so consoles and exposed guests are reached through the parent:
-// a console on its VNC port on the parent, an exposed guest on RDP 3389 or SSH 22 at its static IP.
+// The guest's first address the parent can route to: a NIC on a network the parent has an address on, at its
+// static IP or the address the builder reported (a DHCP lease).
+const reachableAddress = (
+    spec: NestedHostSpec,
+    guest: NestedHostSpec['guests'][number],
+    addresses: Record<string, string>,
+): string | null => {
+    for (const [index, nic] of guest.nics.entries()) {
+        const network = spec.networks.find(item => item.name === nic.network);
+        const ip = nic.ip || addresses[String(index)];
+        if (network?.parent_address && ip) {
+            return ip;
+        }
+    }
+    return null;
+};
+
+// Template servers have no alias IPs, so guests are reached through the parent: a console on its VNC port
+// on the parent, a Windows guest on RDP 3389 and a Linux guest on SSH 22 at its address. An appliance has
+// only its console, and a guest whose family is unknown (the catalog is still loading) gets no guess.
 export const nestedTunnels = (
     spec: NestedHostSpec,
     target: string,
     catalog: NestedOsCatalogEntry[],
+    guestAddresses: Record<string, Record<string, string>> = {},
 ): NestedTunnel[] => {
     const consoles: NestedTunnel[] = Object.entries(spec.console_ports)
         .sort(([, a], [, b]) => a - b)
@@ -171,20 +190,16 @@ export const nestedTunnels = (
             local_port: port,
             command: `ssh -L ${port}:localhost:${port} ${target}`,
         }));
-    const exposed: NestedTunnel[] = spec.exposures.flatMap(([name, nicIndex], slot) => {
-        const guest = spec.guests.find(item => item.name === name);
-        const ip = guest?.nics[nicIndex]?.ip;
-        if (!guest || !ip) {
+    const guests: NestedTunnel[] = spec.guests.flatMap((guest, index) => {
+        const family = guestFamily(guest.os_id, catalog);
+        const ip = reachableAddress(spec, guest, guestAddresses[guest.name] ?? {});
+        if ((family !== 'windows' && family !== 'linux') || !ip) {
             return [];
         }
-        const family = guestFamily(guest.os_id, catalog);
-        // An unknown family gets both tunnels rather than a guess.
-        const kinds: ('rdp' | 'ssh')[] = family === 'windows' ? ['rdp'] : family === null ? ['rdp', 'ssh'] : ['ssh'];
-        return kinds.map(kind => {
-            const localPort = (kind === 'rdp' ? LOCAL_RDP_BASE : LOCAL_SSH_BASE) + slot;
-            const remotePort = kind === 'rdp' ? RDP_PORT : SSH_PORT;
-            return {guest: name, kind, local_port: localPort, command: `ssh -L ${localPort}:${ip}:${remotePort} ${target}`};
-        });
+        const kind = family === 'windows' ? 'rdp' : 'ssh';
+        const localPort = (kind === 'rdp' ? LOCAL_RDP_BASE : LOCAL_SSH_BASE) + index;
+        const remotePort = kind === 'rdp' ? RDP_PORT : SSH_PORT;
+        return [{guest: guest.name, kind, local_port: localPort, command: `ssh -L ${localPort}:${ip}:${remotePort} ${target}`}];
     });
-    return [...consoles, ...exposed];
+    return [...consoles, ...guests];
 };

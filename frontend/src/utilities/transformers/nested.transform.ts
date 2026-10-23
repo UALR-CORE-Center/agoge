@@ -82,6 +82,10 @@ export const transformToNestedMediaUpload = (data: NestedMediaUploadResponse): N
 export const transformToNestedBuildStatus = (data: Partial<NestedBuildStatus> | null): NestedBuildStatus => ({
     phase: data?.phase ?? 'queued',
     guests: {...(data?.guests ?? {})},
+    // The Connect dialog's tunnels to DHCP guests need these.
+    guest_addresses: Object.fromEntries(
+        Object.entries(data?.guest_addresses ?? {}).map(([guest, nics]) => [guest, {...nics}]),
+    ),
     message: orNull(data?.message),
     heartbeat_at: orNull(data?.heartbeat_at),
     started_at: orNull(data?.started_at),

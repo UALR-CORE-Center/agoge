@@ -91,8 +91,16 @@ describe("nested transformers", () => {
 
     it("defaults a missing build status to queued", () => {
         expect(transformToNestedBuildStatus(null)).toEqual({
-            phase: "queued", guests: {}, message: null, heartbeat_at: null, started_at: null, updated_at: null,
+            phase: "queued", guests: {}, guest_addresses: {}, message: null, heartbeat_at: null, started_at: null,
+            updated_at: null,
         });
+    });
+
+    it("keeps each guest's reported addresses as copies", () => {
+        const stored = {phase: "ready" as const, guest_addresses: {win: {"0": "192.168.100.166"}}};
+        const status = transformToNestedBuildStatus(stored);
+        expect(status.guest_addresses).toEqual({win: {"0": "192.168.100.166"}});
+        expect(status.guest_addresses?.win).not.toBe(stored.guest_addresses.win);
     });
 
     it("normalizes catalog, media and upload responses", () => {

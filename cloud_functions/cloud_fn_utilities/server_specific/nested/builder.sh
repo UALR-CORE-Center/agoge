@@ -45,6 +45,7 @@ AGENT_WAIT_MINUTES=20
 WINDOWS_INSTALL_MINUTES=150
 BOOT_KEY_SECONDS=30
 POST_INSTALL_MINUTES=60
+LEASE_WAIT_SECONDS=120
 AGENTLESS_SETTLE_SECONDS=120
 # virt-customize --selinux-relabel and the qemu-ga guest-exec block apply to these osinfo ids. openSUSE is
 # here because Leap 16 enforces SELinux; the relabel is a no-op on AppArmor Leap 15, and the qemu-ga edit is guarded.
@@ -590,6 +591,9 @@ customize_linux() {
   if [ "$method" = "cloud_image" ]; then
     packages=$(jq -r --arg g "$guest" '.guests[] | select(.name == $g) | .packages | join(",")' "$MANIFEST")
     install="$install,$ssh_package${packages:+,$packages}"
+  elif [ "$method" = "disk_image" ]; then
+    # An exposed guest is the students' SSH jumpbox; a prebuilt VM may lack sshd, and installing it is a no-op.
+    install="$install,$ssh_package"
   fi
   args+=(--install "$install"
     --run-command "id -u $user >/dev/null 2>&1 || useradd -m -s /bin/bash $user"
@@ -614,6 +618,11 @@ customize_linux() {
       # cloud-init's growpart no longer runs, so the root filesystem is grown here. --nofsroot drops a
       # btrfs subvolume suffix (Fedora's root is /dev/vda4[/root]), and the resize tool follows the fstype.
       --firstboot-command 'command -v growpart >/dev/null || exit 0; root=$(findmnt -nvo SOURCE /); disk=/dev/$(lsblk -no PKNAME "$root"); growpart "$disk" "${root##*[!0-9]}" && case $(findmnt -no FSTYPE /) in xfs) xfs_growfs / ;; btrfs) btrfs filesystem resize max / ;; *) resize2fs "$root" ;; esac')
+  elif [ "$method" = "disk_image" ]; then
+    # Kali ships sshd disabled, and every download of a prebuilt VM carries the same host keys.
+    args+=(--run-command 'systemctl enable ssh >/dev/null 2>&1 || systemctl enable sshd >/dev/null 2>&1 || true'
+      --run-command 'rm -f /etc/ssh/ssh_host_*'
+      --firstboot-command 'ssh-keygen -A && (systemctl restart ssh || systemctl restart sshd)')
   fi
   while IFS= read -r upload; do
     [ -n "$upload" ] && args+=(--upload "$upload")
@@ -924,10 +933,62 @@ set_guest_status() {
   put_attribute "guest-$1" "$2"
 }
 
+# Two workers share the message attribute, so it lists each guest's current step; a finished guest drops
+# out rather than leaving its last step behind while the other worker carries on.
+guest_step() {
+  log "$2"
+  echo "$2" > "$RUN_DIR/step-$1"
+  put_guest_steps "$2"
+}
+
+# Writes the steps still in progress, or $1 when none are.
+put_guest_steps() {
+  local steps
+  lock message
+  steps=$(cat "$RUN_DIR"/step-* 2>/dev/null | awk 'NR > 1 { printf "; " } { printf "%s", $0 }')
+  put_attribute message "${steps:-$1}"
+  unlock message
+}
+
+# Guest $1's addresses as "<nic index>=<ip>" pairs: a static NIC's from the manifest, a DHCP NIC's from its
+# lease. The Connect dialog tunnels to them through the parent; nothing a student sees shows them.
+guest_addresses() {
+  local guest=$1 index mac network ip tries pairs=()
+  while IFS=$'\t' read -r index mac network ip; do
+    if [ "$ip" = "lease" ]; then
+      ip=
+      # A guest can answer its agent before it has asked for a lease.
+      for ((tries = 0; tries < LEASE_WAIT_SECONDS / 5; tries++)); do
+        ip=$(virsh net-dhcp-leases "$network" --mac "$mac" 2>/dev/null \
+          | awk '$4 == "ipv4" { sub("/.*", "", $5); print $5; exit }')
+        [ -n "$ip" ] && break
+        sleep 5
+      done
+    elif [ "$ip" = "-" ]; then
+      ip=
+    fi
+    [ -n "$ip" ] && pairs+=("$index=$ip")
+  done < <(jq -r --arg g "$guest" '.networks as $nets | .guests[] | select(.name == $g) | .nics | to_entries[]
+    | .value as $nic
+    | ([$nets[] | select(.name == $nic.network) | (.dhcp and .parent_address != null)] | first // false) as $leased
+    | [.key, $nic.mac, $nic.network, ($nic.ip // (if $leased then "lease" else "-" end))] | @tsv' "$MANIFEST")
+  (IFS=,; echo "${pairs[*]}")
+}
+
+report_addresses() {
+  local addresses
+  addresses=$(guest_addresses "$1")
+  [ -n "$addresses" ] || return 0
+  echo "$addresses" > "$STATE_DIR/addresses-$1"
+  put_attribute "addresses-$1" "$addresses"
+}
+
 finish_guest() {
   echo "$2" > "$STATE_DIR/guest-$1.done"
   set_guest_status "$1" "$2"
   log "$1: $2"
+  rm -f "$RUN_DIR/step-$1"
+  put_guest_steps "$1: $2"
 }
 
 build_guest() {
@@ -943,7 +1004,7 @@ build_guest() {
     wait_until_up "$guest" || { finish_guest "$guest" "failed:$FAIL_MESSAGE"; return; }
   else
     reset_guest "$guest" || { finish_guest "$guest" "failed:$FAIL_MESSAGE"; return; }
-    step "installing $guest ($method)"
+    guest_step "$guest" "installing $guest ($method)"
     case "$method" in
       cloud_image) install_cloud_image "$guest" ;;
       unattended_iso) install_unattended_iso "$guest" ;;
@@ -959,9 +1020,10 @@ build_guest() {
   fi
   if [ -n "$(guest_value "$guest" .post_install_script)" ] && [ "$(guest_value "$guest" .catalog.agent)" = "true" ]; then
     set_guest_status "$guest" post_install
-    step "running $guest's post-install script"
+    guest_step "$guest" "running $guest's post-install script"
     post_install "$guest" || { finish_guest "$guest" "failed:$FAIL_MESSAGE"; return; }
   fi
+  report_addresses "$guest"
   finish_guest "$guest" ready
 }
 
@@ -1038,7 +1100,7 @@ main() {
   # tmpfs; 711 so qemu can open the unattend ISOs inside, while secrets.json stays 600.
   mkdir -p "$RUN_DIR"
   chmod 711 "$RUN_DIR"
-  rm -rf "$RUN_DIR"/lock-*
+  rm -rf "$RUN_DIR"/lock-* "$RUN_DIR"/step-*
 
   if [ -f "$STATE_DIR/done" ]; then
     log "the build already finished ($(cat "$STATE_DIR/done"))"
@@ -1069,6 +1131,7 @@ main() {
   for guest in $(jq -r '.guests[].name' "$MANIFEST"); do
     if [ -f "$STATE_DIR/guest-$guest.done" ]; then
       set_guest_status "$guest" "$(cat "$STATE_DIR/guest-$guest.done")"
+      [ -f "$STATE_DIR/addresses-$guest" ] && put_attribute "addresses-$guest" "$(cat "$STATE_DIR/addresses-$guest")"
     else
       set_guest_status "$guest" pending
     fi
