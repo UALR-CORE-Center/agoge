@@ -1,13 +1,14 @@
 """Seed a managed WireGuard Community Lab into the selected site's catalog."""
 import re
 import time
+import json
 
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections
-from common.constants.states import ImageStatus
 from common.document_database.factory import DocumentDatabaseFactory
 from common.exceptions import BadRequest, Conflict
 from common.models.agoge import CatalogModel, UnitModel
 from common.services.wireguard_lab_spec import configure_kit_topology, default_wireguard_spec
+from common.services.student_image_profile import student_image_profile
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.compute.compute_image import ComputeImageAPI
 from common.utilities.gcp.compute.image_ownership import image_source
@@ -20,15 +21,8 @@ class WireGuardLabTemplate:
         self.project = project
 
     @staticmethod
-    def _connections(record: dict) -> list:
-        connections = record.get('human_interaction') or []
-        if isinstance(connections, dict):
-            connections = [connections]
-        if record.get('status') != ImageStatus.CHECKED_IN.value or record.get('image_exists') is False:
-            return []
-        return [item for item in connections if isinstance(item, dict) and item.get('display')
-                and item.get('username') and item.get('password')
-                and item.get('protocol') in ('ssh', 'rdp', 'vnc')]
+    def _connections(record: dict, project: str | None = None) -> list:
+        return student_image_profile(record, project)[0]
 
     def run(self) -> bool:
         print(f'Upload destination: {self.project}/{DATABASE_NAME}/catalog.')
@@ -40,11 +34,23 @@ class WireGuardLabTemplate:
             self.db = DocumentDatabaseFactory.create_db_object(
                 db_type=DatabaseTypes.firestore, project_id=self.project, database_name=DATABASE_NAME)
             records = self.db.query(collection_name=DbCollections.IMAGE) or []
-            candidates = {record['name']: record for record in records
-                          if isinstance(record.get('name'), str) and self._connections(record)}
+            candidates = {}
+            print('Student image eligibility (credential values are not shown):')
+            for index, record in enumerate(records, 1):
+                connections, reasons = student_image_profile(record, self.project)
+                name = record.get('name')
+                label = name if isinstance(name, str) and name.strip() else f'<unnamed image {index}>'
+                # Escape newlines/control characters; never print whole records.
+                label = json.dumps(label[:120], ensure_ascii=True)
+                if reasons:
+                    print(f'  {label}: excluded - {"; ".join(reasons)}')
+                else:
+                    candidates[record['name']] = record
+                    print(f'  {label}: eligible (GCP source checked after selection)')
             if not candidates:
-                raise BadRequest('No checked-in student image has a password-based display connection. '
-                                 'Import/check in a Kali image in Server Manager first.')
+                raise BadRequest('No student image passed the checks listed above. '
+                                 'Use a checked-in Windows or Linux image with an enabled password-based '
+                                 'RDP, SSH, or VNC display connection. No Kali image name is required.')
             print('Available registered student templates (GCP AMD64/READY is checked after selection):')
             for identifier in sorted(candidates):
                 print(f'  {identifier}')
@@ -63,7 +69,7 @@ class WireGuardLabTemplate:
             if not re.fullmatch(r'[a-z][a-z0-9-]{0,51}', catalog_id):
                 raise BadRequest('Catalog ID must be 1–52 lowercase letters, digits, or hyphens, starting with a letter')
             source = self._student_source(candidates[image_id], image_id, env.get_env())
-            catalog = self._catalog(catalog_id, source, self._connections(candidates[image_id]),
+            catalog = self._catalog(catalog_id, source, self._connections(candidates[image_id], self.project),
                                     email, int(env.get_env().get('wireguard_port') or 51820))
             created = self._save_new_or_identical(catalog)
             destination = f'{self.project}/{DATABASE_NAME}/catalog/{catalog_id}'
@@ -102,7 +108,7 @@ class WireGuardLabTemplate:
         # is replaced from the authorized remote peer's private LAN on every Unit build.
         configure_kit_topology(unit, '172.30.0.0/24', port)
         unit.summary.description += (' Build with a registered remote peer; its private LAN and '
-                                     'WireGuard settings are assigned automatically. One Kali/workstation per student.')
+                                     'WireGuard settings are assigned automatically. One workstation per student.')
         return CatalogModel.model_validate({**unit.model_dump(), 'discriminator': 'wireguard-starter'}).model_dump()
 
     def _save_new_or_identical(self, catalog: dict) -> bool:

@@ -87,11 +87,73 @@ def test_mismatched_environment_stops_before_target_database(upload):
     upload.compute.assert_not_called()
 
 
-@pytest.mark.parametrize('change', [{'status': 1}, {'image_exists': False},
+@pytest.mark.parametrize('change', [{'status': 1},
     {'human_interaction': []}, {'human_interaction': [
         {'display': True, 'protocol': 'ssh', 'username': 'student', 'ssh_key': 'not-a-password'}]}])
 def test_unusable_student_record_does_not_write_catalog(upload, change):
     upload.db.collections['image']['kali-template'].update(change)
+    assert not upload.operation.run()
+    assert upload.db.collections['catalog'] == {}
+
+
+@pytest.mark.parametrize('single_connection', [False, True])
+def test_legacy_shared_windows_image_uses_its_real_source_and_normalizes_rdp(upload, monkeypatch, capsys, single_connection):
+    record = upload.db.collections['image'].pop('kali-template')
+    record.update(name='cybersecurity1', image='image-cybersecurity1', status='0', image_exists=False,
+        self_link='https://www.googleapis.com/compute/v1/projects/agoge-shared-resources/global/images/image-cybersecurity1')
+    record['human_interaction'][0]['protocol'] = 'RDP'
+    if single_connection:
+        record['human_interaction'] = record['human_interaction'][0]
+    upload.db.collections['image']['cybersecurity1'] = record
+    upload.compute.return_value.get.return_value.self_link = record['self_link']
+    responses = iter(['cybersecurity1', '', ''])
+    monkeypatch.setattr('builtins.input', lambda prompt: next(responses))
+    assert upload.operation.run()
+    student = upload.db.collections['catalog']['wireguard-factory-lab']['servers'][1]
+    assert student['image'] == record['self_link']
+    assert student['human_interaction'][0]['protocol'] == 'rdp'
+    upload.compute.return_value.get.assert_called_once_with(
+        resource='image-cybersecurity1', project='agoge-shared-resources', fallback_to_shared=False)
+    output = capsys.readouterr().out
+    assert '"cybersecurity1": eligible' in output
+    assert 'private-fixture-password' not in output
+
+
+@pytest.mark.parametrize('change,reason', [
+    ({'name': None}, 'missing name field'),
+    ({'status': 1}, 'status is not checked in'),
+    ({'image_exists': False, 'self_link': '', 'disks': []}, 'image_exists is false'),
+    ({'human_interaction': []}, 'human_interaction has no saved connection'),
+    ({'human_interaction': [{'display': False, 'protocol': 'rdp', 'username': 'private-user',
+                            'password': 'private-password'}]}, 'display is not enabled'),
+    ({'human_interaction': [{'display': True, 'protocol': 'rdp', 'username': 'private-user'}]}, 'missing password'),
+    ({'human_interaction': [{'display': True, 'protocol': 'private-invalid-protocol', 'username': 'private-user',
+                            'password': 'private-password'}]}, 'protocol must be SSH, RDP, or VNC'),
+])
+def test_rejections_identify_missing_fields_without_printing_credentials(upload, capsys, change, reason):
+    upload.db.collections['image']['kali-template'].update(change)
+    assert not upload.operation.run()
+    output = capsys.readouterr().out
+    assert reason in output
+    for secret in ('private-user', 'private-password', 'private-fixture-password', 'private-invalid-protocol'):
+        assert secret not in output
+    assert upload.db.collections['catalog'] == {}
+    upload.compute.assert_not_called()
+
+
+def test_shared_reference_does_not_turn_an_unbuilt_local_template_into_a_published_image(upload, capsys):
+    record = upload.db.collections['image']['kali-template']
+    record.update(image_exists=False, image='image-new-workstation',
+        self_link='https://www.googleapis.com/compute/v1/projects/shared-images/global/images/windows-base')
+    assert not upload.operation.run()
+    assert 'image_exists is false' in capsys.readouterr().out
+
+
+def test_valid_windows_profile_still_checks_real_compute_architecture(upload):
+    record = upload.db.collections['image']['kali-template']
+    record.update(image_exists=False)
+    record['human_interaction'][0]['protocol'] = 'RDP'
+    upload.compute.return_value.get.return_value.architecture = 'ARM64'
     assert not upload.operation.run()
     assert upload.db.collections['catalog'] == {}
 

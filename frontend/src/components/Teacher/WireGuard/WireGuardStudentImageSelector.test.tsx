@@ -48,4 +48,16 @@ describe("student image selection", () => {
         render(<WireGuardStudentImageSelector open value="" onChange={change} onAvailabilityChange={vi.fn()} />);
         await waitFor(() => expect(change).toHaveBeenCalledWith("image-kali-linux-2023"));
     });
+
+    it.each([false, true])("offers a published shared Windows image (single connection: %s)", async singleConnection => {
+        const connection = {display: true, protocol: "RDP", username: "student", password: "credential"};
+        vi.mocked(imageService.list).mockResolvedValue([{...image, name: "cybersecurity1", image: "image-cybersecurity1",
+            is_shared: true, image_exists: false, human_interaction: singleConnection ? connection : [connection]}] as any);
+        const change = vi.fn();
+        render(<WireGuardStudentImageSelector open value="" onChange={change} onAvailabilityChange={vi.fn()} />);
+        await waitFor(() => expect(change).toHaveBeenCalledWith(""));
+        fireEvent.mouseDown(screen.getByRole("combobox"));
+        fireEvent.click(screen.getByRole("option", {name: "cybersecurity1"}));
+        expect(change).toHaveBeenLastCalledWith("cybersecurity1");
+    });
 });

@@ -130,7 +130,7 @@ Python change.
    environment controls where the catalog record is written.
 3. Choose **Server Images & Build Specs → Upload WireGuard Community Lab
    Template**.
-4. Select an existing checked-in Kali/student image from the image records
+4. Select an existing checked-in Windows or Linux student image from the image records
    listed by setup. Setup checks the actual GCP source image for **READY** and
    **AMD64** after selection and stops without uploading if it is incompatible.
    The image must have a displayed SSH, RDP, or
@@ -163,6 +163,32 @@ terminology change; their saved title and description are retained. New
 templates use **WireGuard Remote Lab**.
 Template connections remain in the site's catalog records, so do not export
 production image passwords into a public repository.
+
+### If a shared Windows image is not listed
+
+Kali is only a preferred default; no specific image name or operating system is
+required. An interactive Windows image such as `cybersecurity1` can be used with
+RDP. The uploader first checks the records in the selected project's
+`agoge-v1/image` collection, then verifies the selected Compute image in GCP.
+
+Setup prints an eligibility line for every record, including the exact rejected
+fields: missing `name`, a status other than checked-in `0`, an unpublished local
+image, missing `human_interaction`, display disabled, unsupported protocol, or
+missing username/password. It prints field names, not credential values.
+`RDP`/`rdp` and numeric/text `0` are accepted. A single connection object and a
+list of connections are both supported.
+
+Legacy shared records with `image_exists: false` can still qualify when their
+stored Compute reference identifies the published shared image itself. Setup
+does not treat a new local template pointing at a base image as published. The
+actual source must still pass the GCP READY/AMD64 check before upload.
+
+Copying a Firestore record does not copy its Compute image. Preserve its source
+reference (`self_link` or boot disk `initializeParams.sourceImage`) pointing to
+the correct shared project, and use an identity that can read that image.
+If eligibility fails, fix the indicated metadata through **Teachers → Manage
+Servers** and complete check-in as needed. Do not clear credentials or change
+the image's name simply to make it look like Kali.
 
 ## Build from the uploaded template
 

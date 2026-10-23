@@ -147,6 +147,21 @@ def test_registered_template_name_resolves_and_pins_its_different_compute_source
     assert flow.db.collections['unit'][identifier]['servers'][1]['image'] == source
 
 
+def test_builtin_accepts_checked_in_legacy_shared_windows_record(flow):
+    record = flow.db.collections['image'].pop('image-kali-linux-2023')
+    source = 'https://www.googleapis.com/compute/v1/projects/shared-images/global/images/image-cybersecurity1'
+    record.update(image='image-cybersecurity1', self_link=source, status='0', image_exists=False)
+    record['human_interaction'][0]['protocol'] = 'RDP'
+    flow.db.collections['image']['cybersecurity1'] = record
+    flow.image.return_value.get.return_value.self_link = source
+    identifier = WireGuardLab(flow.env).build(flow.teacher, {**flow.data, 'student_image': 'cybersecurity1'})
+    flow.image.return_value.get.assert_called_once_with(resource='image-cybersecurity1',
+        project='shared-images', fallback_to_shared=False)
+    student = flow.db.collections['unit'][identifier]['servers'][1]
+    assert student['image'] == source
+    assert student['human_interaction'][0]['protocol'] == 'rdp'
+
+
 @pytest.mark.parametrize('include_legacy', [False, True])
 def test_remote_peer_build_input_selects_authorized_existing_record(flow, include_legacy):
     data = {**flow.data, 'remote_peer_id': 'kit-one'}

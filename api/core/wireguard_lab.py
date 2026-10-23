@@ -3,11 +3,11 @@ import re
 from datetime import datetime, timezone
 
 from common.constants.database import DbCollections
-from common.constants.states import ImageStatus
 from common.exceptions import BadRequest
 from common.utilities.gcp.compute.compute_image import ComputeImageAPI
 from common.utilities.gcp.compute.image_ownership import image_source
 from common.services.wireguard_lab_spec import DEFAULT_STUDENT_IMAGE, default_wireguard_spec
+from common.services.student_image_profile import student_image_profile
 from common.services.wireguard_provisioning import WireGuardProvisioningService, resolve_remote_peer_id
 from core.unit import Unit
 
@@ -38,16 +38,10 @@ class WireGuardLab:
         manager = Unit(self.env_dict)
         image = manager.db.get(collection_name=DbCollections.IMAGE, doc_id=image_name)
         if not image:
-            raise BadRequest(f"Student image '{image_name}' is unavailable. Import a Kali image in Server Manager first.")
-        if image.get('status') != ImageStatus.CHECKED_IN.value or image.get('image_exists') is False:
-            raise BadRequest('Check in the student image before building a WireGuard Lab')
-        connections = image.get("human_interaction") or []
-        if isinstance(connections, dict):
-            connections = [connections]
-        if not any(connection.get("display") and connection.get("username")
-                   and connection.get("password") and connection.get("protocol") in ('ssh', 'rdp', 'vnc')
-                   for connection in connections):
-            raise BadRequest("The student image needs an SSH, RDP, or VNC display connection with a username and password in Server Manager")
+            raise BadRequest(f"Student image '{image_name}' is unavailable. Register a Windows or Linux student image in Server Manager first.")
+        connections, reasons = student_image_profile({**image, 'name': image_name}, self.env_dict['project'])
+        if reasons:
+            raise BadRequest('Student image is not eligible: ' + '; '.join(reasons))
         try:
             reference = image_source(image)
             explicit = re.search(r'(?:^|/)projects/([^/]+)/global/images/([^/]+)$', reference)
