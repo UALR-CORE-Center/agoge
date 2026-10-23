@@ -3,6 +3,7 @@ import React, {useEffect, useState} from "react";
 import {NestedBuildStatus, NestedHostSpec, NestedOsCatalogEntry} from "../../../../../services/Server/nested.model";
 import {nestedService} from "../../../../../services/Server/nested.service";
 import {UserDetailField} from "../../../../Buttons/ConnectButton/UserDetailField";
+import NestedConnectGuide from "./NestedConnectGuide";
 import {nestedTunnels, NestedTunnel} from "./nestedImageStatus";
 
 interface NestedTunnelHintsProps {
@@ -68,6 +69,7 @@ const NestedTunnelHints: React.FC<NestedTunnelHintsProps> = ({spec, build, hostn
     const tunnels = nestedTunnels(spec, `${username || '<user>'}@${hostname}`, catalog, build?.guest_addresses);
     // In spec order, each guest once, with every way to reach it.
     const guests = spec.guests.map(item => item.name).filter(name => tunnels.some(tunnel => tunnel.guest === name));
+    const guestUsers = Object.fromEntries(spec.guests.map(item => [item.name, item.admin_username]));
 
     return (
         <Box component={"section"} sx={{mt: 3}}>
@@ -79,6 +81,7 @@ const NestedTunnelHints: React.FC<NestedTunnelHintsProps> = ({spec, build, hostn
                 Guests are reached through an SSH tunnel to this server. Run a command below, keep it open, then
                 connect to the local port with the credentials under it.
             </Typography>
+            <NestedConnectGuide tunnels={tunnels} username={username || '<user>'} hostname={hostname} guestUsers={guestUsers} />
             {catalogPending && (
                 <Alert severity={"info"} sx={{mb: 1}}>{"Loading the guests' operating systems for RDP and SSH tunnels…"}</Alert>
             )}

@@ -297,7 +297,19 @@ class ImageTemplateManager(BaseComputeManager):
         """
         self._require_image_management()
         nested_phase = self._prepare_nested_check_out(product_keys)
-        self.build()
+        try:
+            self.build()
+        except Exception as error:
+            # The record never reaches CHECKED_OUT, so the build monitor would never time it out either.
+            if nested_phase == 'provisioning':
+                try:
+                    record = self.db.get(collection_name=self.collection, doc_id=self.server_name) or {}
+                    self._fail_nested_build(record, self._build_failure_message(error))
+                except Exception as record_error:
+                    # The build error is the one to surface; a failed record write must not replace it.
+                    self.logger.error(f'{self.class_name}:{self.server_name} - Could not record the failed build: '
+                                      f'{record_error}')
+            raise
 
         self._update_record_status(ImageStatus.CHECKED_OUT, nested_phase=nested_phase)
 
@@ -610,7 +622,7 @@ class ImageTemplateManager(BaseComputeManager):
         try:
             spec = ModelValidator(NestedHostSpecModel, log_location=self.log_name).load(record['nested'])
             catalog, media = self._nested_sources(spec)
-            manifest = render_manifest(spec, catalog, media)
+            manifest = render_manifest(spec, catalog, media, ssh_keys=self.server_spec.ssh_keys or [])
             secrets = render_secrets(spec, product_keys, catalog)
         except (BaseAgogeException, ValueError) as error:
             self.logger.error(f'{self.class_name}:{self.server_name} - Cannot render the nested build: {error}')
@@ -641,6 +653,15 @@ class ImageTemplateManager(BaseComputeManager):
                     raise NotFound(f'guest {guest.name}: no uploaded medium {guest.media_id}')
                 media[guest.media_id] = ModelValidator(NestedMediaModel, log_location=self.log_name).load(medium)
         return catalog, media
+
+    def _build_failure_message(self, error: Exception) -> str:
+        """What the Server Manager shows for a first nested build whose check-out failed."""
+        if 'ZONE_RESOURCE_POOL_EXHAUSTED' in str(error):
+            zone = getattr(self.env, 'zone', None) or 'this zone'
+            return (f'Google Cloud has no {self.server_spec.machine_type} capacity in {zone} right now. This is a '
+                    f'temporary shortage, not a quota. Delete this image and create it again later.')
+        # Not only the insert: DNS or the timeout can fail the check-out after the server exists.
+        return f'The build could not start: {error}'
 
     def _fail_nested_build(self, record: dict, message: str) -> None:
         now = datetime.now(timezone.utc).isoformat()

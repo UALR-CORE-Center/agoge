@@ -131,6 +131,15 @@ def test_manifest_holds_no_secret():
     assert 'product_key' not in manifest
 
 
+def test_manifest_carries_the_images_public_keys_one_line_each():
+    key = 'ssh-ed25519 AAAAC3Nza instructor@laptop'
+    manifest = json.loads(render_manifest(_three_guest_spec(), _catalog(), {'med-1': UPLOAD},
+                                          ssh_keys=[f'  {key}\n', '', 'ssh-rsa AAAA\nssh-rsa BBBB']))
+    # A key spanning lines would split into two --ssh-inject arguments in the builder, so it is dropped.
+    assert manifest['ssh_keys'] == [key]
+    assert json.loads(render_manifest(_three_guest_spec(), _catalog(), {'med-1': UPLOAD}))['ssh_keys'] == []
+
+
 def test_manifest_resolves_catalog_entry_and_media_source():
     manifest = json.loads(render_manifest(_three_guest_spec(), _catalog(), {'med-1': UPLOAD}))
     guests = {guest['name']: guest for guest in manifest['guests']}

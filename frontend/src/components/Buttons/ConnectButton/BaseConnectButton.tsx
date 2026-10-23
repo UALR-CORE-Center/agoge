@@ -5,7 +5,7 @@ import {
     Paper,
     Typography,
 } from '@mui/material';
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 
 
 export interface ConnectButtonProps {
@@ -26,6 +26,11 @@ export const BaseConnectButton: React.FC<BaseConnectButtonProps> = ({ item, isDi
 
     const handleOpen = () => setOpen(true);
     const handleClose = () => setOpen(false);
+    // The centering Box covers the backdrop, so a click beside the Paper lands on it rather than the backdrop.
+    // Press and release must both land there: a drag between the Paper and the Box (selecting a command, say)
+    // fires click on the Box, their common ancestor, and is not a click out.
+    const pressedOutside = useRef(false);
+    const releasedOutside = useRef(false);
 
     return (
         <>
@@ -52,6 +57,20 @@ export const BaseConnectButton: React.FC<BaseConnectButtonProps> = ({ item, isDi
                 aria-describedby="connect-modal-description"
             >
                 <Box
+                    data-testid="connect-modal-outside"
+                    onMouseDown={(event) => {
+                        pressedOutside.current = event.target === event.currentTarget;
+                    }}
+                    onMouseUp={(event) => {
+                        releasedOutside.current = event.target === event.currentTarget;
+                    }}
+                    onClick={(event) => {
+                        if (pressedOutside.current && releasedOutside.current && event.target === event.currentTarget) {
+                            handleClose();
+                        }
+                        pressedOutside.current = false;
+                        releasedOutside.current = false;
+                    }}
                     sx={{
                         display: 'flex',
                         alignItems: 'center',
@@ -66,7 +85,9 @@ export const BaseConnectButton: React.FC<BaseConnectButtonProps> = ({ item, isDi
                             padding: { xs: 2, sm: 4 },
                             minWidth: { xs: 0, sm: 300 },
                             width: { xs: '100%', sm: 'auto' },
-                            maxWidth: '100%',
+                            // Long tunnel commands would stretch it across the screen; two thirds is wide
+                            // enough for them to wrap legibly. Phones keep the full width.
+                            maxWidth: { xs: '100%', md: '66.667%' },
                             maxHeight: '100%',
                             overflowY: 'auto',
                             boxSizing: 'border-box',

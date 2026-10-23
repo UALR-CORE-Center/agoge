@@ -142,6 +142,8 @@ export interface NestedTunnel {
     kind: 'console' | 'rdp' | 'ssh';
     // Where the client connects once the tunnel is up.
     local_port: number;
+    // host:port the parent forwards to, as PuTTY's Tunnels page asks for it.
+    destination: string;
     command: string;
 }
 
@@ -188,6 +190,7 @@ export const nestedTunnels = (
             guest,
             kind: 'console',
             local_port: port,
+            destination: `localhost:${port}`,
             command: `ssh -L ${port}:localhost:${port} ${target}`,
         }));
     const guests: NestedTunnel[] = spec.guests.flatMap((guest, index) => {
@@ -199,7 +202,8 @@ export const nestedTunnels = (
         const kind = family === 'windows' ? 'rdp' : 'ssh';
         const localPort = (kind === 'rdp' ? LOCAL_RDP_BASE : LOCAL_SSH_BASE) + index;
         const remotePort = kind === 'rdp' ? RDP_PORT : SSH_PORT;
-        return [{guest: guest.name, kind, local_port: localPort, command: `ssh -L ${localPort}:${ip}:${remotePort} ${target}`}];
+        const destination = `${ip}:${remotePort}`;
+        return [{guest: guest.name, kind, local_port: localPort, destination, command: `ssh -L ${localPort}:${destination} ${target}`}];
     });
     return [...consoles, ...guests];
 };

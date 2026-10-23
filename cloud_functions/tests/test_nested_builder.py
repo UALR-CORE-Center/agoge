@@ -259,11 +259,11 @@ def builder(tmp_path):
     script = tmp_path / 'agoge-nested-builder'
     script.write_text(render_builder())
 
-    def run(spec=None, secrets=None, manifest=True, extra_env=None, secrets_present=True):
+    def run(spec=None, secrets=None, manifest=True, extra_env=None, secrets_present=True, ssh_keys=()):
         spec = spec or _spec()
         secrets = secrets if secrets is not None else _secrets(spec)
         if manifest:
-            (fake_dir / 'manifest.json').write_text(render_manifest(spec, CATALOG, {UPLOAD.id: UPLOAD}))
+            (fake_dir / 'manifest.json').write_text(render_manifest(spec, CATALOG, {UPLOAD.id: UPLOAD}, ssh_keys))
         (fake_dir / 'secrets.json').write_text(json.dumps(secrets))
         if not secrets_present:
             # The metadata server answers 404 once the build monitor has removed the key.
@@ -580,6 +580,93 @@ def test_cloud_image_customization(builder):
     network = (builder.root / 'var/lib/agoge-nested/work/net-deb/10-agoge-0.network').read_text()
     assert 'Address=10.10.0.10/24' in network and 'Gateway=10.10.0.1' in network and 'DNS=10.10.0.1' in network
     assert f'qemu-img resize {builder.root}/var/lib/libvirt/images/deb.qcow2 20G' in log
+
+
+@needs_tools
+@pytest.mark.parametrize('install_method', ['cloud_image', 'disk_image'])
+def test_every_exposed_linux_guest_accepts_ssh_passwords(builder, install_method):
+    # Students SSH into an exposed guest with the Connect dialog's password, whichever way the guest was built.
+    entry = _entry('student-linux', family='linux', group='linux', install_method=install_method,
+                   media_url='https://cloud.debian.example/debian-12.qcow2', media_sha256=_sha(DEB_IMAGE),
+                   media_formats=['qcow2'], osinfo='debian12', agent=True, net_config='networkd')
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(CATALOG, 'student-linux', entry)
+        result, log = builder(spec=_spec(deb={'os_id': 'student-linux'}))
+
+    customize = _commands(log, 'virt-customize')[0]
+    assert result.returncode == 0, result.stderr
+    assert '--mkdir /etc/ssh/sshd_config.d' in customize
+    assert '--write /etc/ssh/sshd_config.d/01-agoge.conf:PasswordAuthentication yes' in customize
+    assert 'sed -i "1i Include /etc/ssh/sshd_config.d/*.conf" /etc/ssh/sshd_config' in customize
+
+
+@pytest.mark.parametrize('config, expected', [
+    # No Include: one goes first, ahead of the image's own PasswordAuthentication no.
+    ('PasswordAuthentication no\n', 'Include /etc/ssh/sshd_config.d/*.conf\nPasswordAuthentication no\n'),
+    # A commented-out Include does not count.
+    ('#Include /etc/ssh/sshd_config.d/*.conf\n',
+     'Include /etc/ssh/sshd_config.d/*.conf\n#Include /etc/ssh/sshd_config.d/*.conf\n'),
+    # Debian's and Ubuntu's stock Include is left as it is.
+    ('Include /etc/ssh/sshd_config.d/*.conf\nPort 22\n', 'Include /etc/ssh/sshd_config.d/*.conf\nPort 22\n'),
+    # openSUSE keeps its config in /usr/etc/ssh, which already includes sshd_config.d: nothing is created.
+    (None, None),
+])
+def test_the_sshd_include_command_puts_the_drop_ins_first(tmp_path, config, expected):
+    command = re.search(r"^SSHD_INCLUDE_COMMAND='(.*)'$", nested_scripts.render_builder(), re.M).group(1)
+    sshd_config = tmp_path / 'sshd_config'
+    if config is not None:
+        sshd_config.write_text(config)
+    # The file sed edits becomes the temp one; the Include it writes keeps the image's path. The guest's sed is
+    # GNU or busybox: macOS's sed -i takes a backup suffix, so GNU sed stands in there.
+    command = re.sub(r'/etc/ssh/sshd_config(?!\.d)', str(sshd_config), command)
+    if sys.platform == 'darwin' and config != expected:
+        if not shutil.which('gsed'):
+            pytest.skip('inserting needs GNU sed (brew install gnu-sed)')
+        command = command.replace('sed -i', 'gsed -i')
+
+    result = subprocess.run(['sh', '-c', command], capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    assert (sshd_config.read_text() if sshd_config.exists() else None) == expected
+
+
+@needs_tools
+@pytest.mark.parametrize('install_method', ['cloud_image', 'disk_image'])
+def test_every_prepared_linux_guest_gets_the_images_ssh_keys_after_its_account(builder, install_method):
+    # Instructors reach every guest through a tunnel, so the key goes to exposed and unexposed guests alike.
+    keys = ['ssh-ed25519 AAAAC3NzaKEY1 instructor@laptop', 'ssh-rsa AAAAB3NzaKEY2 ta@desk']
+    entry = _entry('prepared-linux', family='linux', group='linux', install_method=install_method,
+                   media_url='https://cloud.debian.example/debian-12.qcow2', media_sha256=_sha(DEB_IMAGE),
+                   media_formats=['qcow2'], osinfo='debian12', agent=True, net_config='networkd')
+    spec = _spec(deb={'os_id': 'prepared-linux'}).model_copy(update={'exposures': []})
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setitem(CATALOG, 'prepared-linux', entry)
+        result, log = builder(spec=spec, ssh_keys=keys)
+
+    customize = _commands(log, 'virt-customize')[0]
+    assert result.returncode == 0, result.stderr
+    for key in keys:
+        assert f'--ssh-inject labadmin:string:{key}' in customize
+    # virt-customize runs operations in order, and --ssh-inject needs the account to exist.
+    assert customize.index('useradd') < customize.index('--ssh-inject')
+
+
+@needs_tools
+def test_a_build_without_image_keys_injects_none(builder):
+    result, log = builder()
+
+    assert result.returncode == 0, result.stderr
+    assert '--ssh-inject' not in log
+
+
+@needs_tools
+def test_an_unexposed_linux_guest_keeps_its_image_sshd_config(builder):
+    spec = _spec().model_copy(update={'exposures': []})
+    result, log = builder(spec=spec)
+
+    customize = _commands(log, 'virt-customize')[0]
+    assert result.returncode == 0, result.stderr
+    assert 'PasswordAuthentication' not in customize
 
 
 @needs_tools
@@ -1119,6 +1206,8 @@ def test_a_7z_linux_disk_image_with_an_agent_converts_its_qcow2_then_customizes_
     assert 'systemctl enable ssh ' in customize
     assert "--run-command rm -f /etc/ssh/ssh_host_*" in customize
     assert '--firstboot-command ssh-keygen -A' in customize
+    # fw is not exposed here, so it is no student host and its sshd_config is left alone.
+    assert 'PasswordAuthentication' not in customize
     assert '--touch /etc/cloud/cloud-init.disabled' not in customize
     # Kali has no SELinux, so the keyfile needs no relabel (Debian-family osinfo is not RHEL_FAMILY).
     assert '--selinux-relabel' not in customize

@@ -356,6 +356,12 @@ class BaseComputeManager:
                     f"Existing instance {self.server_spec.name} does not match the requested build"
                 ) from error
             created = True
+        except Exception as error:
+            # Google refused the insert (a zone out of capacity, a quota, a bad request). Nothing retries
+            # it, so the server must not stay BUILDING with no VM behind it.
+            self.logger.error(f'{self.class_name}:{self.server_name} - Could not create the server: {error}')
+            self.state_manager.state_transition(self.s.BROKEN)
+            raise
 
         if created:
             self.logger.info(f'{self.class_name}:{self.server_name} - Successfully built server!')
