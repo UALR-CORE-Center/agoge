@@ -47,6 +47,8 @@ BOOT_KEY_SECONDS=30
 POST_INSTALL_MINUTES=60
 LEASE_WAIT_SECONDS=120
 AGENTLESS_SETTLE_SECONDS=120
+# Runs in a student host's image: makes its sshd_config read sshd_config.d before anything else it sets.
+SSHD_INCLUDE_COMMAND='[ ! -f /etc/ssh/sshd_config ] || grep -Eq "^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config.d/" /etc/ssh/sshd_config || sed -i "1i Include /etc/ssh/sshd_config.d/*.conf" /etc/ssh/sshd_config'
 # virt-customize --selinux-relabel and the qemu-ga guest-exec block apply to these osinfo ids. openSUSE is
 # here because Leap 16 enforces SELinux; the relabel is a no-op on AppArmor Leap 15, and the qemu-ga edit is guarded.
 RHEL_FAMILY='^(rhel|centos|rocky|almalinux|alma|fedora|ol|oraclelinux|opensuse)'
@@ -101,6 +103,11 @@ stop_heartbeat() {
 # One manifest value for guest $1; null prints as an empty string, booleans as true/false.
 guest_value() {
   jq -r --arg g "$1" ".guests[] | select(.name == \$g) | $2 | if . == null then \"\" else tostring end" "$MANIFEST"
+}
+
+# Whether guest $1 has a NIC on an alias slot, which makes it a host students log into.
+is_exposed() {
+  jq -e --arg g "$1" 'any((.exposures // [])[]; .[0] == $g)' "$MANIFEST" >/dev/null
 }
 
 secret_value() {
@@ -634,6 +641,20 @@ customize_linux() {
       --run-command 'rm -f /etc/ssh/ssh_host_*'
       --firstboot-command 'ssh-keygen -A && (systemctl restart ssh || systemctl restart sshd)')
   fi
+  # The image's SSH keys (the parent's login) let instructors in with their key through a tunnel. After the
+  # useradd above: virt-customize applies its operations in order, and --ssh-inject needs the account.
+  while IFS= read -r key; do
+    [ -n "$key" ] && args+=(--ssh-inject "$user:string:$key")
+  done < <(jq -r '(.ssh_keys // [])[]' "$MANIFEST")
+  if is_exposed "$guest"; then
+    # An exposed guest is a student host: students SSH in with the password the Connect dialog shows, which
+    # images such as Ubuntu's cloud images turn off. sshd keeps the first value it reads, so the 01- drop-in
+    # beats the image's own sshd_config.d files; the Include is added where the image's config lacks one. An
+    # image with no /etc/ssh/sshd_config (openSUSE's lives in /usr/etc/ssh) already includes sshd_config.d.
+    args+=(--mkdir /etc/ssh/sshd_config.d
+      --write '/etc/ssh/sshd_config.d/01-agoge.conf:PasswordAuthentication yes'
+      --run-command "$SSHD_INCLUDE_COMMAND")
+  fi
   while IFS= read -r upload; do
     [ -n "$upload" ] && args+=(--upload "$upload")
   done < <(write_network_config "$guest" "$WORK_DIR/net-$guest")
@@ -997,9 +1018,13 @@ report_addresses() {
 
 finish_guest() {
   echo "$2" > "$STATE_DIR/guest-$1.done"
-  set_guest_status "$1" "$2"
-  log "$1: $2"
+  # Under the message lock: another guest's put_guest_steps reads the step files and writes the message while
+  # holding it, so no message listing this step can land after this status.
+  lock message
   rm -f "$RUN_DIR/step-$1"
+  set_guest_status "$1" "$2"
+  unlock message
+  log "$1: $2"
   put_guest_steps "$1: $2"
 }
 

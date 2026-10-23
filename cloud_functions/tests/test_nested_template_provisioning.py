@@ -130,6 +130,8 @@ def test_first_build_boots_debian_family_on_build_machine_type_with_builder_meta
 
     manifest = json.loads(built['items']['agoge-nested-manifest'])
     assert [guest['name'] for guest in manifest['guests']] == ['web', 'desk']
+    # The parent's login key, for the builder to inject into each prepared Linux guest.
+    assert manifest['ssh_keys'] == [USER['ssh_key']]
     assert manifest['guests'][1]['media']['gcs_path'] == UPLOAD['gcs_path']
     secrets = json.loads(built['items']['agoge-nested-secrets'])
     assert secrets['web'] == {'admin_password': ADMIN_PASSWORD, 'vnc_password': VNC_PASSWORD}
@@ -196,6 +198,59 @@ def test_missing_catalog_entry_fails_the_build_without_creating_a_server():
     stored = _stored(manager)
     assert stored['nested_build']['phase'] == 'failed'
     assert 'gone-os' in stored['nested_build']['message']
+
+
+def test_a_zone_out_of_capacity_fails_the_first_build_with_a_readable_reason():
+    # Google refused the build server; without this the record sat in provisioning, never CHECKED_OUT, so
+    # the build monitor (which polls CHECKED_OUT records) never timed it out.
+    manager, _ = _manager(_record())
+    manager.env = SimpleNamespace(project=PROJECT, zone='us-central1-a')
+    manager.build = Mock(side_effect=RuntimeError(
+        'Operation failed with errors: ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS: The zone does not have '
+        'enough resources available to fulfill the request.'))
+
+    with pytest.raises(RuntimeError):
+        manager.check_out()
+
+    stored = _stored(manager)
+    assert stored['nested_build']['phase'] == 'failed'
+    assert stored['nested_build']['message'].startswith('Google Cloud has no n2-standard-8 capacity in us-central1-a')
+    assert 'not a quota' in stored['nested_build']['message']
+
+
+def test_any_other_refused_build_server_fails_the_first_build_with_googles_message():
+    manager, _ = _manager(_record())
+    manager.build = Mock(side_effect=RuntimeError('Operation failed with errors: QUOTA_EXCEEDED: CPUS'))
+
+    with pytest.raises(RuntimeError):
+        manager.check_out()
+
+    stored = _stored(manager)
+    assert stored['nested_build']['phase'] == 'failed'
+    assert stored['nested_build']['message'] == (
+        'The build could not start: Operation failed with errors: QUOTA_EXCEEDED: CPUS')
+
+
+def test_a_failed_record_write_does_not_hide_the_build_error():
+    manager, _ = _manager(_record())
+    manager.build = Mock(side_effect=RuntimeError('ZONE_RESOURCE_POOL_EXHAUSTED'))
+    manager.db.update.side_effect = ConnectionError('firestore unavailable')
+
+    with pytest.raises(RuntimeError, match='ZONE_RESOURCE_POOL_EXHAUSTED'):
+        manager.check_out()
+
+    assert 'firestore unavailable' in manager.logger.error.call_args.args[0]
+
+
+def test_a_finalized_image_whose_server_is_refused_stays_checkable_out():
+    # Its image is intact; marking it failed would block every later Check Out.
+    manager, _ = _manager(_record(phase='finalized'))
+    manager.build = Mock(side_effect=RuntimeError('ZONE_RESOURCE_POOL_EXHAUSTED'))
+
+    with pytest.raises(RuntimeError):
+        manager.check_out()
+
+    manager.db.update.assert_not_called()
 
 
 def test_standard_image_check_out_is_unchanged():

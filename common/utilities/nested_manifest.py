@@ -43,12 +43,14 @@ def guest_mac(guest_name: str, nic_index: int) -> str:
 
 
 def render_manifest(spec: NestedHostSpecModel, catalog: Dict[str, NestedOsCatalogModel],
-                    media: Dict[str, NestedMediaModel]) -> str:
+                    media: Dict[str, NestedMediaModel], ssh_keys: Iterable[str] = ()) -> str:
     """Return the `agoge-nested-manifest` JSON.
 
     :param spec: the derived host spec (exposures and console ports filled in).
     :param catalog: catalog entries by entry id; every guest's os_id must be present.
     :param media: uploaded media by id; every guest's media_id must be present.
+    :param ssh_keys: the image's public keys (the parent's login), injected into every Linux guest the builder
+        prepares so instructors can log in through a tunnel with their key.
     """
     guests = []
     macs: Dict[str, str] = {}
@@ -70,6 +72,8 @@ def render_manifest(spec: NestedHostSpecModel, catalog: Dict[str, NestedOsCatalo
         'version': MANIFEST_VERSION,
         **spec.model_dump(exclude={'guests', 'vnc_passwords'}),
         'guests': guests,
+        # One line each: the builder passes each as a single virt-customize --ssh-inject argument.
+        'ssh_keys': [key.strip() for key in ssh_keys if key and key.strip() and '\n' not in key.strip()],
     }
     return _bounded_json(manifest, 'agoge-nested-manifest', "shorten the guests' post-install scripts")
 

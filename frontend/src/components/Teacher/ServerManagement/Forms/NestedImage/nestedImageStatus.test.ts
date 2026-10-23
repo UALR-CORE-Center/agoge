@@ -167,6 +167,10 @@ describe("nestedTunnels", () => {
             ["dc01", "console", 5901], ["ws01", "console", 5902], ["dc01", "rdp", 13389],
             ["web01", "ssh", 2223], ["ws01", "rdp", 13391],
         ]);
+        // PuTTY's Tunnels page takes the forward's far end on its own.
+        expect(tunnels.map(item => item.destination)).toEqual([
+            "localhost:5901", "localhost:5902", "192.168.100.10:3389", "192.168.100.20:22", "192.168.100.166:3389",
+        ]);
     });
 
     it("skips a DHCP guest until its address is reported, and a NIC the parent cannot route to", () => {
