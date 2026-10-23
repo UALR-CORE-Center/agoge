@@ -464,7 +464,7 @@ Read the `wireguard` status fields together:
 
 | Status | What to inspect next |
 | --- | --- |
-| `health_timestamp` is null | First check the gateway's own state and whether VM creation completed. After the guest starts, check startup, Secret Manager access, and the configured HTTPS health endpoint. |
+| `health_timestamp` is null | No health report has been accepted. First check the gateway's own state and whether VM creation completed. After the guest starts, check startup, Secret Manager access, and the configured HTTPS health endpoint. |
 | A report exists, but `service_ready` is false | Inspect `health_error` and guest service logs. The callback reached the API, but the guest is not reporting a healthy service. |
 | `health_age_seconds` keeps increasing | Check the guest health timer and API/network connectivity; an old successful report cannot establish current readiness. |
 | `service_ready` is true with fresh health, but `tunnel_ready` is false | The gateway service is ready. Check the remote device, its actual public key, polling configuration, and connectivity for the tunnel test. |
@@ -474,6 +474,67 @@ Inside the gateway, inspect the startup and health service logs:
 ```bash
 sudo journalctl -u google-startup-scripts -u wg-quick@wg0 -u agoge-wireguard-health --no-pager -n 100
 ```
+
+`Finished wg-quick@wg0.service` confirms that the interface started; it does
+not confirm that the health POST reached the API. The systemd warning that a
+unit file is **world-inaccessible** is informational and does not prevent it
+from running. Leave the configuration and credentials protected.
+
+New gateway startup logs identify the failing stage and safe details such as
+an HTTP status or command exit code. They omit exception bodies, command output,
+keys, and bearer tokens. Older gateways may print only **Agoge WireGuard
+bootstrap failed**. To diagnose one without rebuilding it, open an SSH terminal
+inside the existing gateway using your normal GCP access and run:
+
+```bash
+sudo python3 - <<'PY'
+import json
+import runpy
+from urllib.error import HTTPError
+from urllib.parse import urlsplit, urlunsplit
+
+stage = "load_agent"
+try:
+    agent = runpy.run_path("/usr/local/lib/agoge-wireguard/agent.py",
+                          run_name="agoge_diagnostic")
+    stage = "secret_access"
+    config = agent["secret_payload"]()
+    endpoint = urlsplit(config["health_url"])
+    print(json.dumps({"health_endpoint": urlunsplit(
+        (endpoint.scheme, endpoint.netloc, endpoint.path, "", ""))}))
+    stage = "service_check"
+    print(json.dumps({"service_ready": agent["service_ready"](config)}))
+    stage = "health_callback"
+    agent["report"](config)
+    print("Health callback accepted.")
+except HTTPError as error:
+    print(json.dumps({"stage": stage, "http_status": error.code}))
+except Exception as error:
+    print(json.dumps({"stage": stage, "error_type": type(error).__name__}))
+PY
+```
+
+This reads the existing configuration, checks the service, and submits one health
+report. It does not reconfigure or restart WireGuard. The displayed endpoint
+omits URL query parameters. Do not print the configuration object, HTTP response
+body, or `wg showconf`; those can expose credentials.
+
+Interpret a failure at `health_callback` separately from a Secret Manager error:
+
+| Result | What to check |
+| --- | --- |
+| HTTP 404 | Confirm the displayed API base URL and path, and that the deployed API contains the WireGuard route. |
+| HTTP 401 | The current API rejects gateway credentials, or cannot find the lease in its configured database. Check the API's project/database and the retained lab. |
+| HTTP 403 | Check API ingress/access restrictions and any proxy in front of it. The device callback uses its own bearer credential. |
+| HTTP 409 | The current API considers the lease, endpoint ownership, or boot nonce no longer current. Check expiration and lifecycle status before resuming. |
+| HTTP 400 or 422 | Check the deployed API version and request validation. |
+| HTTP 5xx | Inspect the API logs and its project/database access. |
+| `JSONDecodeError` | The response was not the expected JSON; inspect the API/proxy route. |
+| Other error type or a failure at `service_check` | Inspect local service/network logs; the class alone does not establish the cause. |
+
+These status meanings describe the current API; a proxy or older deployment can
+respond differently. Correct the cause before resuming the retained, unexpired
+lab. A new local `--wireguard-api-url` does not alter its existing secret.
 
 The guest needs a reachable API containing
 `POST /wireguard/gateways/<unit-id>/health/` at its configured API base URL.

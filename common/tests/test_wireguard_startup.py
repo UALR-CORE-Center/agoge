@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import types
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -286,6 +287,106 @@ class GuestConfigurationTests(unittest.TestCase):
         self.assertFalse(body['tunnel_ready'])
         self.assertEqual(body['error'], 'wireguard_service_unready')
         self.assertNotIn(config['private_key'], json.dumps(body))
+
+
+class GuestDiagnosticTests(unittest.TestCase):
+    def setUp(self):
+        self.agent = guest_module()
+
+    def failures(self, output):
+        return [json.loads(line.split('Agoge WireGuard diagnostic: ', 1)[1])
+                for line in output.splitlines() if 'Agoge WireGuard diagnostic: ' in line]
+
+    def test_secret_http_rejection_identifies_stage_and_status_without_credentials(self):
+        config = payload()
+        secret = config['private_key'] + config['callback_token']
+        failure = urllib.error.HTTPError('https://secret.invalid/?token=' + secret,
+                                         403, secret, {'Authorization': secret}, io.BytesIO(secret.encode()))
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            self.agent.ROOT = Path(directory)
+            (self.agent.ROOT / 'secret-version').write_text('projects/p/secrets/s/versions/1')
+            with patch.object(self.agent.sys, 'argv', ['agent.py', 'configure']), \
+                 patch.object(self.agent, 'install_boot_guard'), \
+                 patch.object(self.agent, 'request_json', side_effect=[{'access_token': secret}, failure]), \
+                 patch.object(self.agent, 'report') as report, \
+                 contextlib.redirect_stderr(stderr):
+                self.assertEqual(self.agent.main(), 1)
+        report.assert_not_called()
+        self.assertEqual(self.failures(stderr.getvalue()), [{
+            'stage': 'secret_access', 'context': 'operation', 'error': 'http_error', 'http_status': 403,
+        }])
+        self.assertNotIn(secret, stderr.getvalue())
+        self.assertNotIn('secret.invalid', stderr.getvalue())
+
+    def test_health_http_rejection_keeps_original_failure_and_labels_fallback(self):
+        config = payload()
+        secret = config['callback_token']
+        failure = urllib.error.HTTPError('https://api.invalid/' + secret, 404, secret, {}, io.BytesIO(secret.encode()))
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            self.agent.ROOT = Path(directory)
+            (self.agent.ROOT / 'boot-id').write_text('cloud-nonce')
+            with patch.object(self.agent.sys, 'argv', ['agent.py', 'report']), \
+                 patch.object(self.agent, 'secret_payload', return_value=config), \
+                 patch.object(self.agent, 'service_ready', return_value=False), \
+                 patch.object(self.agent, 'request_json', side_effect=failure), \
+                 contextlib.redirect_stderr(stderr):
+                self.assertEqual(self.agent.main(), 1)
+        errors = self.failures(stderr.getvalue())
+        self.assertEqual([item['context'] for item in errors], ['operation', 'failure_report'])
+        self.assertTrue(all(item['stage'] == 'health_callback' and item['http_status'] == 404 for item in errors))
+        self.assertNotIn(secret, stderr.getvalue())
+        self.assertNotIn('api.invalid', stderr.getvalue())
+
+    def test_command_failure_emits_stage_and_exit_code_but_never_arguments_or_output(self):
+        config = payload()
+        secret = config['private_key'] + config['callback_token']
+        failure = subprocess.CalledProcessError(2, ['wg', secret], output=secret, stderr=secret)
+        stderr = io.StringIO()
+        with patch.object(self.agent.sys, 'argv', ['agent.py', 'guard']), \
+             patch.object(self.agent, 'command', side_effect=failure), \
+             contextlib.redirect_stderr(stderr):
+            self.assertEqual(self.agent.main(), 1)
+        self.assertEqual(self.failures(stderr.getvalue()), [{
+            'stage': 'boot_guard', 'context': 'operation', 'error': 'command_failed', 'exit_code': 2,
+        }])
+        self.assertNotIn(secret, stderr.getvalue())
+
+    def test_service_check_failure_is_logged_but_still_reports_unready_health(self):
+        config = payload()
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            self.agent.ROOT = Path(directory)
+            (self.agent.ROOT / 'boot-id').write_text('cloud-nonce')
+            with patch.object(self.agent, 'service_ready', side_effect=RuntimeError(config['private_key'])), \
+                 patch.object(self.agent, 'request_json') as request, \
+                 contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
+                self.agent.report(config)
+        self.assertEqual(self.failures(stderr.getvalue())[0]['stage'], 'service_check')
+        self.assertEqual(json.loads(request.call_args.args[2])['error'], 'wireguard_service_unready')
+        self.assertIn('Agoge WireGuard health accepted:', stdout.getvalue())
+        self.assertNotIn(config['private_key'], stderr.getvalue() + stdout.getvalue())
+
+    def test_diagnostic_classification_never_stringifies_arbitrary_exception(self):
+        secret = payload()['private_key']
+        failures = [
+            (urllib.error.URLError(secret), 'network_error'),
+            (subprocess.TimeoutExpired(['wg', secret], 30, output=secret, stderr=secret), 'timeout'),
+            (TimeoutError(secret), 'timeout'),
+            (json.JSONDecodeError(secret, secret, 0), 'invalid_json'),
+            (ValueError(secret), 'invalid_data'),
+            (PermissionError(secret), 'os_error'),
+            (RuntimeError(secret), 'unexpected_error'),
+        ]
+        for failure, expected in failures:
+            stderr = io.StringIO()
+            with self.subTest(expected=expected), contextlib.redirect_stderr(stderr):
+                self.agent.stage('health_callback')
+                self.agent.diagnostic(failure)
+            self.assertEqual(self.failures(stderr.getvalue())[0]['error'], expected)
+            self.assertNotIn(secret, stderr.getvalue())
 
 
 if __name__ == '__main__':

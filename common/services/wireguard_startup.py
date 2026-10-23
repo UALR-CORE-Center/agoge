@@ -27,6 +27,38 @@ import urllib.request
 ROOT = Path('/etc/agoge-wireguard')
 METADATA = 'http://metadata.google.internal/computeMetadata/v1/'
 MAX_RESPONSE = 1048576
+STAGE = 'startup'
+
+
+def stage(name):
+    global STAGE
+    STAGE = name
+
+
+def diagnostic(error, context='operation'):
+    # Never stringify an exception: HTTP bodies, URLs, subprocess arguments and
+    # captured output can all contain keys or bearer tokens. Only fixed labels
+    # and bounded numeric status codes are safe for the serial console.
+    details = {'stage': STAGE, 'context': context, 'error': 'unexpected_error'}
+    if isinstance(error, urllib.error.HTTPError):
+        details['error'] = 'http_error'
+        if isinstance(error.code, int) and 100 <= error.code <= 599:
+            details['http_status'] = error.code
+    elif isinstance(error, urllib.error.URLError):
+        details['error'] = 'network_error'
+    elif isinstance(error, subprocess.CalledProcessError):
+        details['error'] = 'command_failed'
+        if isinstance(error.returncode, int) and -255 <= error.returncode <= 255:
+            details['exit_code'] = error.returncode
+    elif isinstance(error, (subprocess.TimeoutExpired, TimeoutError)):
+        details['error'] = 'timeout'
+    elif isinstance(error, json.JSONDecodeError):
+        details['error'] = 'invalid_json'
+    elif isinstance(error, (ValueError, TypeError, KeyError)):
+        details['error'] = 'invalid_data'
+    elif isinstance(error, OSError):
+        details['error'] = 'os_error'
+    print('Agoge WireGuard diagnostic: ' + json.dumps(details, sort_keys=True), file=sys.stderr)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -47,17 +79,22 @@ def request_json(url, headers=None, data=None):
 
 
 def secret_payload():
+    stage('secret_reference')
     version = (ROOT / 'secret-version').read_text().strip()
     # This file is deployed by the renderer and root-only, but validate it before
     # attaching the metadata access token to a network request.
     import re
     if not re.fullmatch(r'projects/[A-Za-z0-9_-]+/secrets/[A-Za-z0-9_-]+/versions/(?:[1-9][0-9]*|latest)', version):
         raise ValueError('invalid_secret_reference')
+    stage('metadata_identity')
     token = request_json(METADATA + 'instance/service-accounts/default/token',
                          {'Metadata-Flavor': 'Google'})['access_token']
+    stage('secret_access')
     response = request_json('https://secretmanager.googleapis.com/v1/' + version + ':access',
                             {'Authorization': 'Bearer ' + token})
+    stage('secret_decode')
     raw = base64.b64decode(response['payload']['data'], validate=True)
+    stage('config_validation')
     return validate(json.loads(raw))
 
 
@@ -155,6 +192,7 @@ def forwarding_rules(config):
 
 
 def install_boot_guard():
+    stage('boot_guard')
     # wg-quick's persistent ExecStartPre runs this before bringing up a cached
     # interface on every reboot, even if startup or Secret Manager is unavailable.
     # iptables-restore commits the chain and jumps together, never flushing a
@@ -174,6 +212,7 @@ def install_boot_guard():
 
 
 def remove_boot_guard():
+    stage('guard_removal')
     # Only called after the complete allowlist was committed. Partial removal
     # fails closed because any remaining direction still hits DROP.
     for direction in ('-i', '-o'):
@@ -183,6 +222,7 @@ def remove_boot_guard():
 
 
 def configure_forwarding(config):
+    stage('forwarding_policy')
     lines = ['*filter', ':AGOGE-WG - [0:0]', '-F AGOGE-WG']
     for rule in forwarding_rules(config):
         lines.append('-A AGOGE-WG ' + ' '.join(rule))
@@ -198,6 +238,7 @@ def configure_forwarding(config):
     lines.append('COMMIT')
     command(['iptables-restore', '--wait', '10', '--noflush'],
             input_text='\n'.join(lines) + '\n')
+    stage('forwarding_sysctl')
     atomic_write('/etc/sysctl.d/90-agoge-wireguard.conf', 'net.ipv4.ip_forward=1\n')
     command(['sysctl', '-w', 'net.ipv4.ip_forward=1'])
 
@@ -242,6 +283,7 @@ def report(config, error=None):
     ready = False
     handshake = 0
     if not error:
+        stage('service_check')
         try:
             ready = service_ready(config)
             if ready:
@@ -249,10 +291,12 @@ def report(config, error=None):
                     peer, timestamp = line.split()
                     if peer == config['peer_public_key']:
                         handshake = int(timestamp)
-        except Exception:
+        except Exception as failure:
+            diagnostic(failure)
             ready = False
         if not ready:
             error = 'wireguard_service_unready'
+    stage('health_payload')
     body = {
         'boot_id': (ROOT / 'boot-id').read_text().strip(),
         'service_ready': ready,
@@ -260,18 +304,26 @@ def report(config, error=None):
         'latest_handshake': handshake,
         'error': error,
     }
+    stage('health_callback')
     request_json(config['health_url'],
                  {'Authorization': 'Bearer ' + config['callback_token'], 'Content-Type': 'application/json'},
                  json.dumps(body).encode())
+    print('Agoge WireGuard health accepted: ' + json.dumps({
+        'service_ready': body['service_ready'], 'tunnel_ready': body['tunnel_ready'],
+    }, sort_keys=True))
 
 
 def configure(config):
+    stage('config_read')
     target = Path('/etc/wireguard/wg0.conf')
     desired = configuration(config)
     changed = not target.exists() or target.read_text() != desired
     install_boot_guard()
+    stage('config_write')
     atomic_write(target, desired)
+    stage('wireguard_enable')
     command(['systemctl', 'enable', 'wg-quick@wg0'])
+    stage('wireguard_start')
     if changed:
         command(['systemctl', 'restart', 'wg-quick@wg0'])
     else:
@@ -285,6 +337,7 @@ def configure(config):
 
 def main():
     config = None
+    stage('startup')
     try:
         if sys.argv[1:] == ['guard']:
             install_boot_guard()
@@ -298,14 +351,15 @@ def main():
             report(config)
         else:
             raise ValueError('invalid_operation')
-    except Exception:
+    except Exception as failure:
         # Captured subprocess stderr and HTTP bodies may contain credentials.
         # Emit only a bounded code and make the callback fail closed if possible.
+        diagnostic(failure)
         if config:
             try:
                 report(config, error='bootstrap_failed')
-            except Exception:
-                pass
+            except Exception as callback_failure:
+                diagnostic(callback_failure, context='failure_report')
         print('Agoge WireGuard bootstrap failed; inspect package/service connectivity and lease authorization.', file=sys.stderr)
         return 1
     return 0
