@@ -13,14 +13,27 @@ interface NestedTunnelHintsProps {
     username: string | null | undefined;
 }
 
-const tunnelLabel = (tunnel: NestedTunnel): string => {
+const tunnelLabel = (tunnel: NestedTunnel, guestUser: string | undefined): string => {
     if (tunnel.kind === 'console') {
         return `${tunnel.guest} console (VNC viewer to localhost:${tunnel.local_port})`;
     }
     if (tunnel.kind === 'rdp') {
         return `${tunnel.guest} RDP (connect to localhost:${tunnel.local_port})`;
     }
-    return `${tunnel.guest} SSH (ssh -p ${tunnel.local_port} <user>@localhost)`;
+    return `${tunnel.guest} SSH (ssh -p ${tunnel.local_port} ${guestUser || '<user>'}@localhost)`;
+};
+
+// Once per guest: the VNC password for its console, then the admin account the installer created, which
+// logs in over RDP or SSH and at the console's login screen alike.
+const GuestCredentials: React.FC<{spec: NestedHostSpec; guest: string; hasConsole: boolean}> = ({spec, guest, hasConsole}) => {
+    const entry = spec.guests.find(item => item.name === guest);
+    return (
+        <>
+            {hasConsole && <UserDetailField label={`${guest} VNC password`} value={spec.vnc_passwords[guest] ?? ""} />}
+            <UserDetailField label={`${guest} username`} value={entry?.admin_username ?? ""} />
+            <UserDetailField label={`${guest} password`} value={entry?.admin_password ?? ""} />
+        </>
+    );
 };
 
 // The Connect dialog section for a nested lab host: one SSH tunnel through the parent per console, and RDP
@@ -53,6 +66,8 @@ const NestedTunnelHints: React.FC<NestedTunnelHintsProps> = ({spec, build, hostn
         return null;
     }
     const tunnels = nestedTunnels(spec, `${username || '<user>'}@${hostname}`, catalog, build?.guest_addresses);
+    // In spec order, each guest once, with every way to reach it.
+    const guests = spec.guests.map(item => item.name).filter(name => tunnels.some(tunnel => tunnel.guest === name));
 
     return (
         <Box component={"section"} sx={{mt: 3}}>
@@ -62,16 +77,26 @@ const NestedTunnelHints: React.FC<NestedTunnelHintsProps> = ({spec, build, hostn
             </Typography>
             <Typography sx={{mt: 1, mb: 1}}>
                 Guests are reached through an SSH tunnel to this server. Run a command below, keep it open, then
-                connect to the local port. Guest credentials and VNC passwords are in View Details.
+                connect to the local port with the credentials under it.
             </Typography>
             {catalogPending && (
                 <Alert severity={"info"} sx={{mb: 1}}>{"Loading the guests' operating systems for RDP and SSH tunnels…"}</Alert>
             )}
             {tunnels.length === 0 ? (
                 <Alert severity={"info"}>This host has no guest consoles, and no Windows or Linux guest with an address the parent can reach.</Alert>
-            ) : tunnels.map(tunnel => (
-                <UserDetailField key={`${tunnel.guest}-${tunnel.kind}`} label={tunnelLabel(tunnel)} value={tunnel.command} />
-            ))}
+            ) : guests.map(guest => {
+                const guestTunnels = tunnels.filter(tunnel => tunnel.guest === guest);
+                const guestUser = spec.guests.find(item => item.name === guest)?.admin_username;
+                return (
+                    <Box key={guest} component={"section"} aria-label={`${guest} connections`} sx={{mb: 3}}>
+                        <Typography variant={"subtitle1"} component={"h4"} sx={{fontWeight: 600}}>{guest}</Typography>
+                        {guestTunnels.map(tunnel => (
+                            <UserDetailField key={tunnel.kind} label={tunnelLabel(tunnel, guestUser)} value={tunnel.command} />
+                        ))}
+                        <GuestCredentials spec={spec} guest={guest} hasConsole={guestTunnels.some(tunnel => tunnel.kind === 'console')} />
+                    </Box>
+                );
+            })}
         </Box>
     );
 };

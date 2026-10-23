@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import {cleanup, fireEvent, render, screen, within} from "@testing-library/react";
+import {cleanup, fireEvent, render, screen, waitFor, within} from "@testing-library/react";
 import React from "react";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {NestedGuest, NestedHostSpec, NestedOsCatalogEntry} from "../../../../../services/Server/nested.model";
@@ -86,6 +86,38 @@ describe("NestedTunnelHints", () => {
         expect(screen.queryByText(/192\.168\.100\.10:22 /)).not.toBeInTheDocument();
         expect(screen.queryByText(/192\.168\.100\.150:3389 /)).not.toBeInTheDocument();
         expect(screen.queryByText(/Loading the guests' operating systems/)).not.toBeInTheDocument();
+    });
+
+    it("shows each guest's login under its RDP or SSH tunnel and the VNC password under its console", async () => {
+        const build = {
+            phase: "ready" as const, guests: {}, message: null, heartbeat_at: null, started_at: null, updated_at: null,
+            guest_addresses: {kali: {"0": "192.168.100.150"}},
+        };
+        render(<NestedTunnelHints spec={spec} build={build} hostname={"adlab.example.test"} username={"agoge"} />);
+        await screen.findByText("ssh -L 2223:192.168.100.150:22 agoge@adlab.example.test");
+        expect(screen.getByText("dc01 username:")).toBeInTheDocument();
+        expect(screen.getByText("Administrator")).toBeInTheDocument();
+        expect(screen.getByText("dc01-secret")).toBeInTheDocument();
+        expect(screen.getByText("kali username:")).toBeInTheDocument();
+        expect(screen.getByText(/kali SSH \(ssh -p 2223 kali@localhost\)/)).toBeInTheDocument();
+        expect(screen.getByText("kali-secret")).toBeInTheDocument();
+        expect(screen.getByText("dc01 VNC password:")).toBeInTheDocument();
+        expect(screen.getByText("vncpw001")).toBeInTheDocument();
+    });
+
+    it("shows a console-only guest's admin login once, for its console login screen", async () => {
+        // No catalog entry and no address: dc01 is reachable only at its console, and still gets its login.
+        vi.mocked(nestedService.list_catalog).mockResolvedValue([]);
+        render(<NestedTunnelHints spec={spec} build={null} hostname={"adlab.example.test"} username={"agoge"} />);
+        await waitFor(() => expect(screen.queryByText(/Loading the guests' operating systems/)).not.toBeInTheDocument());
+        const dc01 = screen.getByRole("region", {name: "dc01 connections"});
+        expect(within(dc01).getByText("ssh -L 5901:localhost:5901 agoge@adlab.example.test")).toBeInTheDocument();
+        expect(within(dc01).getAllByText("dc01 username:")).toHaveLength(1);
+        expect(within(dc01).getByText("Administrator")).toBeInTheDocument();
+        expect(within(dc01).getByText("dc01-secret")).toBeInTheDocument();
+        expect(within(dc01).getByText("vncpw001")).toBeInTheDocument();
+        // kali has no console and no address yet, so it has nothing to connect to.
+        expect(screen.queryByRole("region", {name: "kali connections"})).not.toBeInTheDocument();
     });
 
     it("renders nothing without a hostname to tunnel through", () => {

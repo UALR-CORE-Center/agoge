@@ -552,7 +552,7 @@ const ImageListTable: React.FC = () => {
         return buttonConfig;
     }
 
-    const newColumns: GridColDef[] = [
+    const columns: GridColDef[] = [
         {
             field: 'state',
             headerName: 'State',
@@ -698,9 +698,17 @@ const ImageListTable: React.FC = () => {
             minWidth: 170,
             filterable: false,
             sortable: false,
-            renderCell: (params: any) => <Box sx={{display: 'flex', alignItems: 'center', flexWrap: 'wrap', height: '100%'}}>{imageRowActions(params.row)}</Box>
+            renderCell: (params: any) => <Box sx={{display: 'flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', height: '100%'}}>{imageRowActions(params.row)}</Box>
         },
     ];
+    const newColumns: GridColDef[] = columns.map((column) => ({
+        ...column,
+        // Rows size to their content, which makes cells display: block; flex centers every cell's
+        // content in the middle of the row instead of leaving short content at the top.
+        display: 'flex',
+        align: 'center',
+        headerAlign: 'center',
+    }));
 
     return (
         <>
