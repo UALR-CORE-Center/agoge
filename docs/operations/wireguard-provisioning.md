@@ -190,6 +190,51 @@ If eligibility fails, fix the indicated metadata through **Teachers → Manage
 Servers** and complete check-in as needed. Do not clear credentials or change
 the image's name simply to make it look like Kali.
 
+### If the selected GCP image returns NotFound
+
+Eligibility checks the saved Agoge record first; it does not prove the underlying
+Compute image still exists. Setup then prints the exact source it queries.
+An explicit source such as
+`projects/ualr-agoge/global/images/image-csec3314-powershell` is resolved in
+`ualr-agoge`, even when the catalog upload destination is `test-dev-787001`.
+Older versions incorrectly labeled the final Compute error with the destination
+project. Update the feature branch and restart setup for accurate logs and a
+source-specific diagnostic.
+
+Using the same account selected in setup, verify that example source:
+
+```powershell
+gcloud compute images describe image-csec3314-powershell --project=ualr-agoge --format="yaml(name,status,architecture,selfLink)"
+```
+
+If the source is stale, find the actual published image in the project that owns
+your student images. For example, to inspect the configured shared image project:
+
+```powershell
+gcloud compute images list --project=agoge-shared-resources --no-standard-images --format="table(name,status,architecture,selfLink)"
+```
+
+Use the returned image's exact name and `selfLink`; do not assume it matches the
+Agoge record ID. Correct the selected project's
+`agoge-v1/image/<student template ID>` record to reference that image. `self_link`
+takes precedence, followed by an explicit `image` reference, then the boot disk's
+`initializeParams.sourceImage`. Keep those references consistent and preserve
+the student connection settings. If a local Compute image is not registered yet,
+use **Server Images & Build Specs → Import Custom Images from GCP into App** in
+its project, or prepare and check in the student image through Server Manager.
+
+A copied Firestore record alone cannot recreate a missing Compute image. If the
+image exists but setup still cannot read it, check the setup account's access to
+the source image and that its Application Default Credentials use the intended
+identity. The deployed backend identity also needs access when building student
+VMs. Setup preserves explicit source projects instead of substituting a similarly
+named image elsewhere. These failures occur before any catalog write; rerun the
+upload after correcting the source or access. Updating these local setup
+diagnostics requires no Cloud Run or Cloud Functions deployment.
+
+References: Google's [image describe command](https://docs.cloud.google.com/sdk/gcloud/reference/compute/images/describe)
+and [image list command](https://docs.cloud.google.com/sdk/gcloud/reference/compute/images/list).
+
 ## Build from the uploaded template
 
 1. Sign in to the selected site's frontend using the instructor email supplied

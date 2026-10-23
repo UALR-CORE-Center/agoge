@@ -8,7 +8,7 @@ from cloud_deployment import setup_manager as setup_manager_module
 from cloud_deployment.operations.images_and_specs import wireguard_lab_template as module
 from cloud_deployment.utilities.menu_options import SetupCategories, SetupOptions, category_menu
 from common.constants.database import DATABASE_NAME, DbCollections
-from common.exceptions import Conflict
+from common.exceptions import Conflict, NotFound
 from common.models.agoge import CatalogModel
 from common.tests.test_wireguard_endpoint_registry import _FakeDatabase
 
@@ -188,6 +188,53 @@ def test_cloud_exception_bodies_are_not_logged(upload, capsys):
     upload.compute.return_value.get.side_effect = RuntimeError('private-fixture-password')
     assert not upload.operation.run()
     assert 'private-fixture-password' not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('boot_disk_reference', [False, True])
+def test_missing_explicit_image_reports_source_and_verification_without_fallback(upload, capsys, boot_disk_reference):
+    record = upload.db.collections['image']['kali-template']
+    record['self_link'] = 'projects/ualr-agoge/global/images/image-csec3314-powershell'
+    if boot_disk_reference:
+        record['disks'] = [{'boot': True, 'initializeParams': {'sourceImage': record.pop('self_link')}}]
+    upload.compute.return_value.get.side_effect = NotFound('private-fixture-password')
+
+    assert not upload.operation.run()
+
+    upload.compute.return_value.get.assert_called_once_with(
+        resource='image-csec3314-powershell', project='ualr-agoge', fallback_to_shared=False)
+    output = capsys.readouterr().out
+    assert 'projects/ualr-agoge/global/images/image-csec3314-powershell' in output
+    assert 'gcloud compute images describe image-csec3314-powershell --project=ualr-agoge' in output
+    assert 'Copying a Firestore image record does not copy its Compute image' in output
+    assert 'Check setup credentials, selected-project Firestore' not in output
+    assert 'private-fixture-password' not in output
+    assert upload.db.collections['catalog'] == {}
+
+
+def test_missing_unqualified_image_reports_both_projects_checked(upload, capsys):
+    upload.db.collections['image']['kali-template'].pop('self_link')
+    upload.compute.return_value.get.side_effect = NotFound('private-fixture-password')
+
+    assert not upload.operation.run()
+
+    upload.compute.return_value.get.assert_called_once_with(
+        resource='image-kali-linux-2023', project='test-dev-787001', fallback_to_shared=True)
+    output = capsys.readouterr().out
+    for project in ('test-dev-787001', 'agoge-shared-resources'):
+        assert f'projects/{project}/global/images/image-kali-linux-2023' in output
+        assert f'gcloud compute images describe image-kali-linux-2023 --project={project}' in output
+    assert 'private-fixture-password' not in output
+    assert upload.db.collections['catalog'] == {}
+
+
+def test_missing_firestore_document_is_not_misreported_as_missing_compute_image(upload, capsys):
+    upload.db.query = Mock(side_effect=NotFound('private-fixture-password'))
+    assert not upload.operation.run()
+    output = capsys.readouterr().out
+    assert 'selected-project Firestore' in output
+    assert 'gcloud compute images describe' not in output
+    assert 'private-fixture-password' not in output
+    upload.compute.assert_not_called()
 
 
 def test_new_menu_operation_is_project_scoped_and_needs_no_deployment(monkeypatch):

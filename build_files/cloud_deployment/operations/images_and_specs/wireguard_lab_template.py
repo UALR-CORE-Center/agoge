@@ -4,8 +4,9 @@ import time
 import json
 
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections
+from common.constants.build_constants import BuildConstants
 from common.document_database.factory import DocumentDatabaseFactory
-from common.exceptions import BadRequest, Conflict
+from common.exceptions import BadRequest, Conflict, NotFound
 from common.models.agoge import CatalogModel, UnitModel
 from common.services.wireguard_lab_spec import configure_kit_topology, default_wireguard_spec
 from common.services.student_image_profile import student_image_profile
@@ -93,9 +94,30 @@ class WireGuardLabTemplate:
         resource = explicit.group(2) if explicit else record.get('image') or identifier
         if not isinstance(resource, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,62}', resource):
             raise BadRequest('The selected student template needs a concrete checked-in GCP image source')
-        image = ComputeImageAPI(self.project, env['region'], env['zone']).get(
-            resource=resource, project=explicit.group(1) if explicit else self.project,
-            fallback_to_shared=not bool(explicit))
+        source_project = explicit.group(1) if explicit else self.project
+        if not re.fullmatch(r'[a-z0-9][a-z0-9.:-]{0,252}', source_project):
+            raise BadRequest('The selected student template has an invalid GCP source project')
+        print(f'Validating student Compute image: projects/{source_project}/global/images/{resource}')
+        try:
+            image = ComputeImageAPI(self.project, env['region'], env['zone']).get(
+                resource=resource, project=source_project, fallback_to_shared=not bool(explicit))
+        except NotFound:
+            projects = [source_project]
+            shared_project = BuildConstants.SharedResourceProjects.MAIN_SHARED_RESOURCE_PROJECT
+            if not explicit and shared_project not in projects:
+                projects.append(shared_project)
+            sources = ', '.join(f'projects/{project}/global/images/{resource}' for project in projects)
+            checks = '\n'.join(
+                f'  gcloud compute images describe {resource} --project={project} '
+                '--format="yaml(name,status,architecture,selfLink)"' for project in projects)
+            raise BadRequest(
+                f'The selected student Compute image was not found: {sources}.\n'
+                f'Verify with the same account selected in setup:\n{checks}\n'
+                'Copying a Firestore image record does not copy its Compute image. '
+                'Correct the selected image record\'s source reference (self_link, or boot disk '
+                'initializeParams.sourceImage) to the existing published image, or import/check in '
+                'a student image first. Confirm image read access if the source is correct. '
+                'No catalog template was written.') from None
         if str(image.status).upper() != 'READY' or str(image.architecture).upper() != 'X86_64':
             raise BadRequest('The selected student boot image must be READY and AMD64 for E2')
         return image.self_link

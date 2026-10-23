@@ -1,4 +1,5 @@
 from typing import List, Union, Any
+from collections.abc import Mapping
 
 from abc import abstractmethod
 
@@ -182,8 +183,13 @@ class BaseComputeAPI:
         **kwargs
     ) -> Any:
         resource_type = self.resource_type.name
+        request = kwargs.get('request')
+        request_project = (request.get('project') if isinstance(request, Mapping)
+                           else getattr(request, 'project', None))
+        request_project = request_project or kwargs.get('project') or self.project
         log_args = {
             'resource': str(resource),
+            'project': request_project,
             'operation_type': operation_type.name,
             'action': action,
             'resource_type': resource_type
@@ -204,10 +210,11 @@ class BaseComputeAPI:
         except GoogleNotFound:
             if resource:
                 self.logger.error(
-                    f'Error {action} for {resource_type}, {resource}, in project {self.project}.',
+                    f'Error {action} for {resource_type}, {resource}, in project {request_project}.',
                     **log_args
                 )
-                raise NotFound(message=f"The requested resource or endpoint, {resource}, was not found.")
+                raise NotFound(message=f"The requested resource or endpoint, {resource}, "
+                                       f"was not found in project {request_project}.")
             else:
                 self.logger.error(f'Error {action} for {resource_type}', **log_args)
                 raise NotFound(message=f"The requested resource/s not found.")
