@@ -874,6 +874,8 @@ class NestedHostSpecModel(BaseModel):
 class NestedBuildStatusModel(BaseModel):
     phase: NestedBuildPhase = 'queued'
     guests: Dict[str, NestedGuestStatus] = Field(default_factory=dict)
+    # guest -> NIC index (a string, for Firestore) -> address, static or leased, for the Connect dialog's tunnels.
+    guest_addresses: Dict[str, Dict[str, str]] = Field(default_factory=dict)
     message: Optional[str] = Field(default=None, max_length=200)
     heartbeat_at: Optional[str] = None
     started_at: Optional[str] = None

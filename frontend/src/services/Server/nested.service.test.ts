@@ -102,12 +102,13 @@ describe("nested service", () => {
 
     it("gets the build status for an encoded image name and drops the finalize nonce", async () => {
         vi.mocked(axios.get).mockResolvedValue({ data: { data: {
-            phase: "building", guests: { kali: "installing" }, finalize_nonce: "secret",
+            phase: "building", guests: { kali: "installing" }, guest_addresses: { kali: { "0": "192.168.100.10" } },
+            finalize_nonce: "secret",
         } } });
         const status = await nestedService.get_build_status("range host");
         expect(axios.get).toHaveBeenCalledWith("compute/images/range%20host/nested-build/", { ...authHeaders, params: null });
         expect(status).toEqual({
-            phase: "building", guests: { kali: "installing" }, message: null,
+            phase: "building", guests: { kali: "installing" }, guest_addresses: { kali: { "0": "192.168.100.10" } }, message: null,
             heartbeat_at: null, started_at: null, updated_at: null,
         });
     });

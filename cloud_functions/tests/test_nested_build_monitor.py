@@ -138,6 +138,24 @@ def test_guest_statuses_message_and_heartbeat_are_copied():
     assert status.updated_at == NOW.isoformat()
 
 
+def test_guest_addresses_are_copied_and_malformed_pairs_dropped():
+    # The Connect dialog tunnels to these; addresses-<guest> must not be read as a guest named "addresses-…".
+    db = FakeDb(_image(phase='building', heartbeat=5))
+    attributes = {
+        'phase': 'ready',
+        'guest-win': 'ready',
+        'addresses-win': '0=192.168.100.166,1=10.20.0.20',
+        'addresses-kali': '0=192.168.100.10,x=1.2.3.4,1=not-an-ip,2=',
+        'addresses-fw': '',
+        'heartbeat': _epoch_ago(1),
+    }
+    _, status = _refresh(db, attributes=attributes)
+    assert status.guest_addresses == {'win': {'0': '192.168.100.166', '1': '10.20.0.20'},
+                                      'kali': {'0': '192.168.100.10'}}
+    assert status.guests == {'win': 'ready'}
+    assert db.images['nestlab']['nested_build']['guest_addresses']['win']['0'] == '192.168.100.166'
+
+
 def test_only_nested_build_is_written():
     db = FakeDb(_image())
     _refresh(db, attributes={'phase': 'building', 'heartbeat': _epoch_ago(1)})

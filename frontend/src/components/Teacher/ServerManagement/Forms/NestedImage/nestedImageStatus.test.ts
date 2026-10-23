@@ -140,27 +140,48 @@ describe("nestedGuestDetails", () => {
 });
 
 describe("nestedTunnels", () => {
-    it("builds a console tunnel per port and an RDP or SSH tunnel per exposure", () => {
-        const tunnels = nestedTunnels(spec(), "agoge@adlab.example.test", catalog);
+    // lab has a parent address, so the parent can route to it; dmz is a bare layer-2 segment.
+    const routed = (): NestedHostSpec => ({
+        ...spec(),
+        networks: [
+            {name: "lab", cidr: "192.168.100.0/24", mode: "nat", parent_address: "192.168.100.1", dhcp: true,
+                dhcp_start: "192.168.100.100", dhcp_end: "192.168.100.199"},
+            {name: "dmz", cidr: "10.0.0.0/24", mode: "isolated", parent_address: null, dhcp: false,
+                dhcp_start: null, dhcp_end: null},
+        ],
+    });
+    const withWindows10 = [...catalog, catalogEntry("win10", "windows")];
+
+    it("builds a console tunnel per port, RDP per Windows guest and SSH per Linux guest, exposed or not", () => {
+        const addresses = {ws01: {"0": "192.168.100.166"}};
+        const tunnels = nestedTunnels(routed(), "agoge@adlab.example.test", withWindows10, addresses);
         expect(tunnels.map(item => item.command)).toEqual([
             "ssh -L 5901:localhost:5901 agoge@adlab.example.test",
             "ssh -L 5902:localhost:5902 agoge@adlab.example.test",
             "ssh -L 13389:192.168.100.10:3389 agoge@adlab.example.test",
             "ssh -L 2223:192.168.100.20:22 agoge@adlab.example.test",
-            "ssh -L 2224:10.0.0.5:22 agoge@adlab.example.test",
+            // ws01 is DHCP and not exposed: its tunnel uses the lease the builder reported.
+            "ssh -L 13391:192.168.100.166:3389 agoge@adlab.example.test",
         ]);
         expect(tunnels.map(item => [item.guest, item.kind, item.local_port])).toEqual([
             ["dc01", "console", 5901], ["ws01", "console", 5902], ["dc01", "rdp", 13389],
-            ["web01", "ssh", 2223], ["web01", "ssh", 2224],
+            ["web01", "ssh", 2223], ["ws01", "rdp", 13391],
         ]);
     });
 
-    it("offers both RDP and SSH when the catalog does not know the guest's OS", () => {
-        const tunnels = nestedTunnels(spec(), "agoge@host", []).filter(item => item.guest === "dc01" && item.kind !== "console");
-        expect(tunnels.map(item => item.command)).toEqual([
-            "ssh -L 13389:192.168.100.10:3389 agoge@host",
-            "ssh -L 2222:192.168.100.10:22 agoge@host",
-        ]);
+    it("skips a DHCP guest until its address is reported, and a NIC the parent cannot route to", () => {
+        const noLab = routed();
+        noLab.guests[1] = {...noLab.guests[1], nics: [{network: "dmz", ip: "10.0.0.5", expose: true}]};
+        const tunnels = nestedTunnels(noLab, "agoge@host", withWindows10).filter(item => item.kind !== "console");
+        expect(tunnels.map(item => item.guest)).toEqual(["dc01"]);
+    });
+
+    it("offers only consoles for a guest whose family is unknown or an appliance", () => {
+        const appliance = [catalogEntry("server-2022", "appliance")];
+        for (const entries of [[], appliance]) {
+            const tunnels = nestedTunnels(routed(), "agoge@host", entries).filter(item => item.guest === "dc01");
+            expect(tunnels.map(item => item.kind)).toEqual(["console"]);
+        }
     });
 });
 

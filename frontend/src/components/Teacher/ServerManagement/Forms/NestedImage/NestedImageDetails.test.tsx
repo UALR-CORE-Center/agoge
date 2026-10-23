@@ -21,7 +21,8 @@ const guest = (name: string, osId: string, nics: NestedGuest["nics"], overrides:
 const spec: NestedHostSpec = {
     parent_os: "debian-12",
     build_machine_type: "n2-standard-8",
-    networks: [],
+    networks: [{name: "lab", cidr: "192.168.100.0/24", mode: "nat", parent_address: "192.168.100.1", dhcp: true,
+        dhcp_start: "192.168.100.100", dhcp_end: "192.168.100.199"}],
     guests: [
         guest("dc01", "server-2022", [{network: "lab", ip: "192.168.100.10", expose: true}]),
         guest("kali", "kali-rolling", [{network: "lab", ip: null, expose: false}], {console: false, admin_username: "kali"}),
@@ -60,24 +61,35 @@ describe("NestedGuestDetails", () => {
 
 describe("NestedTunnelHints", () => {
     beforeEach(() => {
-        vi.mocked(nestedService.list_catalog).mockResolvedValue([{id: "server-2022", family: "windows"} as NestedOsCatalogEntry]);
+        vi.mocked(nestedService.list_catalog).mockResolvedValue([
+            {id: "server-2022", family: "windows"} as NestedOsCatalogEntry,
+            {id: "kali-rolling", family: "linux"} as NestedOsCatalogEntry,
+        ]);
     });
     afterEach(() => {
         cleanup();
         vi.clearAllMocks();
     });
 
-    it("shows the console and RDP tunnels through the parent", async () => {
-        render(<NestedTunnelHints spec={spec} hostname={"adlab.example.test"} username={"agoge"} />);
+    it("shows the console, RDP for Windows and SSH for Linux at the reported lease, through the parent", async () => {
+        const build = {
+            phase: "ready" as const, guests: {}, message: null, heartbeat_at: null, started_at: null, updated_at: null,
+            guest_addresses: {kali: {"0": "192.168.100.150"}},
+        };
+        render(<NestedTunnelHints spec={spec} build={build} hostname={"adlab.example.test"} username={"agoge"} />);
+        expect(screen.getByText(/Loading the guests' operating systems/)).toBeInTheDocument();
         expect(await screen.findByText("ssh -L 13389:192.168.100.10:3389 agoge@adlab.example.test")).toBeInTheDocument();
+        expect(screen.getByText("ssh -L 2223:192.168.100.150:22 agoge@adlab.example.test")).toBeInTheDocument();
         expect(screen.getByText("ssh -L 5901:localhost:5901 agoge@adlab.example.test")).toBeInTheDocument();
         expect(screen.getByText(/dc01 console \(VNC viewer to localhost:5901\)/)).toBeInTheDocument();
-        // Once the catalog says Windows, the SSH fallback is gone.
+        // Windows gets no SSH tunnel and Linux no RDP tunnel.
         expect(screen.queryByText(/192\.168\.100\.10:22 /)).not.toBeInTheDocument();
+        expect(screen.queryByText(/192\.168\.100\.150:3389 /)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Loading the guests' operating systems/)).not.toBeInTheDocument();
     });
 
     it("renders nothing without a hostname to tunnel through", () => {
-        const {container} = render(<NestedTunnelHints spec={spec} hostname={null} username={"agoge"} />);
+        const {container} = render(<NestedTunnelHints spec={spec} build={null} hostname={null} username={"agoge"} />);
         expect(container).toBeEmptyDOMElement();
     });
 });

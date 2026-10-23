@@ -1,4 +1,5 @@
 """GET /compute/images/machine-types/?nested=true lists N1/N2 types up to the nested cap (PRD V2)."""
+import inspect
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -57,3 +58,12 @@ def test_nested_list_holds_n1_and_n2_up_to_the_nested_cap_and_no_e2(client):
     names = _names(client.get('/compute/images/machine-types/?nested=true'))
 
     assert names == ['n1-standard-16', 'n2-standard-4', 'n2-standard-8']
+
+
+@pytest.mark.parametrize('route', [
+    compute_image_module.list_machine_types,
+    compute_image_module.list_nested_catalog,
+])
+def test_wizard_list_routes_are_sync_so_they_run_off_the_event_loop(route):
+    # An async route making blocking Compute/Firestore calls stalls every other request while it runs.
+    assert not inspect.iscoroutinefunction(route)

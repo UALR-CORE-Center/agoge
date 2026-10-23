@@ -66,7 +66,10 @@ const HostStep: React.FC<HostStepProps> = ({state, errors, machineTypes, context
                     <MenuItem key={type.name} value={type.name}>{machineTypeLabel(type)}</MenuItem>
                 ))}
             </Select>
-            <FormHelperText>{errors[field] || helperText}</FormHelperText>
+            {/* An empty, disabled select reads as a missing default; say the options are still loading. */}
+            <FormHelperText>
+                {errors[field] || (machineTypes.pending ? "Loading machine types…" : helperText)}
+            </FormHelperText>
         </FormControl>
     );
 

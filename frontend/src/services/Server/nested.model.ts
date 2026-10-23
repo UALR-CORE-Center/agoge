@@ -127,6 +127,8 @@ export interface NestedHostSpec extends NestedHostSpecInput {
 export interface NestedBuildStatus {
     phase: NestedBuildPhase;
     guests: Record<string, NestedGuestStatus>;
+    // guest -> NIC index -> address, static or leased; absent on builds from before the builder reported them.
+    guest_addresses?: Record<string, Record<string, string>>;
     message: string | null;
     heartbeat_at: string | null;
     started_at: string | null;

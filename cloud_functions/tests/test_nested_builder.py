@@ -25,7 +25,7 @@ from cloud_fn_utilities.server_specific import nested_scripts
 from cloud_fn_utilities.server_specific.nested_scripts import (MEDIA_DIR, RUN_DIR, RUNTIME_PATH, RUNTIME_UNIT_NAME,
                                                                  render_builder, render_runtime)
 from common.models.agoge import NestedHostSpecModel, NestedMediaModel, NestedOsCatalogModel
-from common.utilities.nested_manifest import build_secrets, render_autounattend, render_manifest
+from common.utilities.nested_manifest import build_secrets, guest_mac, render_autounattend, render_manifest
 
 REAL_JQ = shutil.which('jq')
 needs_tools = pytest.mark.skipif(shutil.which('bash') is None or REAL_JQ is None or shutil.which('shasum') is None,
@@ -111,6 +111,9 @@ FAKE_VIRSH = textwrap.dedent("""\
           *guest-exec*) echo "$1" > "$FAKE_DIR/exec-request-$dom"; echo '{"return":{"pid":42}}' ;;
           *) echo '{"return":{}}' ;;
         esac ;;
+      net-dhcp-leases)
+        # net-dhcp-leases <network> --mac <mac>: the lines of $FAKE_DIR/leases naming that MAC.
+        grep -i -- "$4" "$FAKE_DIR/leases" 2>/dev/null ;;
       domblklist)
         printf ' Type   Device   Target   Source\\n------\\n file   disk    vda   /d.qcow2\\n'
         printf ' file   cdrom   sda   /os.iso\\n file   cdrom   sdb   /unattend.iso\\n' ;;
@@ -343,6 +346,50 @@ def test_full_build_reports_ready_and_leaves_guests_running(builder):
         assert [value for key, value in history if key == f'guest-{guest}'] == statuses
     states = {name: (builder.fake / 'domains' / f'{name}.state').read_text().strip() for name in ('deb', 'win', 'fw')}
     assert states == {'deb': 'running', 'win': 'running', 'fw': 'running'}
+
+
+@needs_tools
+def test_a_finished_guest_drops_out_of_the_message(builder):
+    # Guests build two at a time; the message once kept a finished guest's last step while the other installed.
+    result, _ = builder()
+
+    assert result.returncode == 0, result.stderr
+    _, history = _attributes(builder.fake)
+    for guest in ('deb', 'win', 'fw'):
+        finished = max(index for index, (key, value) in enumerate(history)
+                       if key == f'guest-{guest}' and value in ('ready', 'manual'))
+        later = [value for key, value in history[finished + 1:] if key == 'message']
+        assert later, f'no message after {guest} finished'
+        assert not [message for message in later
+                    if f'installing {guest} (' in message or f"running {guest}'s" in message], later
+
+
+@needs_tools
+def test_ready_guests_report_static_and_leased_addresses(builder):
+    # win's lan NIC is DHCP; the Connect dialog tunnels to its lease. fw's dmz has no DHCP, so it has none.
+    mac = guest_mac('win', 0)
+    (builder.fake / 'leases').write_text(
+        f' 2026-10-23 16:42:03   {mac}   ipv4   10.10.0.150/24   win   01:{mac}\n')
+    result, log = builder(spec=_spec(win={'nics': [{'network': 'lan'}, {'network': 'dmz', 'ip': '10.20.0.20'}]}))
+
+    assert result.returncode == 0, result.stderr
+    last, history = _attributes(builder.fake)
+    assert last['addresses-deb'] == '0=10.10.0.10'
+    assert last['addresses-win'] == '0=10.10.0.150,1=10.20.0.20'
+    assert 'addresses-fw' not in last
+    assert f'virsh net-dhcp-leases lan --mac {mac}' in log
+    # Reported before the guest reads as ready, so the dialog never sees a ready guest without its address.
+    assert history.index(['addresses-win', '0=10.10.0.150,1=10.20.0.20']) < history.index(['guest-win', 'ready'])
+
+
+@needs_tools
+def test_a_lease_that_never_arrives_leaves_only_the_static_addresses(builder):
+    result, log = builder(spec=_spec(win={'nics': [{'network': 'lan'}, {'network': 'dmz', 'ip': '10.20.0.20'}]}))
+
+    assert result.returncode == 0, result.stderr
+    last, _ = _attributes(builder.fake)
+    assert last['addresses-win'] == '1=10.20.0.20'
+    assert last['guest-win'] == 'ready'
 
 
 @needs_tools
@@ -1036,7 +1083,12 @@ def test_a_7z_linux_disk_image_with_an_agent_converts_its_qcow2_then_customizes_
     # No -f: qemu-img probes the qcow2 header, as for the zip's vmdk.
     assert f'qemu-img convert -O qcow2 {work}/kali-linux-qemu-amd64.qcow2 {disk}' in log
     customize = next(line for line in log.splitlines() if line.startswith(f'virt-customize -a {disk} '))
-    assert 'id -u kali' in customize and '--install qemu-guest-agent ' in customize
+    assert 'id -u kali' in customize and '--install qemu-guest-agent,openssh-server ' in customize
+    # Kali ships sshd disabled, yet the exposed guest is the students' SSH jumpbox; its shared host keys go.
+    assert 'systemctl enable ssh ' in customize
+    assert "--run-command rm -f /etc/ssh/ssh_host_*" in customize
+    assert '--firstboot-command ssh-keygen -A' in customize
+    assert '--touch /etc/cloud/cloud-init.disabled' not in customize
     # Kali has no SELinux, so the keyfile needs no relabel (Debian-family osinfo is not RHEL_FAMILY).
     assert '--selinux-relabel' not in customize
     assert not work.exists()
