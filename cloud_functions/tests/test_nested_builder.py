@@ -120,17 +120,19 @@ FAKE_VIRSH = textwrap.dedent("""\
 FAKE_VIRT_INSTALL = textwrap.dedent("""\
     #!/bin/bash
     echo "virt-install $*" >> "$FAKE_LOG"
-    name= graphics=
+    name= graphics= boot=
     while [ $# -gt 0 ]; do
       case "$1" in
         --name) name=$2; shift ;;
         --graphics) graphics=$2; shift ;;
+        --boot) boot=$2; shift ;;
         --osinfo) if [ "$2" = "${FAKE_BAD_OSINFO:-}" ]; then echo "ERROR Unknown OS name '$2'" >&2; exit 1; fi; shift ;;
       esac
       shift
     done
     echo '<domain type="kvm">'
     echo "  <name>$name</name>"
+    case "$boot" in *firmware=bios*) echo '  <os firmware="bios">'; echo '  </os>' ;; esac
     case "$graphics" in vnc*) echo '  <graphics type="vnc" port="5901" listen="0.0.0.0">'; echo '  </graphics>' ;; esac
     echo '</domain>'
 """)
@@ -443,7 +445,13 @@ def test_domains_get_host_passthrough_agent_channel_and_console(builder):
         assert '--cpu host-passthrough' in installs[name]
         assert 'target.name=org.qemu.guest_agent.0' in installs[name]
         assert f'--graphics vnc,listen=0.0.0.0,port={port}' in installs[name]
-    assert '--boot hd,cdrom' in installs['win']
+    assert '--boot hd,cdrom,firmware=bios' in installs['win']
+    assert '--boot hd,cdrom,firmware=bios' in installs['deb']
+    # libvirt cannot start firmware="bios" on Debian 12 (no SeaBIOS descriptor), so the define drops it.
+    for name in ('deb', 'win'):
+        domain = (builder.fake / 'domains' / f'{name}.xml').read_text()
+        assert '<os>' in domain and 'firmware=' not in domain
+    assert 'virsh send-key' not in log
     assert installs['win'].count('device=cdrom') == 3
     assert '--osinfo win2k22' in installs['win']
     assert 'mac=52:54:00:' in installs['win']
@@ -463,6 +471,23 @@ def test_windows_waits_for_shut_off_then_ejects_media_and_starts_again(builder):
     assert 'virsh change-media win sdb --eject --config' in win
     iso_args = [line for line in _commands(log, 'genisoimage')]
     assert len(iso_args) == 1 and ADMIN_PASSWORD not in iso_args[0]
+
+
+@needs_tools
+def test_uefi_windows_presses_through_the_boot_from_cd_prompt(builder):
+    CATALOG['win-uefi'] = CATALOG['win-server-2022-eval'].model_copy(update={'id': 'win-uefi', 'firmware': 'uefi'})
+    try:
+        result, log = builder(spec=_spec(win={'os_id': 'win-uefi'}))
+    finally:
+        del CATALOG['win-uefi']
+
+    install = next(line for line in _commands(log, 'virt-install') if '--name win' in line)
+    win = [line for line in log.splitlines() if line.startswith('virsh ') and ' win' in line]
+    assert result.returncode == 0, result.stderr
+    assert '--boot uefi,hd,cdrom' in install
+    keys = [i for i, line in enumerate(win) if line == 'virsh send-key win KEY_ENTER']
+    assert len(keys) == 15
+    assert win.index('virsh start win') < keys[0] and keys[-1] < win.index('virsh change-media win sda --eject --config')
 
 
 @needs_tools

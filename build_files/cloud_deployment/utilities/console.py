@@ -384,19 +384,42 @@ def _clean(raw: str) -> str:
     return segments[-1].rstrip() if segments else ''
 
 
-def run_command(command: str, *, phase: str | None = None) -> bool:
+def run_command(
+    command: str, *, phase: str | None = None,
+    retry_on: str | None = None, attempts: int = 1, retry_delay: float = 30.0,
+) -> bool:
     """Run a shell command, streaming stdout and stderr into the current task.
 
-    Outside a board, the command gets a one-row board of its own.
+    A failed run whose output matches the regex ``retry_on`` is retried, up to
+    ``attempts`` runs in all, waiting ``retry_delay`` seconds and doubling it
+    each time. Outside a board, the command gets a one-row board of its own.
     """
     task = current_task()
     if task is None:
         label = phase or (command if len(command) <= 60 else command[:57] + '...')
-        return run_tasks(label, [(label, lambda: run_command(command, phase=phase))])[label]
+        return run_tasks(label, [(label, lambda: run_command(
+            command, phase=phase, retry_on=retry_on, attempts=attempts, retry_delay=retry_delay,
+        ))])[label]
 
     if phase:
         set_phase(phase)
+    pattern = re.compile(retry_on) if retry_on else None
+    for attempt in range(1, attempts + 1):
+        returncode, output = _run_once(task, command)
+        if not returncode:
+            return True
+        if pattern is None or attempt == attempts or not any(pattern.search(line) for line in output):
+            return False
+        task.activity = f'Transient error; retrying in {retry_delay:.0f}s (attempt {attempt + 1}/{attempts})'
+        task.log(task.activity)
+        time.sleep(retry_delay)
+        retry_delay *= 2
+    return False
+
+
+def _run_once(task: Task, command: str) -> tuple[int, list[str]]:
     task.log(f'$ {command}')
+    output = []
     # One merged pipe: reading stdout to EOF before stderr deadlocks once
     # gcloud fills the stderr buffer, and hides its progress until the end.
     # No stdin: a gcloud prompt fails fast instead of hanging behind the board.
@@ -410,6 +433,7 @@ def run_command(command: str, *, phase: str | None = None) -> bool:
             if line:
                 task.activity = line
                 task.log(line)
+                output.append(line)
     except BaseException:
         # e.g. Ctrl-C: don't leave gcloud running detached from the board.
         process.terminate()
@@ -418,7 +442,7 @@ def run_command(command: str, *, phase: str | None = None) -> bool:
     returncode = process.wait()
     if returncode:
         task.log(f'exit status {returncode}')
-    return returncode == 0
+    return returncode, output
 
 
 def run_step(command: str, label: str) -> subprocess.CompletedProcess:

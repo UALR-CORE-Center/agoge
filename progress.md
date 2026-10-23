@@ -225,6 +225,15 @@ See `### Nested Image Builder Contract` and Working Notes 14–23. Independent o
 
 - [x] **V6g** (found in iteration 127; done in iteration 128) `builder.sh` `prepare_disk`'s `img.xz` branch ignores a failed `xz -dc` (for example, the parent disk filling up). The truncated raw image still converts, so the guest gets a disk it cannot boot from. Fail the guest the way the `img.bz2` branch does, and add a test.
 
+- [x] **V21b** (found in live testing, 2026-10-19; done 2026-10-19) **Cancel Template Server Changes** can delete a real image.
+  - **Done:** `handleConfirmCancel` now always sends the `CANCEL` action and never calls `delete_image`. The typed-name dialog was not needed: the Cloud Function's `ImageTemplateManager.cancel()` only deletes the working VM and marks the template `CHECKED_IN`, never an image. This is the designed behavior; `test_cancel_preserves_source_and_allows_checkout_again` covers a never-checked-in template that stays checked in. `ImageListTable.test.tsx` checks that both `image_exists` values cancel and never delete, and the `false` case fails against the old code.
+  - **Why `image_exists` was false:** `image-nested-hv-debian12` was created by hand (`images.insert` by a user account on 2026-10-17), and its record was registered by hand. `image_exists` defaults to `False` (`AgogeImageModel`), and only the Cloud Function's own check-in sets it to `True`.
+  - **Where:** `ImageListTable.tsx` `handleConfirmCancel` calls `imageService.delete_image()` when the row has `!image_exists && !is_shared`. It does this after the single `ConfirmCancelDialog` click, without the type-the-name confirmation that **Delete** requires.
+  - **Why it matters:** `image_exists` can be stale. On Test-Dev, `nested-hv-debian12` was listed as **Not Built / Checked In** while the GCE image `image-nested-hv-debian12` existed. A Cancel on such a row deletes the GCE image, and that cannot be undone.
+  - **Fix:** never delete on Cancel unless the server confirms there is no GCE image named `image-<name>`. Either do the check in the API before deleting, or give Cancel its own route that refuses with 409 when the image exists. When Cancel will delete, show the same typed-name confirmation as Delete.
+  - **Also:** find out why `image_exists` was false for a built image.
+  - **Tests:** an API unit test that Cancel or delete-on-cancel keeps an existing GCE image, and a vitest test that Cancel on a "Not Built" row asks for the typed name.
+
 ### Human checks
 - [ ] **HUMAN** Browser and live checks the loop cannot do: N13, N14, V17–V21 and V23 "verified in browser" done-whens, and V25 live acceptance (SC-35–SC-38) on the development project. Leave this for a person; do not mark it done.
 

@@ -481,7 +481,7 @@ class ComputeImage:
                         )
             try:
                 validated = AgogeImageModel(**image)
-                self.db.update(collection_name=self.collection, doc_id=image_name, data=validated.model_dump())
+                self.db.update(collection_name=self.collection, doc_id=image_name, data=validated.firestore_dump())
             except ValidationError as e:
                 raise AgogeValidationError(message=str(e))
         else:

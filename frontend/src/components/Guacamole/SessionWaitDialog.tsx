@@ -1,9 +1,10 @@
-import React, { useEffect, useState, useCallback } from 'react';
 import { Typography, Box, CircularProgress } from '@mui/material';
-import { guacamoleService } from '../../services/Guacamole/guacamole.service';
-import { GuacamoleSessionType } from '../../services/Guacamole/guacamole.model';
-import {GuacamoleLogo} from '../Common/Logo';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
+import { GuacamoleSessionType } from '../../services/Guacamole/guacamole.model';
+import { guacamoleService } from '../../services/Guacamole/guacamole.service';
+import HttpError from '../Common/Errors/HttpError';
+import {GuacamoleLogo} from '../Common/Logo';
 
 const SessionWaitDialog: React.FC = () => {
     const { buildId, serverIdx } = useParams<{ buildId: string, serverIdx: string }>();
@@ -40,14 +41,13 @@ const SessionWaitDialog: React.FC = () => {
                     displayMessage('Invalid session response', true);
                 }
             } catch (error) {
-                const err = error as { response?: { status: number } };
-                if (err.response) {
-                    const { status } = err.response;
+                if (error instanceof HttpError) {
+                    const { status } = error;
                     if (status === 503) {
                         displayMessage('Service Unavailable', false);
                         setTimeout(fetchStatus, calculateBackoff(retries));
                     } else if (status === 404) {
-                        displayMessage('Resource Not Found', true);
+                        displayMessage(`No remote connection is set up for this server. ${error.message}`, true);
                     } else if (status === 400) {
                         displayMessage('Bad Request', true);
                     } else if (status === 500) {

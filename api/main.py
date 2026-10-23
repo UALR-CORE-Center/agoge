@@ -16,6 +16,7 @@ from common.exceptions import BadRequest, Unauthorized, Forbidden
 
 from app_config import AppConfig
 from dependencies import verify_token
+from health import HealthCheckMiddleware
 from routers.puzzle_control import puzzle_control_router
 from routers.rubric import rubric_router
 from routers.webgl import webgl_router
@@ -68,6 +69,8 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 hosts = app_config.hosts()
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
+# Added last, so it runs first: the startup probe must get past TrustedHostMiddleware.
+app.add_middleware(HealthCheckMiddleware)
 
 # Initialize Firebase
 firebase_admin.initialize_app()

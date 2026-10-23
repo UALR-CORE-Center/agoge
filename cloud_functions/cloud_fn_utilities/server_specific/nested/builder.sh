@@ -43,6 +43,7 @@ HOST_PACKAGES="qemu-system-x86 qemu-utils libvirt-daemon-system virtinst libgues
 HEARTBEAT_SECONDS=60
 AGENT_WAIT_MINUTES=20
 WINDOWS_INSTALL_MINUTES=150
+BOOT_KEY_SECONDS=30
 POST_INSTALL_MINUTES=60
 AGENTLESS_SETTLE_SECONDS=120
 # virt-customize --selinux-relabel and the qemu-ga guest-exec block apply to these osinfo ids. openSUSE is
@@ -647,7 +648,11 @@ define_domain() {
   disk_bus=$(guest_value "$guest" .catalog.disk_bus)
   cdrom_bus=sata
   [ "$disk_bus" = "ide" ] && cdrom_bus=ide
-  boot=hd,cdrom
+  # Explicit, because virt-install picks UEFI + Secure Boot + TPM for --osinfo win11 on its own, which
+  # breaks the BIOS answer file's MBR layout and the agoge-pristine internal snapshot. The attribute it
+  # writes is removed again after virt-install (below).
+  boot=hd,cdrom,firmware=bios
+  # A uefi entry with --osinfo win11 still gets Secure Boot + TPM, and no pristine snapshot.
   [ "$firmware" = "uefi" ] && boot=uefi,hd,cdrom
   # shellcheck disable=SC2054 # the commas are virt-install sub-options
   local args=(--print-xml --import --noautoconsole --name "$guest"
@@ -685,6 +690,14 @@ define_domain() {
       return 1
     fi
   fi
+  # firmware=bios only stops virt-install from choosing UEFI. Left in the XML it makes libvirt look for a
+  # firmware descriptor, and Debian 12 ships none for SeaBIOS ("Unable to find any firmware to satisfy
+  # 'bios'"); a bare <os> is SeaBIOS.
+  text=$(<"$xml")
+  from='<os firmware="bios">'
+  case "$text" in
+    *"$from"*) printf '%s%s%s\n' "${text%%"$from"*}" '<os>' "${text#*"$from"}" > "$xml" ;;
+  esac
   if [ "$console" = "true" ]; then
     # VNC passwords are alphanumeric (derive), but escape anyway. A bash substitution and the
     # printf builtin keep the password out of every process's arguments.
@@ -745,6 +758,16 @@ wait_until_up() {
 
 start_domain() {
   virsh start "$1" >/dev/null 2>&1 || { FAIL_MESSAGE="virsh start failed"; return 1; }
+}
+
+# Windows media under UEFI waits at "Press any key to boot from CD or DVD" and then falls through to
+# "No bootable option", so keep pressing Enter until the prompt has surely passed.
+press_boot_key() {
+  local tries
+  for ((tries = 0; tries < BOOT_KEY_SECONDS / 2; tries++)); do
+    virsh send-key "$1" KEY_ENTER >/dev/null 2>&1
+    sleep 2
+  done
 }
 
 # A guest whose install a reboot interrupted is shut down (never destroyed) and removed.
@@ -837,6 +860,7 @@ install_unattended_iso() {
     FAIL_MESSAGE="could not create the disk"; return 1; }
   define_domain "$guest" "$disk" "${cdroms[@]}" || return 1
   start_domain "$guest" || return 1
+  [ "$(guest_value "$guest" .catalog.firmware)" = "uefi" ] && press_boot_key "$guest"
   # virt-install --wait returns at Setup's first reboot (Working Note 17); FirstLogonCommands
   # power the guest off when the install is really done.
   if ! wait_for_state "$guest" "shut off" "$WINDOWS_INSTALL_MINUTES"; then

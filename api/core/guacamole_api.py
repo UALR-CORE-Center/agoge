@@ -131,7 +131,10 @@ class Guacamole:
             server_name = server['name']
             if server_name in sorted_dict:
                 sorted_dict[server_name]['hostname'] = server.get('hostname')
-                sorted_dict[server_name]['protocol'] = server['human_interaction'][0]['protocol']
+                # The proxied connection is a displayed one; a nested host's own login comes first but is hidden
+                interactions = server.get('human_interaction') or []
+                displayed = next((hi for hi in interactions if hi.get('display')), interactions[0] if interactions else {})
+                sorted_dict[server_name]['protocol'] = displayed.get('protocol')
                 sorted_dict[server_name]['url'] = (
                     f'{main_app_url}/student/workout/{self.build_id}'
                     f'/guacamole/{sorted_dict[server_name]["idx"]}'

@@ -1,3 +1,4 @@
+import HttpError from "../../components/Common/Errors/HttpError";
 import {URL_GUACAMOLE_API_SESSION} from "../../router/urls";
 import formatString from "../../utilities/formatString";
 import {transformToGuacamoleSession} from "../../utilities/transformers/guacamole.transform";
@@ -34,6 +35,10 @@ const getSession = async (
 
         return response;
     } catch (error) {
+        // Keep the status so callers can tell "not set up" (404) from "not ready yet" (503)
+        if (error instanceof HttpError) {
+            throw error;
+        }
         if (error instanceof Error) {
             throw new Error(`Failed to fetch auth token: ${error.message}`);
         } else {

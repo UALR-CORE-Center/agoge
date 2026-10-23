@@ -489,6 +489,7 @@ class SpecEditManager(LabSpecBase):
                     if 'ssh_key' in human_interaction:
                         del human_interaction['ssh_key']
                     processed_human_interaction = [human_interaction]
+            processed_human_interaction.extend(self._nested_guest_connections(server.get('human_interaction')))
 
             machine_type = server.get('machine_type')
             processed_machine_type = ""
@@ -548,6 +549,21 @@ class SpecEditManager(LabSpecBase):
                     processed_server['tags'].append('deny-outbound')
             servers.append(processed_server)
         self.spec['servers'] = servers
+
+    @staticmethod
+    def _nested_guest_connections(submitted) -> list:
+        """The editor's "Add connections" output: connections to nested guests, which the image does not carry.
+
+        The parent's own connections still come from the image, so only `nested_guest` ones are taken from the
+        form; NestedServersValidator range-checks their alias_index.
+        """
+        if not isinstance(submitted, list):
+            return []
+        return [
+            {key: value for key, value in connection.items() if key != 'ssh_key'}
+            for connection in submitted
+            if isinstance(connection, dict) and connection.get('nested_guest')
+        ]
 
     def _parse_web_applications_form(
         self,

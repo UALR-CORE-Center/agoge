@@ -7,6 +7,7 @@ from cloud_fn_utilities.gcp.address_manager import AddressManager
 from cloud_fn_utilities.gcp.dns_manager import DnsManager
 from cloud_fn_utilities.gcp.route_manager import RouteManager
 from cloud_fn_utilities.server_specific.assessment_manager import AssessmentManager
+from cloud_fn_utilities.server_specific.nested_scripts import direct_connect_slot, render_direct_connect
 from cloud_fn_utilities.state_managers import ServerStateManager
 from common.constants.build_constants import BuildConstants
 from common.constants.database import DbCollections, DatabaseTypes, DATABASE_NAME
@@ -347,6 +348,7 @@ class LabServerManager(BaseComputeManager):
             self._merge_metadata_item(metadata['items'], assessment_startup_script)
         if self._is_linux_nested_host():
             self._add_ctf_watcher(metadata['items'])
+            self._add_nested_direct_connect(metadata['items'])
         self._add_ctf_loaders(metadata['items'])
         self.server_spec.metadata = metadata
 
@@ -379,6 +381,21 @@ class LabServerManager(BaseComputeManager):
         ):
             return
         cls._merge_metadata_item(items, {'key': LINUX_LOADER_METADATA_KEY, 'value': WATCHER_INSTALLER})
+
+    def _add_nested_direct_connect(self, items: list) -> None:
+        """On a direct-connect nested host, merge the forward that sends outside SSH to its jumpbox guest."""
+        nics = getattr(self.server_spec, 'nics', None) or []
+        nic0 = nics[0] if nics and isinstance(nics[0], dict) else {}
+        if not (nic0.get('direct_connect') and nic0.get('external_nat')):
+            return
+        slot = direct_connect_slot(getattr(self.server_spec, 'human_interaction', None))
+        if slot is None:
+            return
+        script = render_direct_connect(slot)
+        # Spec metadata copied from an already-built server may carry the forward; one copy only.
+        if any(item.get('key') == 'startup-script' and script in (item.get('value') or '') for item in items):
+            return
+        self._merge_metadata_item(items, {'key': 'startup-script', 'value': script})
 
     @classmethod
     def _add_ctf_loaders(cls, items: list) -> None:

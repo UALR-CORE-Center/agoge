@@ -10,6 +10,7 @@ import {
     nestedMachineTypes,
     networkCidr,
     splitAliases,
+    studentConnections,
 } from "./nestedServer";
 
 // CtfSpecEditor imports the CTF service, whose client initializes Firebase at import
@@ -66,19 +67,17 @@ describe('fillAliasIps', () => {
 });
 
 describe('nestedConnections', () => {
-    it('makes RDP for an exposed Windows guest, SSH for an exposed Linux guest, and VNC otherwise', () => {
+    it('makes displayed RDP for an exposed Windows guest and SSH for an exposed Linux guest, nothing for the rest', () => {
         expect(nestedConnections(NESTED, CATALOG)).toEqual([
-            {protocol: 'rdp', username: 'dc-admin', password: 'dc-pw', alias_index: 0, nested_guest: 'dc'},
-            {protocol: 'ssh', username: 'web-admin', password: 'web-pw', alias_index: 1, nested_guest: 'web'},
-            {protocol: 'vnc', password: 'kalivnc1', port: 5903, nested_guest: 'kali'},
+            {display: true, protocol: 'rdp', username: 'dc-admin', password: 'dc-pw', alias_index: 0, nested_guest: 'dc'},
+            {display: true, protocol: 'ssh', username: 'web-admin', password: 'web-pw', alias_index: 1, nested_guest: 'web'},
         ]);
     });
 
     it('falls back to the console when the catalog does not know an exposed guest', () => {
         expect(nestedConnections(NESTED, [])).toEqual([
-            {protocol: 'vnc', password: 'dcvncpw1', port: 5901, nested_guest: 'dc'},
-            {protocol: 'vnc', password: 'webvncpw', port: 5902, nested_guest: 'web'},
-            {protocol: 'vnc', password: 'kalivnc1', port: 5903, nested_guest: 'kali'},
+            {display: true, protocol: 'vnc', password: 'dcvncpw1', port: 5901, nested_guest: 'dc'},
+            {display: true, protocol: 'vnc', password: 'webvncpw', port: 5902, nested_guest: 'web'},
         ]);
     });
 
@@ -87,6 +86,24 @@ describe('nestedConnections', () => {
         const stale = {protocol: 'vnc', port: 5909, nested_guest: 'old'};
         const generated = nestedConnections(NESTED, CATALOG);
         expect(mergeNestedConnections([parent, stale], generated)).toEqual([parent, ...generated]);
+    });
+});
+
+describe('studentConnections', () => {
+    it('shows only displayed connections, hiding a nested host\'s own login', () => {
+        const parent = {display: false, protocol: 'ssh', username: 'instructor'};
+        const kali = {display: true, protocol: 'ssh', username: 'kali', alias_index: 0, nested_guest: 'kali'};
+        expect(studentConnections([parent, kali])).toEqual([kali]);
+    });
+
+    it('keeps every connection of a server with none displayed', () => {
+        const direct = [{protocol: 'ssh', username: 'student'}, {protocol: 'rdp', username: 'student'}];
+        expect(studentConnections(direct)).toEqual(direct);
+        expect(studentConnections(undefined)).toEqual([]);
+    });
+
+    it('shows a nested host none of its undisplayed connections', () => {
+        expect(studentConnections([{display: false, protocol: 'ssh', username: 'instructor'}], true)).toEqual([]);
     });
 });
 
