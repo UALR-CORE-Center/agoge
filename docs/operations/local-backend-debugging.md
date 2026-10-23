@@ -397,21 +397,45 @@ Other invalid requests and permission denials fail immediately.
 `run-lab` failures and unexpected `unit-action` errors print repository-relative
 frame locations for tracing the failing call. These diagnostics omit source
 lines, local variables, and exception response bodies. Preserve the printed
-lab ID and resume the existing build after correcting the cause. For example:
+lab ID and resume the existing build after correcting the cause. An explicit
+local build retry can also recover a `BROKEN` managed WireGuard initial build.
+Both the lab and lease must remain unexpired, its endpoint must still belong
+to it in `reserved` or `error` state, and its named GCP networks/subnets must already exist.
+Recovery reuses those networks and follows the normal gateway build/reconcile
+path; it does not insert duplicate VPCs. It refuses expired, missing, or
+ambiguous resources, runtime workouts, and servers already stopped or retiring.
+An old deployed build message cannot trigger this debug-only recovery.
+
+For an eligible retained lab:
 
 ```powershell
 .\venv\Scripts\python.exe debug_lab.py unit-action --unit-id uljrlxqhjm --action build
 .\venv\Scripts\python.exe debug_lab.py status --unit-id uljrlxqhjm
 ```
 
-Use this resume command directly; starting a new `run-lab --delete-recent` run
-would select the retained lab for cleanup. When the existing lab reaches
+The command verifies persisted lab and server readiness before reporting
+success; a worker returning while the lab remains `BROKEN` is a failure.
+Use this resume command directly when preserving the retained lab. A
+**No workout ID provided** warning on the shared-lab path does not require a
+student workout. When the existing lab reaches
 `READY` or `RUNNING`, create the student workout separately if the original run
 failed before creating it:
 
 ```powershell
 .\venv\Scripts\python.exe debug_lab.py create-workout --unit-id uljrlxqhjm --student-email wireguard-test@example.com
 ```
+
+If the lab has expired or you want to clean up and start again, run the full
+sequence with recent-lab cleanup. The default expiration is two hours; use a
+longer expiration for an extended debugging session:
+
+```powershell
+.\venv\Scripts\python.exe debug_lab.py run-lab --profile .local/debug-lab/profile.json --delete-recent --expires-hours 4
+```
+
+This deletes matching recent test labs before creating a new one. Do not edit
+Firestore states manually to bypass recovery checks. Use explicit
+`delete-labs` for a retained lab outside the recent-cleanup window.
 
 ## Tell startup progress from a stalled health callback
 

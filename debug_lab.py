@@ -462,6 +462,8 @@ class LocalBackend:
         if action == 'start':
             attrs['duration'] = str(duration)
         self.dispatch(attrs)
+        if scope == 'unit' and action == 'build':
+            self._verify_lab_stage(identifier, 'build')
         return {'scope': scope, 'id': identifier, 'action': action, 'worker_returned': True}
 
     def status(self, unit_id):
@@ -786,7 +788,7 @@ def main(argv=None):
         else:
             scope = args.command.removesuffix('-action')
             result = backend.action(scope, getattr(args, f'{scope}_id'), args.action, args.duration_hours)
-    except (ValueError, OSError, BaseAgogeException) as error:
+    except (ValueError, OSError, BaseAgogeException, DebugLabStageError) as error:
         print(f'Error: {error}', file=sys.stderr)
         return 1
     except Exception as error:

@@ -1,9 +1,12 @@
+import math
 import time
+from datetime import datetime, timezone
 
+from common.exceptions import BadRequest, NotFound
 from common.constants.build_constants import BuildConstants
 from common.constants.database import DbCollections
 from common.constants.pub_sub import PubSub
-from common.constants.states import ServerStates
+from common.constants.states import ServerStates, WorkoutStates
 from common.models.agoge import UnitModel, ServerModel
 from common.services.wireguard_endpoint import WireGuardEndpointRegistry
 from common.utilities.wireguard_firewall import has_public_wireguard_ingress
@@ -74,6 +77,9 @@ class CommunityUnit(BaseUnit):
         """
         self.logger.info(f"{self.class_name}:{self.unit_id} - Beginning a community unit build for unit ID")
         current_state = self.state_manager.get_state()
+        if current_state == self.s.BROKEN.value:
+            self._resume_broken_initial_build()
+            current_state = self.state_manager.get_state()
         # Build deliveries are at-least-once. A delayed delivery must not rewind a
         # Unit that has already entered its runtime or teardown lifecycle.
         if current_state >= self.s.RUNNING.value:
@@ -124,6 +130,83 @@ class CommunityUnit(BaseUnit):
         self._activate_wireguard_endpoint()
         self.state_manager.state_transition(self.s.READY)
         self.logger.info(f"Finished community unit build for {self.unit_id}!")
+
+    def _resume_broken_initial_build(self):
+        """Resume an explicit local managed-gateway build, never a stale event.
+
+        BROKEN is numerically after every build checkpoint. Legacy records do
+        not retain the failed checkpoint, so infer only the completed network
+        phase from live resources, then retry the ordinary shared-server path.
+        """
+        if not self.debug:
+            raise BadRequest('A BROKEN community lab requires an explicit local debug build to resume')
+        gateways = [server for server in self.unit_model.servers or []
+                    if server.community_server and server.wireguard_gateway and server.wireguard_managed]
+        if not gateways or self.unit_model.wireguard_endpoint is None:
+            raise BadRequest('Cannot safely infer the initial build checkpoint for this BROKEN community lab')
+        endpoint_id = self.unit_model.wireguard_endpoint.id
+
+        def validate(unit, lease, endpoint):
+            now = time.time()
+            if unit.get('state') != self.s.BROKEN.value:
+                raise BadRequest('Lab state changed before recovery; the build was not resumed')
+            expires = (unit.get('workspace_settings') or {}).get('expires')
+            if (type(expires) not in (int, float) or not math.isfinite(expires) or expires <= now
+                    or type(lease.get('expires')) not in (int, float)
+                    or not math.isfinite(lease['expires']) or lease['expires'] <= now):
+                raise BadRequest('The retained lab or WireGuard lease has expired; delete it and create a new lab')
+            if (lease.get('unit_id') != self.unit_id or lease.get('status') != 'reserved'
+                    or lease.get('endpoint_id') != endpoint_id):
+                raise BadRequest('The WireGuard reservation is missing, released, or belongs to another lab')
+            if (endpoint.get('unit_id') != self.unit_id
+                    or endpoint.get('status') not in {'reserved', 'error'}):
+                raise BadRequest('The WireGuard endpoint is active, retired, or no longer belongs to this lab')
+
+        validate(self.db.get(DbCollections.UNIT, self.unit_id) or {},
+                 self.db.get(DbCollections.WIREGUARD_LEASE, self.unit_id) or {},
+                 self.db.get(DbCollections.WIREGUARD_ENDPOINT, endpoint_id) or {})
+        workouts = self.db_queries.get_children(parent_id=self.unit_id, child_collection=DbCollections.WORKOUT)
+        if any(workout.get('state') not in {WorkoutStates.NOT_BUILT.value, WorkoutStates.START.value}
+               for workout in workouts):
+            raise BadRequest('This BROKEN lab already entered a student workout lifecycle; initial build recovery is blocked')
+        blocked = {ServerStates.STOPPING.value, ServerStates.STOPPED.value,
+                   ServerStates.EXPIRED.value, ServerStates.MISFIT.value,
+                   ServerStates.DELETING.value, ServerStates.DELETED.value}
+        for record in self.db_queries.get_servers(parent_id=self.unit_id):
+            if record.get('state') in blocked:
+                raise BadRequest('A lab server was stopped or retired; initial build recovery is blocked')
+
+        # Completed networks must still exist. Do not recreate a network that
+        # could have been removed by a concurrent or earlier teardown.
+        try:
+            for network in self.unit_model.networks or []:
+                name = self.vpc_manager._network_name(self.unit_id, network)
+                self.vpc_manager.networks_client.get(resource=name)
+                for subnet in network.subnets or []:
+                    self.vpc_manager.subnetworks_client.get(
+                        resource=self.vpc_manager._subnet_name(name, subnet))
+        except NotFound:
+            raise BadRequest('A retained lab network is missing; delete the failed lab and create a new one') from None
+
+        unit_ref = self.db.db.collection(DbCollections.UNIT.value).document(self.unit_id)
+        lease_ref = self.db.db.collection(DbCollections.WIREGUARD_LEASE.value).document(self.unit_id)
+        endpoint_ref = self.db.db.collection(DbCollections.WIREGUARD_ENDPOINT.value).document(endpoint_id)
+
+        def recover(transaction):
+            unit_snapshot = unit_ref.get(transaction=transaction)
+            lease_snapshot = lease_ref.get(transaction=transaction)
+            endpoint_snapshot = endpoint_ref.get(transaction=transaction)
+            validate(unit_snapshot.to_dict() if unit_snapshot.exists else {},
+                     lease_snapshot.to_dict() if lease_snapshot.exists else {},
+                     endpoint_snapshot.to_dict() if endpoint_snapshot.exists else {})
+            transaction.set(unit_ref, {
+                'state': self.s.COMPLETED_NETWORKS.value,
+                'state_timestamp': datetime.now(timezone.utc).isoformat(),
+            }, merge=True)
+
+        self.db.transaction(recover)
+        self.state_manager.set_build_record(self.unit_id)
+        self.logger.info(f'Resuming local managed gateway build for {self.unit_id} after completed networks')
 
     def start(self):
         """
