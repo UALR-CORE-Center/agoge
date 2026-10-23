@@ -204,7 +204,8 @@ class CommunityUnit(BaseUnit):
         """
         Deletes the unit by deleting all servers, including workout servers, and then deleting the network objects
         """
-        if self.state_manager.get_state() == self.s.DELETED.value:
+        managed_cleanup_pending = self._managed_wireguard_cleanup_pending()
+        if self.state_manager.get_state() == self.s.DELETED.value and not managed_cleanup_pending:
             return
         self.logger.info(f"{self.class_name}:{self.unit_id} - Beginning to delete community unit")
         self.state_manager.state_transition(self.s.DELETING_SERVERS)
@@ -257,10 +258,17 @@ class CommunityUnit(BaseUnit):
         # Delete remaining servers
         for server_name in servers_to_delete:
             if server_name not in firewall_names:
+                recovered = self._recover_gateway_delete_record(
+                    server_name, retry_deleted=managed_cleanup_pending)
                 if self.debug:
                     try:
-                        self.compute_manager.load(server_name=server_name)
-                        self.compute_manager.delete()
+                        self.compute_manager.load(
+                            server_name=server_name,
+                            **({'server_spec': recovered} if recovered else {}),
+                        )
+                        if self.compute_manager.delete() is False:
+                            self.state_manager.state_transition(self.s.BROKEN)
+                            raise ConnectionError(f'Server deletion was not confirmed for {server_name}')
                     except LookupError:
                         self.logger.error(f"{self.class_name}:{self.workout_id} - Could not find workout "
                                           f"server record for {server_name}. Marking Workout record as "
@@ -299,6 +307,57 @@ class CommunityUnit(BaseUnit):
                 f"{self.class_name}:{self.unit_id} - Timed out waiting for workout or shared-server "
                 f"deletions to complete for community unit"
             )
+
+    def _managed_wireguard_cleanup_pending(self):
+        """A legacy DELETED Unit may still own its pre-build reservation."""
+        if not any(getattr(server, 'wireguard_gateway', False)
+                   and getattr(server, 'wireguard_managed', False)
+                   for server in getattr(self.unit_model, 'servers', None) or []):
+            return False
+        lease = self.db.get(collection_name=DbCollections.WIREGUARD_LEASE, doc_id=self.unit_id) or {}
+        return bool(lease and lease.get('status') != 'released')
+
+    def _recover_gateway_delete_record(self, server_name, *, retry_deleted=False):
+        """Restore only metadata needed by the ordinary managed gateway delete.
+
+        Peer reservation precedes the gateway server record. A process stopped
+        between those steps must still confirm VM absence and clean DNS/routes,
+        its identity, secret, and endpoint before the parent reports deletion.
+        This method never builds a VM or directly releases a reservation.
+        """
+        gateway = next((server for server in getattr(self.unit_model, 'servers', None) or []
+                        if getattr(server, 'community_server', False)
+                        and getattr(server, 'wireguard_gateway', False)
+                        and getattr(server, 'wireguard_managed', False)
+                        and f'{self.unit_id}-{server.name}' == server_name), None)
+        if gateway is None:
+            return None
+        existing = self.db.get(collection_name=DbCollections.SERVER, doc_id=server_name) or {}
+        if existing and not (retry_deleted and existing.get('state') == ServerStates.DELETED.value):
+            return None
+        endpoint = getattr(self.unit_model, 'wireguard_endpoint', None)
+        if endpoint is None or endpoint.server_name != server_name:
+            raise ValueError(f'Cannot recover gateway cleanup for {server_name}: endpoint ownership is missing')
+        server = gateway.model_copy(deep=True)
+        server.parent_id = self.unit_id
+        server.parent_build_type = self.unit_model.build_type
+        server.wireguard_endpoint_id = endpoint.id
+        server.hostname = endpoint.hostname
+        public_nic = next((nic for nic in server.nics or [] if nic.external_nat), None)
+        if public_nic is None:
+            raise ValueError(f'Cannot recover gateway cleanup for {server_name}: public interface is missing')
+        if endpoint.external_ip_name:
+            public_nic.external_ip_name = endpoint.external_ip_name
+        unit_routes = [route.model_copy(deep=True) for route in getattr(self.unit_model, 'routes', None) or []
+                       if route.next_hop_instance in {server.name, server_name}]
+        server.routes = list({route.name: route for route in [*(server.routes or []), *unit_routes]}.values())
+        record = server.model_dump(exclude_none=True)
+        # A previous DELETED server tombstone must not bypass the ordinary
+        # delete's resource checks when its managed lease is still reserved.
+        record['state'] = ServerStates.DELETING.value
+        self.db.update(collection_name=DbCollections.SERVER, doc_id=server_name, data=record)
+        self.logger.info(f'Recovered managed gateway metadata for cleanup: {server_name}')
+        return record
 
     def nuke(self):
         """

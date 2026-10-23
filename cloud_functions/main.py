@@ -34,8 +34,14 @@ def agoge_cloud_function(event, context, debug_mode: bool = False, *, env_dict: 
         "attributes": attributes
     })
 
-    bm = BudgetManager()
-    if not bm.check_budget():
+    # Cleanup must remain available when a budget block prevents new work.
+    # Limit the exception to the normal delete route; other control actions
+    # (including starts and rebuilds) retain the budget check.
+    deleting = (isinstance(attributes, dict)
+                and attributes.get(PubSub.EventAttributes.HANDLER) == PubSub.Handlers.CONTROL.value
+                and attributes.get(PubSub.EventAttributes.ACTION) == str(PubSub.Actions.DELETE.value))
+    bm = BudgetManager() if not deleting else None
+    if bm is not None and not bm.check_budget():
         logger.error(
             "BUDGET ALERT: Budget exceeded. Cloud Function execution halted.",
             extra={"event_id": context.event_id, "attributes": attributes}

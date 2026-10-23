@@ -307,6 +307,52 @@ cannot be used as the callback URL because the gateway would interpret it as
 the gateway VM itself. Breakpoints in the HTTP callback handler can delay the
 gateway readiness check; continue promptly or expect a timeout.
 
+## Tell startup progress from a stalled health callback
+
+A message such as **Successfully built server!** confirms that Compute Engine
+created the VM. Ubuntu can still be installing packages and configuring WireGuard.
+The managed gateway then waits for a fresh, authenticated **service health** report.
+This wait is bounded to 60 checks with five seconds between checks: about five
+minutes plus database/request latency. Progress messages at the start, about every
+30 seconds, and on success or timeout identify what the worker is waiting for.
+
+The service-health check does not require a WireGuard handshake. An offline Pi or
+a temporary peer public key can leave `tunnel_ready` false while gateway service
+health succeeds. Repeated reads of the same lab document after VM creation mean
+the worker is polling for that health report; they do not show a stalled GCP VM
+creation operation.
+
+In a separate terminal, inspect the current run. For the example lab
+`kuiatckhzm`:
+
+```powershell
+.\venv\Scripts\python.exe debug_lab.py status --unit-id kuiatckhzm
+gcloud compute instances get-serial-port-output kuiatckhzm-wireguard --project=test-dev-787001 --zone=us-central1-a --port=1
+```
+
+Read the `wireguard` status fields together:
+
+| Status | What to inspect next |
+| --- | --- |
+| `health_timestamp` is null | No health report has been accepted for this boot. Check guest startup, Secret Manager access, and the configured HTTPS health endpoint. |
+| A report exists, but `service_ready` is false | Inspect `health_error` and guest service logs. The callback reached the API, but the guest is not reporting a healthy service. |
+| `health_age_seconds` keeps increasing | Check the guest health timer and API/network connectivity; an old successful report cannot establish current readiness. |
+| `service_ready` is true with fresh health, but `tunnel_ready` is false | The gateway service is ready. Check the remote device, its actual public key, polling configuration, and connectivity for the tunnel test. |
+
+Inside the gateway, inspect the startup and health service logs:
+
+```bash
+sudo journalctl -u google-startup-scripts -u wg-quick@wg0 -u agoge-wireguard-health --no-pager -n 100
+```
+
+The guest needs a reachable API containing
+`POST /wireguard/gateways/<unit-id>/health/` at its configured API base URL.
+Running the build locally does not serve this endpoint to the VM. Check the
+[HTTPS setup above](#gateway-health-and-pi-configuration-still-use-https) if the
+deployed API is older or you want callbacks to reach your local debugger.
+After a timeout, keep the lab ID for inspection or cleanup rather than creating
+another run immediately.
+
 ## Inspect, resume, and clean up
 
 ```powershell
@@ -319,9 +365,6 @@ gateway readiness check; continue promptly or expect a timeout.
 # Start or stop the named student workout locally.
 .\venv\Scripts\python.exe debug_lab.py workout-action --workout-id klmnopqrst --action stop
 .\venv\Scripts\python.exe debug_lab.py workout-action --workout-id klmnopqrst --action start --duration-hours 2
-
-# Delete the entire named test lab, its student workouts, and managed resources.
-.\venv\Scripts\python.exe debug_lab.py unit-action --unit-id abcdefghij --action delete
 ```
 
 Status includes `remote_peer_id`, `remote_network_cidr`, and the non-secret
@@ -336,7 +379,84 @@ place for inspection. Status lists workout IDs even if a build failed before
 returning one. Use `workout-action --action build` with that ID to resume an
 incomplete student build. Delete the lab when finished so its remote peer is released.
 The normal Cloud Function budget check also applies to the local entry point;
-budget blocks and provisioning failures are surfaced to the debugger.
+budget blocks and provisioning failures are surfaced to the debugger. Deletion
+remains available when the budget guard blocks builds or other operations.
+
+## List and delete previous debug runs
+
+The runner creates labs with `test: true`. List the test labs accessible to your
+Agoge instructor/admin account, including runs created by earlier versions of
+the CLI:
+
+```powershell
+.\venv\Scripts\python.exe debug_lab.py list-labs --instructor pdhuff@ualr.edu
+
+# Narrow the list to a registered remote peer.
+.\venv\Scripts\python.exe debug_lab.py list-labs --instructor pdhuff@ualr.edu --remote-peer-id remote-lab-01
+
+# Include retained records for previously deleted labs.
+.\venv\Scripts\python.exe debug_lab.py list-labs --instructor pdhuff@ualr.edu --include-deleted
+```
+
+The output shows lab IDs, names, states, creation/expiration timestamps, instructor
+ownership, and remote peer IDs. It omits credentials and normally hides deleted
+labs. Administrators can inspect other instructors' test labs; instructors see
+their own. The `test` flag also covers test labs created outside this CLI, so
+review the IDs before selecting a cleanup target.
+Use `--include-deleted` to find older runs marked deleted before their remote
+peer assignment was released; those IDs can also be selected for retry.
+
+Stop the local build/debugger for a lab before deleting it. Preview deletion of
+the example run:
+
+```powershell
+.\venv\Scripts\python.exe debug_lab.py delete-labs --instructor pdhuff@ualr.edu --unit-id kuiatckhzm
+```
+
+The default is a preview: it validates and lists the selected labs without
+deleting resources. Add **`--yes`** to execute the selected deletions:
+
+```powershell
+.\venv\Scripts\python.exe debug_lab.py delete-labs --instructor pdhuff@ualr.edu --unit-id kuiatckhzm --yes
+```
+
+For several previous runs, repeat `--unit-id`. Replace the example IDs below with
+IDs from your list:
+
+```powershell
+.\venv\Scripts\python.exe debug_lab.py delete-labs `
+  --instructor pdhuff@ualr.edu `
+  --unit-id kuiatckhzm `
+  --unit-id abcdefghij `
+  --yes
+```
+
+Every selected lab must belong to `test-dev-787001`, have `test: true`, and be
+accessible to the actual Agoge account. The command checks all selected IDs
+before starting any deletion and does not select additional labs automatically.
+It runs the normal synchronous lifecycle cleanup for student workouts, VMs,
+routes, DNS, firewall rules, VPCs, and managed WireGuard resources. The remote
+peer's registration remains available; a completed cleanup releases its lab
+assignment for the next run.
+
+The result reports each lab separately. Success requires the lab to reach
+`DELETED`, its managed lease to be released, and its peer/endpoint to be released
+from that lab. A worker returning without completing those steps is reported as
+incomplete; partial failures return exit code 1 and can be retried with the same
+selected IDs. Already completed deletions are safe to repeat. Lab records and
+released endpoint tombstones remain for lifecycle tracking and endpoint reuse
+quarantine; cleanup does not purge them or remove Firestore records directly.
+
+The existing lower-level command remains available and starts deletion immediately:
+
+```powershell
+.\venv\Scripts\python.exe debug_lab.py unit-action --unit-id kuiatckhzm --action delete
+```
+
+Prefer `delete-labs` when cleaning up repeated runs because it checks the test-lab
+scope and verifies completion. The listing/cleanup commands and updated wait
+messages run from the local checkout; using them requires no Cloud Run or Cloud
+Functions deployment.
 
 VM creation, Ubuntu package installation, guest startup, DNS, and the physical
 WireGuard handshake still take their normal time. This loop removes container

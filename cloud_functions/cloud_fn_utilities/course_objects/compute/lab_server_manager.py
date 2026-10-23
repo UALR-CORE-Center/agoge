@@ -1,3 +1,4 @@
+import math
 import time
 
 from google.api_core.exceptions import NotFound as GoogleNotFound
@@ -679,14 +680,62 @@ class LabServerManager(BaseComputeManager):
 
     def _wait_for_wireguard_service(self) -> None:
         service = self._wireguard_provisioning()
+        started = time.monotonic()
+        timeout_seconds = self._WIREGUARD_READY_ATTEMPTS * self._WIREGUARD_READY_SECONDS
+        common = {'unit_id': self.parent_build_id, 'server': self.server_name,
+                  'max_attempts': self._WIREGUARD_READY_ATTEMPTS, 'timeout_seconds': timeout_seconds}
+        self.logger.info(
+            'Waiting for a fresh WireGuard gateway service health report; '
+            'a remote-peer handshake is not required for this step.',
+            **common, attempt=0, elapsed_seconds=0, status='waiting_for_guest_health')
+        progress = {}
         for attempt in range(self._WIREGUARD_READY_ATTEMPTS):
             lease = service.get_lease(self.parent_build_id)
-            if lease.is_ready(time.time()):
+            now = time.time()
+            timestamp = getattr(lease, 'health_timestamp', None)
+            valid_timestamp = (isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool)
+                               and math.isfinite(timestamp))
+            age = round(now - timestamp, 1) if valid_timestamp else None
+            expires = getattr(lease, 'expires', None)
+            if getattr(lease, 'status', None) == 'released':
+                status = 'lease_released'
+            elif isinstance(expires, (int, float)) and expires <= now:
+                status = 'lease_expired'
+            elif timestamp is None:
+                status = 'awaiting_first_health_report'
+            elif not valid_timestamp:
+                status = 'invalid_health_timestamp'
+            elif age < 0:
+                status = 'health_timestamp_in_future'
+            elif age > 120:
+                status = 'stale_health_report'
+            elif not getattr(lease, 'service_ready', False):
+                status = 'gateway_service_unready'
+            else:
+                status = 'waiting_for_guest_health'
+            error = getattr(lease, 'health_error', None)
+            # Guest code emits only these predefined codes. Never log arbitrary
+            # callback text or a whole lease containing internal secret fields.
+            if error in ('wireguard_service_unready', 'bootstrap_failed'):
+                safe_error = error
+            else:
+                safe_error = 'other_error' if error else None
+            progress = {**common, 'attempt': attempt + 1,
+                        'elapsed_seconds': round(time.monotonic() - started, 1), 'status': status,
+                        'service_ready': bool(getattr(lease, 'service_ready', False)),
+                        'tunnel_ready': bool(getattr(lease, 'tunnel_ready', False)),
+                        'health_age_seconds': age, 'health_error': safe_error}
+            if lease.is_ready(now):
+                self.logger.info('WireGuard gateway service is ready.', **{**progress, 'status': 'ready'})
                 return
+            if attempt % 6 == 0:
+                self.logger.info('Still waiting for WireGuard gateway service health.', **progress)
             if attempt + 1 < self._WIREGUARD_READY_ATTEMPTS:
                 time.sleep(self._WIREGUARD_READY_SECONDS)
+        self.logger.warning('WireGuard gateway service health wait timed out.', **progress)
         raise TimeoutError(
-            'WireGuard did not report a healthy service within five minutes. '
+            f'WireGuard gateway {self.server_name} did not report a healthy service within five minutes. '
+            f'Inspect debug_lab.py status --unit-id {self.parent_build_id} and the configured HTTPS health endpoint. '
             'Check outbound Ubuntu package/Secret Manager/API access and '
             'journalctl -u google-startup-scripts -u wg-quick@wg0 -u agoge-wireguard-health.'
         )

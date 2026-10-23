@@ -87,6 +87,114 @@ class LocalBackend:
         return {'project': TEST_PROJECT, 'remote_peer': result['remote_peer'].model_dump(by_alias=True),
                 'token_file': str(token_out)}
 
+    @staticmethod
+    def _can_access_lab(unit, requester):
+        owners = unit.get('instructor_id') or []
+        if isinstance(owners, str):
+            owners = [owners]
+        return requester.is_admin or (requester.email or '').lower() in {
+            value.lower() for value in owners if isinstance(value, str)}
+
+    @staticmethod
+    def _lab_summary(unit):
+        from common.constants.states import UnitStates
+
+        try:
+            state_name = UnitStates(unit.get('state')).name
+        except ValueError:
+            state_name = 'UNKNOWN'
+        lease = unit.get('wireguard_lease') or {}
+        return {'unit_id': unit['id'], 'name': (unit.get('summary') or {}).get('name'),
+                'state': unit.get('state'), 'state_name': state_name,
+                'creation_timestamp': unit.get('creation_timestamp'),
+                'expires': (unit.get('workspace_settings') or {}).get('expires'),
+                'instructor_id': unit.get('instructor_id'),
+                'remote_peer_id': lease.get('remote_peer_id') or lease.get('kit_id')}
+
+    def list_labs(self, instructor, remote_peer_id=None, include_deleted=False):
+        from common.constants.database import DbCollections, DbOperators
+        from common.constants.states import UnitStates
+
+        requester = self._requester(instructor)
+        units = self.db.query(collection_name=DbCollections.UNIT, filters=[('test', DbOperators.EQUAL, True)]) or []
+        items = []
+        for unit in units:
+            if unit.get('test') is not True or not self._can_access_lab(unit, requester):
+                continue
+            if not include_deleted and unit.get('state') == UnitStates.DELETED.value:
+                continue
+            summary = self._lab_summary(unit)
+            if remote_peer_id and summary['remote_peer_id'] != remote_peer_id:
+                continue
+            items.append(summary)
+        items.sort(key=lambda item: (item['creation_timestamp'] or 0, item['unit_id']), reverse=True)
+        return {'project': TEST_PROJECT, 'items': items, 'total': len(items)}
+
+    def _cleanup_confirmation(self, unit):
+        from common.constants.database import DbCollections
+        from common.constants.states import UnitStates
+
+        unit_id = unit['id']
+        lease = self.db.get(collection_name=DbCollections.WIREGUARD_LEASE, doc_id=unit_id) or {}
+        snapshot = unit.get('wireguard_lease') or {}
+        expected_lease = bool(snapshot) or any(
+            server.get('wireguard_managed') for server in unit.get('servers') or [])
+        lease_released = lease.get('status') == 'released' if lease else not expected_lease
+        peer_id = (lease.get('remote_peer_id') or lease.get('kit_id')
+                   or snapshot.get('remote_peer_id') or snapshot.get('kit_id'))
+        peer = (self.db.get(collection_name=DbCollections.WIREGUARD_KIT, doc_id=peer_id)
+                if peer_id else {}) or {}
+        peer_released = peer.get('assigned_unit_id') != unit_id
+        endpoint_id = lease.get('endpoint_id') or (unit.get('wireguard_endpoint') or {}).get('id')
+        endpoint = (self.db.get(collection_name=DbCollections.WIREGUARD_ENDPOINT, doc_id=endpoint_id)
+                    if endpoint_id else {}) or {}
+        endpoint_released = (not endpoint or endpoint.get('unit_id') != unit_id
+                             or endpoint.get('status') == 'released')
+        deleted = (unit.get('state') == UnitStates.DELETED.value and lease_released
+                   and peer_released and endpoint_released)
+        summary = self._lab_summary(unit)
+        return {'unit_id': unit_id, 'deleted': bool(deleted),
+                'state': summary['state'], 'state_name': summary['state_name'],
+                'lease_released': bool(lease_released), 'peer_released': bool(peer_released),
+                'endpoint_released': bool(endpoint_released)}
+
+    def delete_labs(self, instructor, unit_ids, execute=False):
+        requester = self._requester(instructor)
+        identifiers = list(dict.fromkeys(unit_ids))
+        if not identifiers:
+            raise ValueError('Select at least one lab with --unit-id')
+
+        def selected(identifier):
+            unit = self._unit(identifier)
+            if unit.get('test') is not True:
+                raise ValueError(f'Lab {identifier} is not marked test:true; debug cleanup cannot delete it')
+            if not self._can_access_lab(unit, requester):
+                raise ValueError(f'This Agoge account is not authorized to delete lab {identifier}')
+            return unit
+
+        # Validate the complete batch before the first resource mutation.
+        targets = [selected(identifier) for identifier in identifiers]
+        if not execute:
+            return {'project': TEST_PROJECT, 'dry_run': True,
+                    'items': [self._lab_summary(unit) for unit in targets], 'total': len(targets)}
+        items = []
+        for identifier in identifiers:
+            try:
+                current = selected(identifier)
+                result = self._cleanup_confirmation(current)
+                if not result['deleted']:
+                    print(f'Deleting test lab {identifier} and its managed resources locally.', flush=True)
+                    self.action('unit', identifier, 'delete')
+                    result = self._cleanup_confirmation(self._unit(identifier))
+                items.append(result)
+            except Exception as error:
+                # Worker error bodies can contain SDK data; leave the original
+                # worker logs for debugging and report only the exception type.
+                items.append({'unit_id': identifier, 'deleted': False, 'error': type(error).__name__})
+        deleted = sum(item['deleted'] for item in items)
+        return {'project': TEST_PROJECT, 'dry_run': False, 'items': items,
+                'total': len(items), 'deleted': deleted, 'failed': len(items) - deleted}
+
     def create_lab(self, args):
         from common.exceptions import NotFound, Unauthorized
 
@@ -158,12 +266,12 @@ class LocalBackend:
         return {'scope': scope, 'id': identifier, 'action': action, 'worker_returned': True}
 
     def status(self, unit_id):
-        from common.constants.database import DbCollections
+        from common.constants.database import DbCollections, DbOperators
         from common.constants.states import UnitStates
 
         unit = self._unit(unit_id)
         workouts = self.db.query(collection_name=DbCollections.WORKOUT,
-                                 filters=[('parent_id', '==', unit_id)])
+                                 filters=[('parent_id', DbOperators.EQUAL, unit_id)])
         endpoint_snapshot = unit.get('wireguard_endpoint') or {}
         endpoint = (self.db.get(collection_name=DbCollections.WIREGUARD_ENDPOINT,
                                 doc_id=endpoint_snapshot['id']) if endpoint_snapshot.get('id') else {})
@@ -171,6 +279,12 @@ class LocalBackend:
         if endpoint.get('unit_id') != unit_id:
             endpoint = {}
         lease = self.db.get(collection_name=DbCollections.WIREGUARD_LEASE, doc_id=unit_id) or {}
+        timestamp = lease.get('health_timestamp')
+        health_age = (round(datetime.now(timezone.utc).timestamp() - timestamp, 1)
+                      if type(timestamp) in (int, float) and math.isfinite(timestamp) else None)
+        health_error = lease.get('health_error')
+        if health_error and health_error not in ('wireguard_service_unready', 'bootstrap_failed'):
+            health_error = 'other_error'
         try:
             state_name = UnitStates(unit.get('state')).name
         except ValueError:
@@ -178,11 +292,12 @@ class LocalBackend:
         return {'project': TEST_PROJECT, 'unit_id': unit_id, 'join_code': unit.get('join_code'),
                 'connection_id': f'{TEST_PROJECT}:{unit_id}' if endpoint else None,
                 'state': unit.get('state'), 'state_name': state_name,
-                'endpoint': {key: endpoint.get(key) for key in ('hostname', 'port')},
+                'endpoint': {key: endpoint.get(key) for key in ('hostname', 'port', 'status')},
                 'wireguard': {'remote_peer_id': lease.get('remote_peer_id') or lease.get('kit_id'),
                               'remote_network_cidr': lease.get('remote_network_cidr') or lease.get('equipment_subnet'),
+                              'health_age_seconds': health_age, 'health_error': health_error,
                               **{key: lease.get(key) for key in
-                                 ('status', 'service_ready', 'tunnel_ready', 'health_timestamp')}},
+                                 ('status', 'service_ready', 'tunnel_ready', 'health_timestamp', 'latest_handshake')}},
                 'workouts': [{'workout_id': w['id'], 'state': w.get('state'),
                               'student_email': w.get('student_email')} for w in workouts]}
 
@@ -392,6 +507,15 @@ def parser():
     lab.add_argument('--student-email', default=argparse.SUPPRESS, type=_email, help='Also claim and build one student workout')
     peers = commands.add_parser('list-peers', help='List remote peers authorized for an Agoge instructor or admin')
     peers.add_argument('--instructor', required=True, type=_email)
+    labs = commands.add_parser('list-labs', help='List authorized test labs from previous debug runs')
+    labs.add_argument('--instructor', required=True, type=_email)
+    labs.add_argument('--remote-peer-id', type=_remote_peer_id)
+    labs.add_argument('--include-deleted', action='store_true')
+    cleanup = commands.add_parser('delete-labs', help='Preview or delete explicitly selected test labs')
+    cleanup.add_argument('--instructor', required=True, type=_email)
+    cleanup.add_argument('--unit-id', dest='unit_ids', required=True, action='append', type=_identifier,
+                         help='Lab ID to delete; repeat this flag to select multiple labs')
+    cleanup.add_argument('--yes', action='store_true', help='Execute deletion; otherwise only preview selected labs')
     enroll = commands.add_parser('enroll-peer', help='Register one remote peer without creating a lab')
     enroll.add_argument('--admin', required=True, type=_email, help='Existing Agoge admin account')
     enroll.add_argument('--spec', required=True, type=_absolute_path, help='JSON public peer registration fields')
@@ -420,6 +544,10 @@ def main(argv=None):
             result = backend.create_lab(args)
         elif args.command == 'list-peers':
             result = backend.list_peers(args.instructor)
+        elif args.command == 'list-labs':
+            result = backend.list_labs(args.instructor, args.remote_peer_id, args.include_deleted)
+        elif args.command == 'delete-labs':
+            result = backend.delete_labs(args.instructor, args.unit_ids, execute=args.yes)
         elif args.command == 'enroll-peer':
             result = backend.enroll_peer(args.admin, args.peer_spec, args.token_out)
         elif args.command == 'create-workout':
@@ -433,7 +561,7 @@ def main(argv=None):
         print(f'Error: {error}', file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2))
-    return 0
+    return 1 if args.command == 'delete-labs' and result.get('failed', 0) else 0
 
 
 if __name__ == '__main__':
