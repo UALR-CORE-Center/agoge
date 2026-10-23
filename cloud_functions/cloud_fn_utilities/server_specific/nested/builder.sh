@@ -544,11 +544,8 @@ SCRIPT
   echo "$out/agoge-firstboot.start:/etc/local.d/agoge-firstboot.start"
 }
 
-# virt-customize for a Linux guest: hostname, admin user, agent, network, cloud-init off.
-# Guest names, usernames, and packages are validated by the API (slugs), so they are safe in
-# The informative line of a failed virt-customize log $1: the first package-manager "E:" line (the later ones
-# repeat it less specifically), else the text
-# after the last "virt-customize: error:", else the last line.
+# The informative line of a failed virt-customize log $1: the first package-manager "E:" line (later ones
+# repeat it less specifically), else the text after the last "virt-customize: error:", else the last line.
 customize_error() {
   local line
   line=$(grep -E '^E: ' "$1" | head -n 1)
@@ -558,6 +555,8 @@ customize_error() {
   echo "$line"
 }
 
+# virt-customize for a Linux guest: hostname, admin user, agent, network, cloud-init off.
+# Guest names, usernames, and packages are validated by the API (slugs), so they are safe in
 # --run-command strings. The password is read from a root-only file, never passed as an argument.
 customize_linux() {
   local guest=$1 disk=$2 method user osinfo net_config packages install upload password_file ssh_package
