@@ -44,3 +44,5 @@ api/.env.bak
 CLAUDE.md
 .vscode/
 bugReport.md
+/.local/debug-lab/
+/debug.local.json

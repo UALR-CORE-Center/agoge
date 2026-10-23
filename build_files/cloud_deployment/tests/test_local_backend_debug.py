@@ -1,5 +1,6 @@
 """Local debug dispatch with real API decisions and no live GCP calls."""
 import importlib
+import hashlib
 import json
 import os
 import sys
@@ -12,20 +13,23 @@ import debug_lab as cli
 from common.constants.database import DbCollections
 from common.constants.pub_sub import PubSub
 from common.constants.states import UnitStates, WorkoutStates
-from common.exceptions import BadRequest
+from common.exceptions import BadRequest, Conflict, Unauthorized
+from common.tests.test_wireguard_endpoint_registry import _FakeDatabase
+from common.tests.test_wireguard_provisioning import kit_data
 from core.workout import Workout
 
 
-class Database:
+class Database(_FakeDatabase):
     def __init__(self):
-        self.collections = {name: {} for name in DbCollections}
+        super().__init__()
+        self.collections.update({name: {} for name in DbCollections})
 
     def get(self, collection_name, doc_id):
         return self.collections[collection_name].get(doc_id, {})
 
-    def query(self, collection_name, filters):
+    def query(self, collection_name, filters=None):
         return [record for record in self.collections[collection_name].values()
-                if all(record.get(field) == value for field, _, value in filters)]
+                if all(record.get(field) == value for field, _, value in filters or [])]
 
 
 @pytest.fixture
@@ -33,7 +37,10 @@ def local():
     db = Database()
     env = {'project': cli.TEST_PROJECT, 'region': 'us-central1', 'zone': 'us-central1-a'}
     unit_class, users_class, worker = Mock(), Mock(), Mock()
-    users_class.return_value.get_user.return_value = SimpleNamespace(is_authorized=True)
+    users_class.return_value.get_user.return_value = SimpleNamespace(
+        is_authorized=True, is_admin=False, email='teacher@example.edu')
+    db.collections[DbCollections.WIREGUARD_KIT]['kit-one'] = {
+        **kit_data(), 'enabled': True, 'assigned_unit_id': None, 'token_digest': 'private-stored-digest'}
     api = object.__new__(Workout)
     api.collection = DbCollections.WORKOUT
     api.db, api.env, api.env_dict = db, SimpleNamespace(max_workspaces=10), env
@@ -79,6 +86,300 @@ def test_remote_peer_cli_name_preserves_legacy_flag_alias():
     for flag in ('--remote-peer-id', '--kit-id'):
         args = cli.parser().parse_args(['create-lab', '--instructor', 'teacher@example.edu', flag, 'remote-lab-01'])
         assert args.remote_peer_id == 'remote-lab-01'
+
+
+def write_json(tmp_path, value, name='debug.local.json'):
+    target = tmp_path / name
+    target.write_text(json.dumps(value), encoding='utf-8')
+    return target
+
+
+def profile_data(**changes):
+    return {'template': 'wireguard-factory-lab', 'instructor': 'Teacher@Example.edu',
+            'remote_peer_id': 'kit-one', 'count': 3, 'expires_hours': 1.5,
+            'student_email': 'Student@Example.edu', **changes}
+
+
+def peer_spec(**changes):
+    data = kit_data('remote-lab-02', subnet='192.168.50.0/24', key_number=2)
+    data['remote_network_cidr'] = data.pop('equipment_subnet')
+    return {**data, **changes}
+
+
+def test_profile_supplies_normalized_lab_settings_without_cloud_access(tmp_path):
+    profile = write_json(tmp_path, profile_data(
+        project=cli.TEST_PROJECT, wireguard_api_url='https://debug.example.edu/'))
+    args = cli.parser().parse_args(['create-lab', '--profile', str(profile)])
+    assert args.project == cli.TEST_PROJECT
+    assert args.template == 'wireguard-factory-lab'
+    assert args.instructor == 'teacher@example.edu'
+    assert args.remote_peer_id == 'kit-one'
+    assert args.count == 3 and args.expires_hours == 1.5
+    assert args.student_email == 'student@example.edu'
+    assert args.wireguard_api_url == 'https://debug.example.edu'
+
+
+@pytest.mark.parametrize('peer_flag', ['--remote-peer-id', '--kit-id'])
+def test_explicit_flags_override_profile_including_legacy_peer_alias(tmp_path, peer_flag):
+    profile = write_json(tmp_path, profile_data(project='not-the-test-project'))
+    args = cli.parser().parse_args([
+        '--project', cli.TEST_PROJECT, '--wireguard-api-url', 'https://override.example.edu',
+        'create-lab', '--profile', str(profile), '--instructor', 'Override@Example.edu',
+        peer_flag, 'another-peer', '--count', '1', '--expires-hours', '2',
+        '--student-email', 'Another@Example.edu', '--template', 'another-template'])
+    assert args.instructor == 'override@example.edu'
+    assert args.remote_peer_id == 'another-peer' and args.template == 'another-template'
+    assert args.count == 1 and args.expires_hours == 2
+    assert args.student_email == 'another@example.edu'
+    assert args.wireguard_api_url == 'https://override.example.edu'
+    assert args.project == cli.TEST_PROJECT
+
+
+def test_minimal_profile_keeps_existing_cli_defaults(tmp_path):
+    profile = write_json(tmp_path, {'instructor': 'teacher@example.edu', 'remote_peer_id': 'kit-one'})
+    args = cli.parser().parse_args(['create-lab', '--profile', str(profile)])
+    assert args.template == 'wireguard-factory-lab'
+    assert args.count == 1 and args.expires_hours == 2
+    assert args.student_email is None and args.wireguard_api_url is None
+    assert args.project == cli.TEST_PROJECT
+
+
+def test_profile_accepts_utf8_bom_from_windows_editors(tmp_path):
+    profile = tmp_path / 'windows-profile.json'
+    profile.write_text(json.dumps(profile_data()), encoding='utf-8-sig')
+    args = cli.parser().parse_args(['create-lab', '--profile', str(profile)])
+    assert args.remote_peer_id == 'kit-one' and args.count == 3
+
+
+@pytest.mark.parametrize('change', [
+    {'kit_id': 'kit-one'}, {'private_key': 'private-profile-secret'},
+    {'count': True}, {'count': '2'}, {'count': 0}, {'count': 101},
+    {'expires_hours': False}, {'expires_hours': 0}, {'expires_hours': 169},
+    {'expires_hours': '2'}, {'expires_hours': float('nan')},
+    {'instructor': ['teacher@example.edu']}, {'instructor': 'bad-email'},
+    {'remote_peer_id': '../another'}, {'remote_peer_id': None},
+    {'student_email': 'bad-email'}, {'template': ['wireguard-factory-lab']},
+    {'project': 'agoge-ualr'}, {'wireguard_api_url': 'http://localhost'},
+    {'wireguard_api_url': 'https://user:private-profile-secret@example.edu'},
+])
+def test_invalid_profiles_fail_before_cloud_access(monkeypatch, tmp_path, capsys, change):
+    profile = write_json(tmp_path, profile_data(**change))
+    load = Mock()
+    monkeypatch.setattr(cli, 'load_backend', load)
+    with pytest.raises(SystemExit) as error:
+        cli.main(['create-lab', '--profile', str(profile)])
+    assert error.value.code == 2
+    load.assert_not_called()
+    assert 'private-profile-secret' not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('contents', [
+    '[]', 'null', '{"instructor":"private-file-secret",',
+    '{"instructor":"teacher@example.edu"}',
+    '{"remote_peer_id":"kit-one"}',
+    '{"instructor":"teacher@example.edu","remote_peer_id":"kit-one","count":1,"count":2}',
+])
+def test_malformed_or_incomplete_profiles_fail_before_cloud_access(monkeypatch, tmp_path, capsys, contents):
+    profile = tmp_path / 'bad-profile.json'
+    profile.write_text(contents, encoding='utf-8')
+    load = Mock()
+    monkeypatch.setattr(cli, 'load_backend', load)
+    with pytest.raises(SystemExit) as error:
+        cli.main(['create-lab', '--profile', str(profile)])
+    assert error.value.code == 2
+    load.assert_not_called()
+    assert 'private-file-secret' not in capsys.readouterr().err
+
+
+def test_missing_profile_file_fails_before_cloud_access(monkeypatch, tmp_path):
+    load = Mock()
+    monkeypatch.setattr(cli, 'load_backend', load)
+    with pytest.raises(SystemExit) as error:
+        cli.main(['create-lab', '--profile', str(tmp_path / 'missing.json')])
+    assert error.value.code == 2
+    load.assert_not_called()
+
+
+def test_profile_is_resolved_before_backend_changes_working_directory(monkeypatch, tmp_path):
+    profile = write_json(tmp_path, profile_data())
+    other = tmp_path / 'backend-working-directory'
+    other.mkdir()
+    monkeypatch.chdir(tmp_path)
+    backend = Mock()
+    backend.create_lab.return_value = {'unit_id': 'abcdefghij'}
+    def load(project, wireguard_api_url=None):
+        monkeypatch.chdir(other)
+        return backend
+    monkeypatch.setattr(cli, 'load_backend', load)
+    assert cli.main(['create-lab', '--profile', profile.name]) == 0
+    args = backend.create_lab.call_args.args[0]
+    assert args.profile == profile.resolve()
+    assert args.remote_peer_id == 'kit-one' and args.count == 3
+
+
+@pytest.mark.parametrize('change', [None, {'enabled': False},
+    {'authorized_instructors': ['other@example.edu']}, {'assigned_unit_id': 'anotherlab'}])
+def test_peer_preflight_fails_before_unit_creation_or_worker_dispatch(local, change):
+    if change is None:
+        local.db.collections[DbCollections.WIREGUARD_KIT].pop('kit-one')
+    else:
+        local.db.collections[DbCollections.WIREGUARD_KIT]['kit-one'].update(change)
+    args = cli.parser().parse_args(['create-lab', '--instructor', 'teacher@example.edu',
+                                   '--remote-peer-id', 'kit-one'])
+    with pytest.raises((ValueError, Unauthorized)):
+        local.backend.create_lab(args)
+    local.unit_class.assert_not_called()
+    local.worker.assert_not_called()
+
+
+def test_peer_list_filters_instructors_and_never_returns_credentials(local):
+    records = local.db.collections[DbCollections.WIREGUARD_KIT]
+    records['disabled-peer'] = {**kit_data('disabled-peer', key_number=2),
+                                'enabled': False, 'assigned_unit_id': None, 'token_digest': 'private-list-secret'}
+    records['assigned-peer'] = {**kit_data('assigned-peer', key_number=3),
+                                'enabled': True, 'assigned_unit_id': 'abcdefghij'}
+    records['someone-elses-peer'] = {**kit_data('someone-elses-peer', key_number=4),
+        'enabled': True, 'assigned_unit_id': None, 'authorized_instructors': ['other@example.edu']}
+    result = local.backend.list_peers('teacher@example.edu')
+    assert result['project'] == cli.TEST_PROJECT and result['total'] == 3
+    items = {item['id']: item for item in result['items']}
+    assert items['kit-one']['available'] is True
+    assert items['disabled-peer']['available'] is False
+    assert items['assigned-peer']['available'] is False
+    assert items['kit-one']['remote_network_cidr'] == '172.30.0.0/24'
+    assert 'equipment_subnet' not in items['kit-one']
+    output = json.dumps(result)
+    assert 'token_digest' not in output and 'private-list-secret' not in output
+    assert 'private-stored-digest' not in output and 'someone-elses-peer' not in output
+    local.unit_class.assert_not_called()
+    local.worker.assert_not_called()
+
+
+def test_peer_list_uses_actual_agoge_account_authorization(local):
+    local.users_class.return_value.get_user.return_value.is_authorized = False
+    with pytest.raises((ValueError, Unauthorized)):
+        local.backend.list_peers('student@example.edu')
+    local.worker.assert_not_called()
+
+
+def test_list_peers_command_dispatches_normalized_instructor_and_prints_safe_json(monkeypatch, capsys):
+    backend = Mock()
+    backend.list_peers.return_value = {'project': cli.TEST_PROJECT, 'items': [], 'total': 0}
+    load = Mock(return_value=backend)
+    monkeypatch.setattr(cli, 'load_backend', load)
+    assert cli.main(['list-peers', '--instructor', 'Teacher@Example.edu']) == 0
+    backend.list_peers.assert_called_once_with('teacher@example.edu')
+    assert json.loads(capsys.readouterr().out)['total'] == 0
+    backend.create_lab.assert_not_called()
+    backend.enroll_peer.assert_not_called()
+
+
+def test_expected_peer_failure_returns_actionable_error_without_traceback(monkeypatch, capsys):
+    backend = Mock()
+    backend.create_lab.side_effect = ValueError('Register the missing peer with enroll-peer')
+    monkeypatch.setattr(cli, 'load_backend', Mock(return_value=backend))
+    assert cli.main(['create-lab', '--instructor', 'teacher@example.edu', '--remote-peer-id', 'kit-one']) == 1
+    captured = capsys.readouterr()
+    assert 'enroll-peer' in captured.err and 'Traceback' not in captured.err
+    assert captured.out == ''
+
+
+def test_enrollment_spec_and_token_path_are_parsed_before_backend_changes_directory(monkeypatch, tmp_path):
+    spec = write_json(tmp_path, peer_spec(), name='peer.json')
+    other = tmp_path / 'backend-working-directory'
+    other.mkdir()
+    monkeypatch.chdir(tmp_path)
+    backend = Mock()
+    backend.enroll_peer.return_value = {'remote_peer': {'id': 'remote-lab-02'}}
+    def load(project, wireguard_api_url=None):
+        monkeypatch.chdir(other)
+        return backend
+    monkeypatch.setattr(cli, 'load_backend', load)
+    assert cli.main(['enroll-peer', '--admin', 'Admin@Example.edu', '--spec', spec.name,
+                     '--token-out', 'remote-lab-02.token']) == 0
+    admin, parsed_spec, token_path = backend.enroll_peer.call_args.args
+    assert admin == 'admin@example.edu'
+    assert parsed_spec == peer_spec()
+    assert token_path == tmp_path / 'remote-lab-02.token'
+
+
+@pytest.mark.parametrize('change', [
+    {'remote_network_cidr': '8.8.8.0/24'}, {'remote_network_cidr': '192.168.50.1/24'},
+    {'remote_network_cidr': 'private-enrollment-secret'},
+    {'peer_public_key': 'private-invalid-key'}, {'private_key': 'private-enrollment-secret'},
+    {'authorized_instructors': []}, {'id': '../another'}, {'device_id': ''},
+])
+def test_invalid_enrollment_spec_fails_before_cloud_access(monkeypatch, tmp_path, capsys, change):
+    spec = write_json(tmp_path, peer_spec(**change), name='peer.json')
+    load = Mock()
+    monkeypatch.setattr(cli, 'load_backend', load)
+    with pytest.raises(SystemExit) as error:
+        cli.main(['enroll-peer', '--admin', 'admin@example.edu', '--spec', str(spec),
+                  '--token-out', str(tmp_path / 'peer.token')])
+    assert error.value.code == 2
+    load.assert_not_called()
+    output = capsys.readouterr().err
+    assert 'private-invalid-key' not in output and 'private-enrollment-secret' not in output
+
+
+def test_enrollment_requires_explicit_token_output_before_cloud_access(monkeypatch, tmp_path):
+    spec = write_json(tmp_path, peer_spec(), name='peer.json')
+    load = Mock()
+    monkeypatch.setattr(cli, 'load_backend', load)
+    with pytest.raises(SystemExit) as error:
+        cli.main(['enroll-peer', '--admin', 'admin@example.edu', '--spec', str(spec)])
+    assert error.value.code == 2
+    load.assert_not_called()
+
+
+def test_enrollment_reuses_transactional_service_and_writes_only_token_to_protected_file(local, tmp_path, capsys):
+    local.users_class.return_value.get_user.return_value.is_admin = True
+    token_path = tmp_path / 'remote-lab-02.token'
+    result = local.backend.enroll_peer('admin@example.edu', peer_spec(), token_path)
+    token = token_path.read_text(encoding='utf-8').strip()
+    assert token
+    stored = local.db.collections[DbCollections.WIREGUARD_KIT]['remote-lab-02']
+    assert stored['token_digest'] == hashlib.sha256(token.encode()).hexdigest()
+    assert stored['equipment_subnet'] == '192.168.50.0/24'
+    assert stored['assigned_unit_id'] is None and stored['enabled'] is True
+    assert 'remote_network_cidr' in json.dumps(result)
+    assert 'enrollment_token' not in result and token not in json.dumps(result)
+    assert token not in capsys.readouterr().out
+    if os.name != 'nt':
+        assert token_path.stat().st_mode & 0o777 == 0o600
+    local.unit_class.assert_not_called()
+    local.worker.assert_not_called()
+
+
+def test_enrollment_uses_actual_agoge_admin_role(local, tmp_path):
+    target = tmp_path / 'peer.token'
+    with pytest.raises((ValueError, Unauthorized)):
+        local.backend.enroll_peer('teacher@example.edu', peer_spec(), target)
+    assert 'remote-lab-02' not in local.db.collections[DbCollections.WIREGUARD_KIT]
+    assert not target.exists()
+
+
+def test_enrollment_does_not_replace_existing_peer_or_reissue_its_token(local, tmp_path):
+    local.users_class.return_value.get_user.return_value.is_admin = True
+    first_path, second_path = tmp_path / 'first.token', tmp_path / 'second.token'
+    local.backend.enroll_peer('admin@example.edu', peer_spec(), first_path)
+    stored = dict(local.db.collections[DbCollections.WIREGUARD_KIT]['remote-lab-02'])
+    first_token = first_path.read_text(encoding='utf-8')
+    with pytest.raises((ValueError, Conflict)):
+        local.backend.enroll_peer('admin@example.edu', peer_spec(), second_path)
+    assert local.db.collections[DbCollections.WIREGUARD_KIT]['remote-lab-02'] == stored
+    assert first_path.read_text(encoding='utf-8') == first_token
+    assert not second_path.exists()
+
+
+def test_existing_token_output_is_preserved_before_any_peer_is_enrolled(local, tmp_path):
+    local.users_class.return_value.get_user.return_value.is_admin = True
+    target = tmp_path / 'peer.token'
+    target.write_text('existing-private-token', encoding='utf-8')
+    with pytest.raises((ValueError, OSError)):
+        local.backend.enroll_peer('admin@example.edu', peer_spec(), target)
+    assert target.read_text(encoding='utf-8') == 'existing-private-token'
+    assert 'remote-lab-02' not in local.db.collections[DbCollections.WIREGUARD_KIT]
 
 
 def test_status_never_falls_back_to_stale_dns_for_reused_gateway_number(local):

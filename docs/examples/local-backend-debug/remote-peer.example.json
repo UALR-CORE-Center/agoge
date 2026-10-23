@@ -1,0 +1,9 @@
+{
+  "id": "remote-lab-01",
+  "device_id": "remote-lab-01-pi",
+  "remote_network_cidr": "192.168.50.0/24",
+  "peer_public_key": "REPLACE_WITH_DEVICE_WIREGUARD_PUBLIC_KEY",
+  "authorized_instructors": [
+    "pdhuff@ualr.edu"
+  ]
+}

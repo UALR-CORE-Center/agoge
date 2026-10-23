@@ -38,14 +38,145 @@ application, so a previous gcloud project selection cannot redirect the build.
    unassigned remote peer authorized for that instructor. The CLI uses the actual user
    record and the usual remote peer authorization/lease checks; it does not invent an
    admin account. The Agoge instructor email can differ from the GCP operator.
-   Administrators register the private LAN under **Admins → Build Manager →
-   Remote Labs**, including its **Remote LAN (IPv4 CIDR)** and authorized
-   instructor emails. The CLI derives routing from that registration.
+   Use the [CLI enrollment flow below](#register-a-remote-peer-once), or register the
+   private LAN under **Admins → Build Manager → Remote Labs**, including its
+   **Remote LAN (IPv4 CIDR)** and authorized instructor emails. Routing comes from
+   that saved registration.
 6. Prepare the [project settings and permissions](wireguard-provisioning.md#deploy-this-release)
    and install/enroll the [Pi client](../../build_files/server_config/wireguard_pi/README.md).
    Running a build locally does not enable missing APIs or grant operator IAM
    permissions. Your local ADC identity performs the Compute, Firestore, Secret
    Manager, IAM, and shared DNS operations that the application normally performs.
+
+## Register a remote peer once
+
+Registration describes the physical remote network and is reused across lab builds.
+A debug profile selects that registration by ID. Passing `--remote-peer-id` or
+the older `--kit-id` does not register a device. A missing-peer error such as the
+one for `factory-kit-01` means that ID has no enabled registration in the selected
+environment.
+
+From the repository root, create local copies of the checked-in examples:
+
+```powershell
+New-Item -ItemType Directory -Force .local/debug-lab | Out-Null
+Copy-Item docs/examples/local-backend-debug/remote-peer.example.json .local/debug-lab/remote-peer.json
+Copy-Item docs/examples/local-backend-debug/debug-profile.example.json .local/debug-lab/profile.json
+```
+
+The `.local/debug-lab/` directory is ignored by Git. Edit `remote-peer.json` using
+the actual remote network and device:
+
+```json
+{
+  "id": "remote-lab-01",
+  "device_id": "remote-lab-01-pi",
+  "remote_network_cidr": "192.168.50.0/24",
+  "peer_public_key": "REPLACE_WITH_DEVICE_WIREGUARD_PUBLIC_KEY",
+  "authorized_instructors": ["pdhuff@ualr.edu"]
+}
+```
+
+- `id` is the registered remote peer ID used by the debug profile and Pi client.
+  You can retain an existing name such as `factory-kit-01`; use the exact same ID
+  in the profile and device configuration.
+- `device_id` identifies this physical device and must be unique.
+- `remote_network_cidr` is its actual private IPv4 LAN, with a network address
+  such as `192.168.50.0/24`. It must not overlap the student or tunnel networks.
+- Replace the public-key placeholder with the device's WireGuard public key.
+  The [Pi installer](../../build_files/server_config/wireguard_pi/README.md) creates
+  and retains the private key on the Pi and prints its public key. The placeholder
+  deliberately fails validation until replaced.
+- `authorized_instructors` contains the Agoge sign-in emails allowed to select
+  this peer. The example authorizes `pdhuff@ualr.edu`.
+
+Enroll it with an existing **Agoge administrator** account:
+
+```powershell
+.\venv\Scripts\python.exe debug_lab.py enroll-peer `
+  --admin pdhuff@ualr.edu `
+  --spec .local/debug-lab/remote-peer.json `
+  --token-out .local/debug-lab/remote-lab-01.token
+```
+
+Replace `--admin` if your Agoge administrator uses another email. GCP operator
+credentials and an Agoge administrator account serve different purposes; the
+command checks the Agoge account's administrator permission as well as using
+your local ADC for database access.
+
+Enrollment creates the registration once. An existing peer ID, device identity,
+or public key produces a conflict; enrollment does not overwrite or refresh an
+existing registration. The command creates no lab or VM. Your run profile and
+subsequent builds reuse the saved peer's LAN and authorization settings.
+
+The one-time enrollment token is written to the new `--token-out` file with
+owner-only access. Existing output files are never overwritten. Normal command
+output contains safe peer metadata and the token file path, not the token.
+Transfer the token securely to the Pi's protected token file as described in the
+[Pi bootstrap instructions](../../build_files/server_config/wireguard_pi/README.md).
+Keep private keys and enrollment tokens outside profiles, catalogs, and source
+control. Enrollment/list/profile commands run locally and require no frontend,
+Cloud Run, or Cloud Functions deployment; the device and gateway still use the
+HTTPS endpoints described below.
+
+List the peers visible to the instructor:
+
+```powershell
+.\venv\Scripts\python.exe debug_lab.py list-peers --instructor pdhuff@ualr.edu
+```
+
+The result includes registered IDs, private LANs, enabled state, and current lab
+assignments, without device tokens or private keys. Choose an enabled,
+unassigned peer authorized for the instructor. A peer is assigned to one lab at
+a time; deleting the old lab releases it for a subsequent test.
+
+## Reuse a JSON debug profile
+
+Edit `.local/debug-lab/profile.json` to select the registered peer and the
+settings for each test build:
+
+```json
+{
+  "project": "test-dev-787001",
+  "template": "wireguard-factory-lab",
+  "instructor": "pdhuff@ualr.edu",
+  "remote_peer_id": "remote-lab-01",
+  "count": 1,
+  "expires_hours": 2,
+  "student_email": "wireguard-test@example.com"
+}
+```
+
+Then build the lab and optional student workout with a short command:
+
+```powershell
+.\venv\Scripts\python.exe debug_lab.py create-lab --profile .local/debug-lab/profile.json
+```
+
+An explicit command-line flag overrides its profile value. For example, test
+with two workstations and a one-hour expiration:
+
+```powershell
+.\venv\Scripts\python.exe debug_lab.py create-lab `
+  --profile .local/debug-lab/profile.json --count 2 --expires-hours 1
+```
+
+The profile is a flat JSON object. Supported fields are `template`, `instructor`,
+`remote_peer_id`, `count`, `expires_hours`, `student_email`, `project`, and
+`wireguard_api_url`. The latter two are optional: the project remains limited
+to `test-dev-787001`, and the API URL normally comes from the environment.
+Use `wireguard_api_url` only for an HTTPS callback override, such as a public
+tunnel to the local API. Omit `student_email` or set it to `null` to build only
+the shared gateway first. Defaults remain one workstation, a two-hour expiration,
+and the `wireguard-factory-lab` template when those fields are omitted.
+
+Malformed JSON, unknown fields, invalid values, and missing instructor/peer
+settings fail before cloud access. Relative file paths are resolved from the
+directory where the command starts. The runner checks that the selected peer
+exists, is enabled, is authorized for the instructor, and is unassigned before
+provisioning. If that check fails, inspect `list-peers` or enroll the missing peer
+with the administrator account. Peer enrollment data stays in the registration;
+the profile only references its ID.
 
 ## Create a lab and one student workout
 
@@ -55,7 +186,7 @@ and the instructor email with its authorized Agoge account:
 ```powershell
 .\venv\Scripts\python.exe debug_lab.py create-lab `
   --template wireguard-factory-lab `
-  --instructor pdhuff@ar-core.org `
+  --instructor pdhuff@ualr.edu `
   --remote-peer-id remote-lab-01 `
   --count 1 `
   --expires-hours 2 `
@@ -108,7 +239,7 @@ Create a **Python** run/debug configuration:
 | Script path | Your checkout's `debug_lab.py` |
 | Python interpreter | Your checkout's `venv\Scripts\python.exe` |
 | Working directory | Your Agoge repository root |
-| Parameters, new lab | `create-lab --instructor pdhuff@ar-core.org --remote-peer-id remote-lab-01 --count 1 --expires-hours 2 --student-email wireguard-test@example.com` |
+| Parameters, new lab | `create-lab --profile .local/debug-lab/profile.json` |
 | Parameters, existing lab | `create-workout --unit-id abcdefghij --student-email wireguard-test@example.com` |
 
 Start with the IDE's **Debug** button. Useful breakpoint locations:
@@ -160,7 +291,7 @@ To debug those HTTP endpoints locally too:
    ```powershell
    .\venv\Scripts\python.exe debug_lab.py `
      --wireguard-api-url https://your-debug-api.example.com `
-     create-lab --instructor pdhuff@ar-core.org --remote-peer-id remote-lab-01
+     create-lab --instructor pdhuff@ualr.edu --remote-peer-id remote-lab-01
    ```
 
 4. Point the Pi client's `api_url` at the same public API base URL. The local
