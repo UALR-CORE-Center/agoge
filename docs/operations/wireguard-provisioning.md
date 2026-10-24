@@ -21,8 +21,9 @@ Deploy the Cloud Function, API, and frontend from this same revision. Through
 and Cloud Functions** performs the WireGuard API/DNS preflight and shared app/API
 routing setup. The gateway uses the official GCP image family
 `ubuntu-os-cloud/ubuntu-2404-lts-amd64` on E2. A preconfigured WireGuard image is
-not required. Ubuntu package repositories, Secret Manager, and the tenant HTTPS
-API must be reachable from the gateway.
+not required. Ubuntu package repositories and Secret Manager must be reachable
+from the gateway. A tenant API health callback is not required for bootstrap
+or for lab build/start/stop completion.
 
 The startup code is maintained in `common/services/wireguard_startup.py` and is
 embedded directly in the Compute instance's `startup-script` metadata. It does
@@ -33,10 +34,13 @@ Manager using the gateway's own metadata identity.
 Required project settings remain `parent_project`, `parent_dnszone`,
 `parent_dns_suffix`, `project_path`, `wireguard_dns_suffix`, and `wireguard_port`.
 The preflight enables Compute, DNS, Secret Manager, and IAM APIs and checks the
-public DNS zone and zone-scoped runtime DNS permission. API callbacks default to
-`https://api.<parent_dns_suffix>/<project_path>`; installations with another API
-origin can set `wireguard_api_url` in their environment document to its HTTPS base
-URL, including the tenant prefix.
+public DNS zone and zone-scoped runtime DNS permission. Guest health reporting
+is disabled by default. To enable optional telemetry for new lab configurations,
+set `wireguard_health_reporting_enabled: true` in the environment document. Its
+API callback defaults to `https://api.<parent_dns_suffix>/<project_path>`;
+installations with another API origin can set `wireguard_api_url` to its HTTPS
+base URL, including the tenant prefix. Optional reporting failures do not block
+bootstrap or the GCP lifecycle.
 
 The application runtime needs the existing Compute/Firestore/DNS permissions,
 Secret Manager secret creation/version access/deletion and secret IAM policy
@@ -284,9 +288,11 @@ and [image list command](https://docs.cloud.google.com/sdk/gcloud/reference/comp
 6. Click the dialog's **Build Lab** button. Agoge opens the new lab's detail page
    and provisions the shared Ubuntu gateway. The selected remote peer's registered
    private LAN determines the route automatically.
-7. Wait for **Gateway service ready**. With the enrolled Pi online and its
-   polling service running, wait for **Remote tunnel connected** as well.
-   Check the assigned remote peer, connection ID, lab number, DNS suffix, hostname, and UDP port. A lab
+7. Wait for the lab to reach **Ready** or **Running** after its GCP provisioning
+   completes. Check the assigned remote peer, connection ID, lab number, DNS
+   suffix, hostname, and UDP port. The Pi and a guest health callback are not
+   required to complete this step. Before testing remote traffic, check guest
+   startup and connect the enrolled Pi with its polling service running. A lab
    number or hostname alone does not demonstrate a working tunnel.
 8. Copy the learner claim URL and join code from the lab detail page. Claim one
    test Workout, open its browser workstation, and verify that it can reach the
@@ -327,13 +333,21 @@ multiple tenants share a DNS zone. Existing allocated hostnames remain unchanged
 The public IPv4 address is ephemeral; build/start republishes its current address.
 
 Lab details show the number, effective DNS suffix, endpoint, UDP port, assigned
-remote peer, private LAN CIDR, connection ID, and separate **gateway service** and
-**remote tunnel** readiness. Gateway service
-readiness means the current boot has configured the correct peer/interface,
-listener, and forwarding policy. Tunnel readiness additionally requires a recent
-WireGuard handshake; an offline Pi does not block creating the lab. Health older
-than 120 seconds is stale. The public resolver and authenticated Pi configuration
-API refuse stopped, expired, released, or stale managed endpoints.
+remote peer, private LAN CIDR, and connection ID. Lab build/start/stop completion
+uses successful GCP VM operations together with DNS, routes, and firewall setup;
+it does not wait for guest health or a remote handshake. Ubuntu startup may still
+be configuring WireGuard after the VM becomes running.
+
+Separate **gateway service** and **remote tunnel** fields describe optional
+telemetry, not the lab lifecycle. When enabled, service health checks the current
+peer/interface, listener, and forwarding policy; tunnel health additionally checks
+a recent handshake. Reports older than 120 seconds are stale. Reporting is
+disabled by default, so missing or false telemetry does not block a built lab or
+its connection details. The public resolver and authenticated Pi configuration
+API continue to refuse stopped, expired, released, or incorrectly assigned
+endpoints, without requiring guest health reports. The Pi configuration response
+uses `gateway_ready` for this cloud lifecycle result; its `service_ready` and
+`tunnel_ready` fields remain optional, fresh telemetry.
 
 The **Connection ID** is the stable, non-secret identifier for this lab:
 `<GCP project ID>:<unit ID>`, for example `test-dev-787001:abcdefghij`. The lab
@@ -366,8 +380,9 @@ five-digit allocations are preserved until their normal lifecycle releases them.
 
 The automated reference flow in
 `common/tests/test_wireguard_build_flow.py` exercises instructor creation, remote peer
-assignment, cloud endpoint allocation, current-boot health, and authenticated Pi
-configuration with fake Firestore/Secret Manager. Additional tests cover actual
+assignment, cloud endpoint allocation, and authenticated Pi configuration with
+fake Firestore/Secret Manager, including missing guest health. Optional telemetry
+and current-boot authorization are covered separately. Additional tests cover actual
 embedded-script parsing, restricted forwarding, concurrency, lifecycle retries,
 HTTP authorization, proxy allocation, revocation, and UI forms. These are
 repeatable local tests, not a claim of a live remote LAN connection.
@@ -380,9 +395,12 @@ with updated DNS. Never attach `wg showconf`, private keys, tokens, or full secr
 payloads to issue evidence. The dependency on agreed physical remote LAN addressing and
 interfaces still applies to this hardware acceptance test.
 
-A gateway that cannot report healthy within five minutes produces an actionable
-build error. Inspect `journalctl -u google-startup-scripts -u wg-quick@wg0
--u agoge-wireguard-health` on the gateway. Check public egress, Secret Manager
-IAM, the tenant callback URL, and package installation. Pi diagnostics are in
-`journalctl -u agoge-wireguard-pi`. Resolve the error and retry; do not mark a
-gateway healthy manually.
+A failed GCP operation or cloud dependency produces a build/lifecycle error.
+Guest startup problems can be inspected independently with
+`journalctl -u google-startup-scripts -u wg-quick@wg0`; check package repository
+egress and Secret Manager IAM. Optional health callback failures, including HTTP
+404 from an older API, do not fail a build. For an existing VM that still runs
+the older reporter, `sudo systemctl disable --now agoge-wireguard-health.timer`
+stops repeated callback errors. Pi diagnostics are in
+`journalctl -u agoge-wireguard-pi`. Never mark telemetry healthy manually merely
+because GCP reports the VM running.

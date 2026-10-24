@@ -138,13 +138,18 @@ def validate(payload):
     port = config['listen_port']
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         raise ValueError('invalid_listen_port')
-    from urllib.parse import urlsplit
-    url = urlsplit(config['health_url'])
-    if url.scheme != 'https' or not url.hostname or url.username or url.password or url.fragment:
-        raise ValueError('invalid_health_url')
-    token = config['callback_token']
-    if not isinstance(token, str) or not token or len(token) > 512 or any(ord(char) < 33 or ord(char) > 126 for char in token):
-        raise ValueError('invalid_callback_token')
+    reporting = config.get('health_reporting_enabled', False)
+    if type(reporting) is not bool:
+        raise ValueError('invalid_health_reporting_flag')
+    config['health_reporting_enabled'] = reporting
+    if reporting:
+        from urllib.parse import urlsplit
+        url = urlsplit(config['health_url'])
+        if url.scheme != 'https' or not url.hostname or url.username or url.password or url.fragment:
+            raise ValueError('invalid_health_url')
+        token = config['callback_token']
+        if not isinstance(token, str) or not token or len(token) > 512 or any(ord(char) < 33 or ord(char) > 126 for char in token):
+            raise ValueError('invalid_callback_token')
     config.update(gateway_address=str(gateway), peer_address=str(peer),
                   equipment_subnet=str(equipment), student_subnets=[str(item) for item in students])
     return config
@@ -280,6 +285,8 @@ def service_ready(config):
 
 
 def report(config, error=None):
+    if not config.get('health_reporting_enabled', False):
+        return
     ready = False
     handshake = 0
     if not error:
@@ -313,6 +320,44 @@ def report(config, error=None):
     }, sort_keys=True))
 
 
+def configure_telemetry(config):
+    # Health reports are optional observations. An unavailable endpoint must
+    # never re-run network configuration or fail an otherwise successful boot.
+    try:
+        stage('telemetry_configuration')
+        if not config.get('health_reporting_enabled', False):
+            command(['systemctl', 'disable', '--now', 'agoge-wireguard-health.timer'], check=False)
+            command(['systemctl', 'stop', 'agoge-wireguard-health.service'], check=False)
+            return
+        atomic_write('/etc/systemd/system/agoge-wireguard-health.service', """[Unit]
+Description=Report Agoge WireGuard lease health
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/agoge-wireguard/agent.py report
+User=root
+UMask=0077
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=full
+""", mode=0o644)
+        atomic_write('/etc/systemd/system/agoge-wireguard-health.timer', """[Unit]
+Description=Refresh Agoge WireGuard lease health
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=30
+AccuracySec=5
+[Install]
+WantedBy=timers.target
+""", mode=0o644)
+        command(['systemctl', 'daemon-reload'])
+        command(['systemctl', 'enable', '--now', 'agoge-wireguard-health.timer'])
+        report(config)
+    except Exception as failure:
+        diagnostic(failure, context='telemetry')
+
+
 def configure(config):
     stage('config_read')
     target = Path('/etc/wireguard/wg0.conf')
@@ -332,7 +377,8 @@ def configure(config):
     # allowlist afterward and remove the guard only once every step succeeded.
     configure_forwarding(config)
     remove_boot_guard()
-    report(config)
+    print('Agoge WireGuard configuration completed.')
+    configure_telemetry(config)
 
 
 def main():
@@ -355,7 +401,7 @@ def main():
         # Captured subprocess stderr and HTTP bodies may contain credentials.
         # Emit only a bounded code and make the callback fail closed if possible.
         diagnostic(failure)
-        if config:
+        if config and config.get('health_reporting_enabled', False):
             try:
                 report(config, error='bootstrap_failed')
             except Exception as callback_failure:
@@ -391,6 +437,10 @@ cat > /usr/local/lib/agoge-wireguard/agent.py <<'AGOGE_WIREGUARD_AGENT'
 {agent}
 AGOGE_WIREGUARD_AGENT
 chmod 0700 /usr/local/lib/agoge-wireguard/agent.py
+# Retire a reporter left by an older bootstrap before installing packages.
+# No health service is installed or enabled unless the secret explicitly opts in.
+systemctl disable --now agoge-wireguard-health.timer >/dev/null 2>&1 || true
+systemctl stop agoge-wireguard-health.service >/dev/null 2>&1 || true
 # apt can race Ubuntu's first-boot updates. Bound retries and lock acquisition.
 for attempt in 1 2 3 4 5; do
     if apt-get -o DPkg::Lock::Timeout=60 update -qq && apt-get -o DPkg::Lock::Timeout=60 install -y -qq python3 wireguard iptables; then
@@ -407,33 +457,7 @@ cat > /etc/systemd/system/wg-quick@wg0.service.d/agoge-guard.conf <<'AGOGE_BOOT_
 [Service]
 ExecStartPre=/usr/bin/python3 /usr/local/lib/agoge-wireguard/agent.py guard
 AGOGE_BOOT_GUARD
-cat > /etc/systemd/system/agoge-wireguard-health.service <<'AGOGE_HEALTH_SERVICE'
-[Unit]
-Description=Report Agoge WireGuard lease health
-After=network-online.target wg-quick@wg0.service
-Wants=network-online.target
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/python3 /usr/local/lib/agoge-wireguard/agent.py report
-User=root
-UMask=0077
-NoNewPrivileges=true
-ProtectHome=true
-ProtectSystem=full
-AGOGE_HEALTH_SERVICE
-cat > /etc/systemd/system/agoge-wireguard-health.timer <<'AGOGE_HEALTH_TIMER'
-[Unit]
-Description=Refresh Agoge WireGuard lease health
-[Timer]
-OnBootSec=30
-OnUnitActiveSec=30
-AccuracySec=5
-[Install]
-WantedBy=timers.target
-AGOGE_HEALTH_TIMER
 systemctl daemon-reload
-# Enable reports even if configuration fails, so an operator sees unready health.
-systemctl enable --now agoge-wireguard-health.timer
 for attempt in 1 2 3 4 5; do
     if /usr/bin/python3 /usr/local/lib/agoge-wireguard/agent.py configure; then
         exit 0

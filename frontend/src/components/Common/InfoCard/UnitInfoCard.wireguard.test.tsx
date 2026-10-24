@@ -32,7 +32,8 @@ describe("instructor remote lab connection details", () => {
             equipment_subnet: "172.30.0.0/24", student_subnets: [], service_ready: true,
             tunnel_ready: true, health_timestamp: Date.now() / 1000, status: "reserved"}}} />);
         expect(screen.getByText("test-dev-787001:abcdefghij")).toBeInTheDocument();
-        expect(screen.getByText("Remote tunnel not connected")).toBeInTheDocument();
+        expect(screen.getByText("Gateway unavailable")).toBeInTheDocument();
+        expect(screen.getByText("Remote tunnel status unknown")).toBeInTheDocument();
     });
 
     it("does not use the recycled gateway number as a substitute connection ID", () => {

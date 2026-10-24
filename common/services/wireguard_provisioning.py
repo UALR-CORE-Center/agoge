@@ -8,12 +8,14 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import re
 import secrets
 import time
 from urllib.parse import urlsplit
 
 from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections
+from common.constants.states import UnitStates
 from common.exceptions import BadRequest, Conflict, NotFound, NotReady, Unauthorized
 from common.models.wireguard_provisioning import (
     WireGuardHealthReport, WireGuardKitCreate, WireGuardKitModel, WireGuardLeaseModel,
@@ -30,6 +32,25 @@ def resolve_remote_peer_id(data: dict) -> str:
     if not isinstance(identifier, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,39}', identifier):
         raise BadRequest('Select a registered remote peer for this WireGuard Lab')
     return identifier
+
+
+def gateway_lifecycle_ready(lease, unit, unit_id, endpoint_id, now):
+    """Confirm an active GCP lifecycle without requiring optional guest telemetry.
+
+    The caller separately verifies that the authoritative endpoint is active and
+    owned by this Unit. A stopped or incomplete Unit must never become usable
+    merely because a delayed guest health report says its interface is healthy.
+    """
+    def future(timestamp):
+        return (type(timestamp) in (int, float) and math.isfinite(timestamp)
+                and timestamp > now)
+
+    return bool(
+        lease.unit_id == unit_id and lease.endpoint_id == endpoint_id
+        and lease.status == 'reserved' and future(lease.expires)
+        and unit and unit.get('state') in (UnitStates.READY.value, UnitStates.RUNNING.value)
+        and future((unit.get('workspace_settings') or {}).get('expires'))
+    )
 
 
 class WireGuardSecretStore:
@@ -260,14 +281,18 @@ class WireGuardProvisioningService:
         if not expires or expires <= self.clock():
             raise BadRequest('A future lab expiration is required')
         private_key, public_key = self._new_gateway_keys()
-        callback_token = secrets.token_urlsafe(48)
+        health_reporting = self.env_dict.get('wireguard_health_reporting_enabled', False)
+        if type(health_reporting) is not bool:
+            raise BadRequest('wireguard_health_reporting_enabled must be a boolean')
         payload = {
             'unit_id': unit.id, 'private_key': private_key, 'gateway_public_key': public_key,
             'peer_public_key': kit.peer_public_key, 'gateway_address': '10.254.254.1/30',
             'peer_address': '10.254.254.2/32', 'equipment_subnet': kit.equipment_subnet,
             'student_subnets': subnets, 'listen_port': unit.wireguard_endpoint.port,
-            'callback_token': callback_token, 'health_url': self._health_url(unit.id),
+            'health_reporting_enabled': health_reporting,
         }
+        if health_reporting:
+            payload.update(callback_token=secrets.token_urlsafe(48), health_url=self._health_url(unit.id))
         # Secret creation is idempotent; private material is never committed to Firestore.
         payload = self.secret_store.ensure(unit.id, payload)
         if any(payload.get(key) != expected for key, expected in (
@@ -302,7 +327,11 @@ class WireGuardProvisioningService:
                 if stored.status == 'released' or stored.kit_id != kit.id:
                     raise Conflict('This lab already has a different or released remote peer lease')
                 return stored
-            transaction.set(lease_doc, {**lease.model_dump(), 'callback_token_digest': self._digest(payload['callback_token'])})
+            record = lease.model_dump()
+            callback_token = payload.get('callback_token')
+            if isinstance(callback_token, str) and callback_token:
+                record['callback_token_digest'] = self._digest(callback_token)
+            transaction.set(lease_doc, record)
             transaction.set(kit_doc, {'assigned_unit_id': unit.id}, merge=True)
             return lease
         claimed = self.db.transaction(claim)
@@ -362,7 +391,9 @@ class WireGuardProvisioningService:
             if not snapshot.exists:
                 raise Unauthorized('Invalid gateway credentials')
             lease = snapshot.to_dict()
-            if not bearer_token or not hmac.compare_digest(self._digest(bearer_token), lease.get('callback_token_digest', '')):
+            digest = lease.get('callback_token_digest')
+            if (not bearer_token or not isinstance(digest, str) or not digest
+                    or not hmac.compare_digest(self._digest(bearer_token), digest)):
                 raise Unauthorized('Invalid gateway credentials')
             endpoint = self._doc(endpoint_collection, lease['endpoint_id']).get(transaction=transaction)
             endpoint = endpoint.to_dict() if endpoint.exists else {}
@@ -391,13 +422,15 @@ class WireGuardProvisioningService:
         if not kit.get('enabled') or not kit.get('assigned_unit_id'):
             raise NotReady('This remote peer has no active lab assignment')
         lease = self.get_lease(kit['assigned_unit_id'])
-        endpoint = self.db.get(collection_name=DbCollections.WIREGUARD_ENDPOINT, doc_id=lease.endpoint_id)
+        endpoint = self.db.get(collection_name=DbCollections.WIREGUARD_ENDPOINT, doc_id=lease.endpoint_id) or {}
         unit = self.db.get(collection_name=DbCollections.UNIT, doc_id=lease.unit_id)
         now = self.clock()
-        if (lease.kit_id != kit_id or not lease.is_ready(now) or not unit
-                or endpoint.get('unit_id') != lease.unit_id or endpoint.get('status') != 'active'
-                or (unit.get('workspace_settings') or {}).get('expires', 0) <= now):
+        if (lease.kit_id != kit_id or lease.unit_id != kit['assigned_unit_id']
+                or lease.device_id != kit.get('device_id') or lease.peer_public_key != kit.get('peer_public_key')
+                or not gateway_lifecycle_ready(lease, unit, lease.unit_id, lease.endpoint_id, now)
+                or endpoint.get('unit_id') != lease.unit_id or endpoint.get('status') != 'active'):
             raise NotReady('The assigned gateway is stopped, expired, or not ready')
+        telemetry_ready = lease.is_ready(now)
         return {
             'unit_id': lease.unit_id, 'kit_id': kit_id, 'device_id': lease.device_id,
             'endpoint_id': lease.endpoint_id, 'hostname': endpoint['hostname'], 'port': endpoint['port'],
@@ -405,7 +438,9 @@ class WireGuardProvisioningService:
             'gateway_address': lease.gateway_address, 'peer_address': lease.peer_address,
             'equipment_subnet': lease.equipment_subnet, 'student_subnets': lease.student_subnets,
             'allowed_ips': [*lease.student_subnets, str(ipaddress.ip_interface(lease.gateway_address).ip) + '/32'],
-            'service_ready': True, 'tunnel_ready': lease.tunnel_ready,
+            'gateway_ready': True,
+            'service_ready': telemetry_ready,
+            'tunnel_ready': bool(telemetry_ready and lease.tunnel_ready),
         }
 
     def release(self, unit_id):

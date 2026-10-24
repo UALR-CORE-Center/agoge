@@ -30,7 +30,30 @@ describe("remote lab telemetry", () => {
         render(<WireGuardLabStatus endpoint={endpoint} lease={{...lease, health_timestamp: Date.now() / 1000 - 121}} />);
         expect(screen.getByText("legacy-peer")).toBeInTheDocument();
         expect(screen.getByText("Remote LAN: 172.30.0.0/24")).toBeInTheDocument();
-        expect(screen.getByText("Gateway service not ready")).toBeInTheDocument();
-        expect(screen.getByText("Remote tunnel not connected")).toBeInTheDocument();
+        expect(screen.getByText("Gateway running")).toBeInTheDocument();
+        expect(screen.getByText("Gateway service status unknown")).toBeInTheDocument();
+        expect(screen.getByText("Remote tunnel status unknown")).toBeInTheDocument();
+        expect(screen.queryByText(/Wait for gateway configuration/)).not.toBeInTheDocument();
+    });
+
+    it("shows a running gateway without any guest callback or peer handshake", () => {
+        render(<WireGuardLabStatus endpoint={endpoint} lease={{...lease, service_ready: false,
+            tunnel_ready: false, health_timestamp: null, latest_handshake: 0}} />);
+        expect(screen.getByText("Gateway running")).toBeInTheDocument();
+        expect(screen.getByText("Gateway service status unknown")).toBeInTheDocument();
+        expect(screen.getByText("Remote tunnel status unknown")).toBeInTheDocument();
+        expect(screen.getByText(/remote peer connection is optional for lab completion/)).toBeInTheDocument();
+        expect(screen.queryByText("Gateway service not ready")).not.toBeInTheDocument();
+    });
+
+    it.each([
+        {endpoint: {...endpoint, status: "reserved"}, lease},
+        {endpoint, lease: {...lease, status: "released"}},
+        {endpoint, lease: {...lease, expires: Date.now() / 1000 - 1}},
+    ])("does not show inactive gateways as running despite a recent health report", value => {
+        render(<WireGuardLabStatus endpoint={value.endpoint} lease={value.lease as WireGuardLease} />);
+        expect(screen.getByText("Gateway unavailable")).toBeInTheDocument();
+        expect(screen.queryByText("Gateway running")).not.toBeInTheDocument();
+        expect(screen.queryByText("Remote tunnel connected")).not.toBeInTheDocument();
     });
 });

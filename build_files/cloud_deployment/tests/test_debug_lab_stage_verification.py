@@ -79,12 +79,29 @@ def test_stage_checks_real_firestore_queries_and_all_expected_records(persisted,
     status = persisted.backend._verify_lab_stage(persisted.unit_id, stage)
 
     assert status['unit_id'] == persisted.unit_id
+    assert status['wireguard']['health_required_for_build'] is False
     assert {row['workout_id'] for row in status['workouts']} == {persisted.workout_id}
     assert set(persisted.queries) == {
         (DbCollections.WORKOUT.value, 'parent_id', '==', persisted.unit_id),
         (DbCollections.SERVER.value, 'parent_id', '==', persisted.unit_id),
         (DbCollections.SERVER.value, 'parent_id', '==', persisted.workout_id),
     }
+
+
+@pytest.mark.parametrize('stage', ['build', 'start', 'stop'])
+@pytest.mark.parametrize('telemetry', [
+    {},
+    {'service_ready': False, 'tunnel_ready': False, 'health_timestamp': None},
+    {'service_ready': False, 'health_timestamp': 1, 'health_error': 'bootstrap_failed'},
+])
+def test_completed_cloud_lifecycle_does_not_require_guest_telemetry(persisted, stage, telemetry):
+    complete_stage(persisted, stage)
+    persisted.records[DbCollections.WIREGUARD_LEASE.value][persisted.unit_id] = telemetry
+
+    status = persisted.backend._verify_lab_stage(persisted.unit_id, stage)
+
+    assert status['unit_id'] == persisted.unit_id
+    assert status['wireguard']['health_required_for_build'] is False
 
 
 @pytest.mark.parametrize('stage', ['build', 'start', 'stop'])

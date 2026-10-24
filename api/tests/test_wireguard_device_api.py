@@ -1,5 +1,6 @@
 """HTTP authentication boundaries without loading the deployed app or cloud clients."""
 import base64
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from common.exceptions import BadRequest, NotFound, NotReady, Unauthorized
+from common.constants.states import UnitStates
 from common.models.wireguard import WireGuardEndpointRecordModel
 from dependencies import admin_required, get_cloud_env, teacher_required
 from routers import wireguard
@@ -27,6 +29,8 @@ def http(monkeypatch):
     app.dependency_overrides[get_cloud_env] = lambda: {'project': 'test-project'}
     service = MagicMock()
     registry = MagicMock()
+    registry.db.get.return_value = {'state': UnitStates.READY.value,
+                                    'workspace_settings': {'expires': time.time() + 3600}}
     monkeypatch.setattr(wireguard, 'WireGuardProvisioningService', lambda *a, **k: service)
     monkeypatch.setattr(wireguard, 'WireGuardEndpointRegistry', lambda *a, **k: registry)
     def instructor_auth():
@@ -42,6 +46,14 @@ def endpoint():
     return WireGuardEndpointRecordModel(id='10000', hostname='wg10000.example.edu.',
         server_name='abcdefghij-wireguard', unit_id='abcdefghij', status='active',
         created_timestamp=10, updated_timestamp=20)
+
+
+def lifecycle_lease(**updates):
+    return SimpleNamespace(**{
+        'unit_id': 'abcdefghij', 'endpoint_id': '10000', 'status': 'reserved',
+        'expires': time.time() + 3600, 'service_ready': False, 'tunnel_ready': False,
+        'health_timestamp': None, **updates,
+    })
 
 
 def enrollment():
@@ -129,9 +141,12 @@ def test_health_rejects_unstructured_error_output(http):
     http.service.report_health.assert_not_called()
 
 
-def test_public_resolver_never_returns_stale_managed_readiness(http):
+@pytest.mark.parametrize('changes', [
+    {'status': 'released'}, {'expires': 1}, {'unit_id': 'klmnopqrst'}, {'endpoint_id': '10001'},
+])
+def test_public_resolver_rejects_inactive_or_mismatched_managed_leases(http, changes):
     http.registry.get.return_value = endpoint()
-    http.service.get_lease.return_value = SimpleNamespace(is_ready=lambda now: False)
+    http.service.get_lease.return_value = lifecycle_lease(**changes)
     response = http.client.get('/wireguard/endpoints/10000/')
     assert response.status_code == 404
     assert response.headers['cache-control'] == 'no-store'
@@ -140,11 +155,27 @@ def test_public_resolver_never_returns_stale_managed_readiness(http):
 
 def test_public_ready_resolver_is_not_cached_and_exposes_no_private_record(http):
     http.registry.get.return_value = endpoint()
-    http.service.get_lease.return_value = SimpleNamespace(is_ready=lambda now: True)
+    http.service.get_lease.return_value = lifecycle_lease()
     response = http.client.get('/wireguard/endpoints/10000/')
     assert response.status_code == 200
     assert response.headers['cache-control'] == 'no-store'
     assert set(response.json()['data']) == {'id', 'hostname', 'port', 'status'}
+
+
+@pytest.mark.parametrize('state', [UnitStates.STARTING.value, UnitStates.STOPPING.value,
+    UnitStates.BROKEN.value, UnitStates.EXPIRED.value, UnitStates.DELETED.value])
+def test_public_managed_resolver_rejects_inactive_unit_even_with_guest_health(http, state):
+    http.registry.get.return_value = endpoint()
+    http.service.get_lease.return_value = lifecycle_lease(service_ready=True, health_timestamp=time.time())
+    http.registry.db.get.return_value['state'] = state
+    assert http.client.get('/wireguard/endpoints/10000/').status_code == 404
+
+
+def test_public_managed_resolver_rejects_missing_unit_without_querying_guest(http):
+    http.registry.get.return_value = endpoint()
+    http.service.get_lease.return_value = lifecycle_lease()
+    http.registry.db.get.return_value = None
+    assert http.client.get('/wireguard/endpoints/10000/').status_code == 404
 
 
 def test_legacy_unmanaged_resolver_remains_compatible(http):

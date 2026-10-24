@@ -464,8 +464,9 @@ class CommunityUnit(BaseUnit):
             from common.services.wireguard_provisioning import WireGuardProvisioningService
 
             lease = WireGuardProvisioningService(self.env_dict, db=self.db).get_lease(self.unit_id)
-            if not lease.is_ready(time.time()):
-                raise ValueError('WireGuard gateway service has not reported a healthy current boot')
+            if (lease.status != 'reserved' or not math.isfinite(lease.expires) or lease.expires <= time.time()
+                    or lease.unit_id != self.unit_id or lease.endpoint_id != endpoint.id):
+                raise ValueError('The WireGuard lab lease is expired, released, or no longer owns this endpoint')
         WireGuardEndpointRegistry(
             env_dict=self.env_dict,
             db=self.db,

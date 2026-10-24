@@ -29,8 +29,6 @@ from common.utilities.wireguard_firewall import has_public_wireguard_ingress
 
 
 class LabServerManager(BaseComputeManager):
-    _WIREGUARD_READY_ATTEMPTS = 60
-    _WIREGUARD_READY_SECONDS = 5
     # BUILD must never resurrect a VM that an older lifecycle already stopped
     # or retired. START is valid from STOPPED, but not while teardown is in
     # progress or after the server reached a terminal state.
@@ -124,8 +122,9 @@ class LabServerManager(BaseComputeManager):
             self._stage_wireguard_endpoint()
             self._ensure_dns_record()
             self._build_routes()
-            if self._managed_wireguard():
-                self._wait_for_wireguard_service()
+            # Compute Engine completion and the cloud dependencies determine
+            # lifecycle success. Guest telemetry and peer handshakes can arrive
+            # later and must not keep a successfully created lab in BUILDING.
             # Keep a freshly built gateway unpublished until its parent Unit has
             # installed the ingress firewall rules. The Unit promotes it to
             # active only after that final dependency succeeds.
@@ -168,8 +167,6 @@ class LabServerManager(BaseComputeManager):
                 # intentionally skips WireGuard DNS so this check happens first.
                 self._stage_wireguard_endpoint()
                 self._ensure_dns_record()
-                if self._managed_wireguard():
-                    self._wait_for_wireguard_service()
                 self._activate_wireguard_endpoint()
                 if managed_started:
                     self.state_manager.state_transition(self.s.RUNNING)
@@ -512,8 +509,9 @@ class LabServerManager(BaseComputeManager):
                 )
             if self._managed_wireguard():
                 lease = self._wireguard_provisioning().get_lease(self.parent_build_id)
-                if not lease.is_ready(time.time()):
-                    raise BadRequest('WireGuard guest service is not ready; inspect its bootstrap status')
+                if (lease.status != 'reserved' or not math.isfinite(lease.expires) or lease.expires <= time.time()
+                        or lease.unit_id != self.parent_build_id or lease.endpoint_id != endpoint_id):
+                    raise BadRequest('The WireGuard lab lease is expired, released, or no longer owns this endpoint')
             self.wireguard_registry.activate(
                 endpoint_id,
                 unit_id=self.parent_build_id,
@@ -613,7 +611,8 @@ class LabServerManager(BaseComputeManager):
     def _prepare_wireguard_bootstrap(self, for_start: bool = False) -> None:
         service = self._wireguard_provisioning()
         lease = service.get_lease(self.parent_build_id)
-        if lease.status == 'released' or lease.expires <= time.time():
+        if (lease.status != 'reserved' or not math.isfinite(lease.expires) or lease.expires <= time.time()
+                or lease.unit_id != self.parent_build_id or lease.endpoint_id != self._wireguard_endpoint_id()):
             raise BadRequest('The WireGuard lab lease is expired or released')
         identity = WireGuardGatewayIdentity(self.env.project)
         email = identity.ensure(self.parent_build_id)
@@ -677,82 +676,3 @@ class LabServerManager(BaseComputeManager):
                     self.primary_external_ip = address
                     return
         raise BaseAgogeException('The WireGuard gateway has no public IPv4 address')
-
-    def _wait_for_wireguard_service(self) -> None:
-        service = self._wireguard_provisioning()
-        started = time.monotonic()
-        timeout_seconds = self._WIREGUARD_READY_ATTEMPTS * self._WIREGUARD_READY_SECONDS
-        max_attempts = self._WIREGUARD_READY_ATTEMPTS
-        # The CLI runs the worker in its own process, outside the deployed
-        # function's execution deadline. Keep its longer startup grace transient
-        # rather than saving a timeout that could exceed that deadline in GCP.
-        local_timeout = (getattr(self, 'env_dict', None) or {}).get(
-            '_local_debug_wireguard_startup_timeout_seconds')
-        if local_timeout is not None:
-            if type(local_timeout) is not int or not 60 <= local_timeout <= 3600:
-                raise BadRequest('Local gateway startup timeout must be an integer from 60 to 3600 seconds')
-            timeout_seconds = local_timeout
-            # Include a final check at the deadline after a full startup grace.
-            max_attempts = math.ceil(timeout_seconds / self._WIREGUARD_READY_SECONDS) + 1
-        deadline = started + timeout_seconds
-        common = {'unit_id': self.parent_build_id, 'server': self.server_name,
-                  'max_attempts': max_attempts, 'timeout_seconds': timeout_seconds}
-        self.logger.info(
-            'Waiting for a fresh WireGuard gateway service health report; '
-            'a remote-peer handshake is not required for this step.',
-            **common, attempt=0, elapsed_seconds=0, status='waiting_for_guest_health')
-        progress = {}
-        for attempt in range(max_attempts):
-            lease = service.get_lease(self.parent_build_id)
-            now = time.time()
-            timestamp = getattr(lease, 'health_timestamp', None)
-            valid_timestamp = (isinstance(timestamp, (int, float)) and not isinstance(timestamp, bool)
-                               and math.isfinite(timestamp))
-            age = round(now - timestamp, 1) if valid_timestamp else None
-            expires = getattr(lease, 'expires', None)
-            if getattr(lease, 'status', None) == 'released':
-                status = 'lease_released'
-            elif isinstance(expires, (int, float)) and expires <= now:
-                status = 'lease_expired'
-            elif timestamp is None:
-                status = 'awaiting_first_health_report'
-            elif not valid_timestamp:
-                status = 'invalid_health_timestamp'
-            elif age < 0:
-                status = 'health_timestamp_in_future'
-            elif age > 120:
-                status = 'stale_health_report'
-            elif not getattr(lease, 'service_ready', False):
-                status = 'gateway_service_unready'
-            else:
-                status = 'waiting_for_guest_health'
-            error = getattr(lease, 'health_error', None)
-            # Guest code emits only these predefined codes. Never log arbitrary
-            # callback text or a whole lease containing internal secret fields.
-            if error in ('wireguard_service_unready', 'bootstrap_failed'):
-                safe_error = error
-            else:
-                safe_error = 'other_error' if error else None
-            progress = {**common, 'attempt': attempt + 1,
-                        'elapsed_seconds': round(time.monotonic() - started, 1), 'status': status,
-                        'service_ready': bool(getattr(lease, 'service_ready', False)),
-                        'tunnel_ready': bool(getattr(lease, 'tunnel_ready', False)),
-                        'health_age_seconds': age, 'health_error': safe_error}
-            if lease.is_ready(now):
-                self.logger.info('WireGuard gateway service is ready.', **{**progress, 'status': 'ready'})
-                return
-            if attempt % 6 == 0:
-                self.logger.info('Still waiting for WireGuard gateway service health.', **progress)
-            if attempt + 1 < max_attempts:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                time.sleep(min(self._WIREGUARD_READY_SECONDS, remaining))
-        self.logger.warning('WireGuard gateway service health wait timed out.', **progress)
-        raise TimeoutError(
-            f'WireGuard gateway {self.server_name} did not report a healthy service within {timeout_seconds} seconds. '
-            'A remote-peer connection is not required. '
-            f'Inspect debug_lab.py status --unit-id {self.parent_build_id} and the configured HTTPS health endpoint. '
-            'Check outbound Ubuntu package/Secret Manager/API access and '
-            'journalctl -u google-startup-scripts -u wg-quick@wg0 -u agoge-wireguard-health.'
-        )

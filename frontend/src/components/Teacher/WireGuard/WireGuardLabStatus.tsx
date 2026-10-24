@@ -9,18 +9,22 @@ export const WireGuardLabStatus: React.FC<{endpoint: WireGuardEndpoint; lease?: 
         <Typography variant="subtitle2">Remote lab telemetry</Typography>
         <Typography variant="body2">DNS suffix: {wireGuardDnsSuffix(endpoint.hostname)}</Typography>
         <Typography variant="body2">UDP port: {endpoint.port}</Typography>
+        <Chip sx={{mt: 1}} label={ready.available ? "Gateway running" : "Gateway unavailable"}
+            color={ready.available ? "success" : "default"} size="small" />
         {lease ? <>
             <Typography sx={{mt: 1}}>Remote peer: <strong>{lease.remote_peer_id || lease.kit_id}</strong> ({lease.device_id})</Typography>
             <Typography variant="body2">Remote LAN: {lease.remote_network_cidr || lease.equipment_subnet}</Typography>
             <Typography variant="body2">Student networks: {lease.student_subnets.join(", ")}</Typography>
             <Typography variant="body2">Tunnel addresses: gateway {lease.gateway_address}, remote peer {lease.peer_address}</Typography>
             <Stack direction="row" sx={{my: 1, gap: 1, flexWrap: "wrap"}}>
-                <Chip label={ready.service ? "Gateway service ready" : "Gateway service not ready"}
+                <Chip label={!ready.telemetry ? "Gateway service status unknown"
+                    : ready.service ? "Gateway service ready" : "Gateway service not ready"}
                     color={ready.service ? "success" : "default"} size="small" />
-                <Chip label={ready.tunnel ? "Remote tunnel connected" : "Remote tunnel not connected"}
+                <Chip label={!ready.telemetry ? "Remote tunnel status unknown"
+                    : ready.tunnel ? "Remote tunnel connected" : "Remote tunnel not connected"}
                     color={ready.tunnel ? "success" : "default"} size="small" />
             </Stack>
-            {lease.health_error && <Alert severity="error" sx={{my: 1}}>{lease.health_error}</Alert>}
+            {lease.health_error && <Alert severity="warning" sx={{my: 1}}>Gateway telemetry: {lease.health_error}</Alert>}
             {lease.health_timestamp && <Typography variant="body2">
                 Last gateway report: {new Date(lease.health_timestamp * 1000).toLocaleString()}{!ready.fresh ? " (stale)" : ""}
             </Typography>}
@@ -28,9 +32,13 @@ export const WireGuardLabStatus: React.FC<{endpoint: WireGuardEndpoint; lease?: 
                 Last remote peer handshake: {new Date(lease.latest_handshake * 1000).toLocaleString()}
             </Typography>}
             <Typography variant="body2">
-                {ready.service && !ready.tunnel
+                {!ready.available
+                    ? "The gateway endpoint is unavailable. Check the lab lifecycle status."
+                    : !ready.telemetry
+                    ? "The gateway is running. Service and tunnel telemetry have not been reported recently. A remote peer connection is optional for lab completion."
+                    : ready.service && !ready.tunnel
                     ? "The gateway is configured. Check that the registered remote peer is online and its WireGuard client is running."
-                    : !ready.service ? "Wait for gateway configuration to finish. If it remains unavailable, check the reported build error and gateway startup logs."
+                    : !ready.service ? "The gateway reports a service configuration issue. Inspect its startup logs; service telemetry does not determine lab completion."
                     : "The gateway reports a recent authenticated WireGuard handshake with the selected remote peer."}
             </Typography>
         </> : <Typography variant="body2" sx={{mt: 1}}>

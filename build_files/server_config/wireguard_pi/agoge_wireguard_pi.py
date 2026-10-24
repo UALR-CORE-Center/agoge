@@ -142,7 +142,10 @@ def ipv4_network(value):
 
 def validate_configuration(data, kit_id, public_key):
     """Accept only the enrolled key and explicitly scoped current lease."""
-    if data.get("kit_id") != kit_id or data.get("service_ready") is not True:
+    # Current APIs confirm the GCP lifecycle separately from optional guest
+    # health. Retain the legacy flag only for an older API that lacks this field.
+    gateway_ready = data.get("gateway_ready", data.get("service_ready"))
+    if data.get("kit_id") != kit_id or gateway_ready is not True:
         raise ConfigurationUnavailable("The kit has no ready authorized gateway")
     if not hmac.compare_digest(validate_key(data.get("peer_public_key")), public_key):
         raise ConfigurationUnavailable("The enrolled public key does not match this Pi")

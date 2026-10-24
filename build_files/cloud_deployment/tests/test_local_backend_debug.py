@@ -189,13 +189,13 @@ def test_invalid_gateway_timeout_profile_values_fail_before_cloud_access(monkeyp
     load.assert_not_called()
 
 
-def test_local_default_timeout_is_transient_and_reaches_worker_without_mutating_source(local):
+def test_local_worker_does_not_receive_obsolete_health_timeout_or_mutate_source(local):
     before = dict(local.env)
     local.backend.dispatch({'build_id': 'abcdefghij'})
     attrs, env = local.worker.call_args.args
     assert attrs == {'build_id': 'abcdefghij'}
     assert env is local.backend.env_dict and env is not local.env
-    assert env['_local_debug_wireguard_startup_timeout_seconds'] == 900
+    assert '_local_debug_wireguard_startup_timeout_seconds' not in env
     assert local.env == before
     assert '_local_debug_wireguard_startup_timeout_seconds' not in local.env
 
@@ -211,10 +211,10 @@ def test_main_passes_selected_timeout_into_backend_before_dispatch(local, monkey
     load.assert_called_once_with(cli.TEST_PROJECT, None, gateway_startup_timeout_seconds=1800)
 
 
-def test_direct_backend_accepts_timeout_without_changing_source_environment(local):
+def test_direct_backend_accepts_but_ignores_legacy_timeout_without_changing_source_environment(local):
     backend = cli.LocalBackend(local.env, local.db, Mock(), Mock(), Mock(),
                                gateway_startup_timeout_seconds=1800)
-    assert backend.env_dict['_local_debug_wireguard_startup_timeout_seconds'] == 1800
+    assert '_local_debug_wireguard_startup_timeout_seconds' not in backend.env_dict
     assert '_local_debug_wireguard_startup_timeout_seconds' not in local.env
 
 
@@ -581,7 +581,7 @@ def test_bootstrap_pins_default_and_explicit_projects_without_editing_environmen
     assert database.call_args.kwargs['project_id'] == cli.TEST_PROJECT
     assert database.call_args.kwargs['database_name'] == 'agoge-v1'
     assert backend.env_dict['wireguard_api_url'] == 'https://debug.example.edu'
-    assert backend.env_dict['_local_debug_wireguard_startup_timeout_seconds'] == 900
+    assert '_local_debug_wireguard_startup_timeout_seconds' not in backend.env_dict
     assert 'wireguard_api_url' not in local.env
     assert '_local_debug_wireguard_startup_timeout_seconds' not in local.env
 

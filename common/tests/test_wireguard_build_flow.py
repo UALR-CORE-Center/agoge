@@ -8,6 +8,7 @@ from google.api_core.exceptions import NotFound as GoogleNotFound
 from google.cloud.compute_v1 import Image
 
 from common.constants.database import DbCollections
+from common.constants.states import UnitStates
 from common.exceptions import BadRequest, Unauthorized
 from common.models.users import AgogeUser
 from common.services.wireguard_endpoint import WireGuardEndpointRegistry
@@ -65,18 +66,20 @@ def test_reference_instructor_to_gateway_to_pi_flow(flow):
     assert built['wireguard_endpoint']['hostname'].startswith('wg10000.agoge-test.')
     boot = flow.service.prepare_boot(identifier)
     secret = flow.secrets.payloads[identifier]
-    flow.service.report_health(identifier, secret['callback_token'], {
-        'boot_id': boot, 'service_ready': True, 'tunnel_ready': False})
+    assert secret['health_reporting_enabled'] is False
+    assert 'callback_token' not in secret and 'health_url' not in secret
     flow.registry.stage('10000', identifier, '203.0.113.10')
     flow.registry.activate('10000', identifier, '203.0.113.10')
+    built['state'] = UnitStates.READY.value
     config = flow.service.pi_configuration('kit-one', flow.enrollment['enrollment_token'])
     assert config['unit_id'] == identifier
     assert config['gateway_public_key'] == secret['gateway_public_key']
     assert config['allowed_ips'] == ['10.20.0.0/24', '10.254.254.1/32']
     assert not config['tunnel_ready']
+    assert config['gateway_ready'] and not config['service_ready']
     assert 'private_key' not in config
     script = render_wireguard_startup(flow.service.get_lease(identifier).secret_version_name, boot)
-    assert secret['private_key'] not in script and secret['callback_token'] not in script
+    assert secret['private_key'] not in script
     assert secret['private_key'] not in str(flow.db.collections)
 
 

@@ -58,10 +58,10 @@ class LocalBackend:
                  gateway_startup_timeout_seconds=DEFAULT_GATEWAY_STARTUP_TIMEOUT_SECONDS):
         if env_dict.get('project') != TEST_PROJECT:
             raise ValueError(f'Local debug builds require project {TEST_PROJECT}')
-        timeout = _gateway_startup_timeout(gateway_startup_timeout_seconds)
-        # This override belongs only to the local process. Never mutate the
-        # environment loaded from Firestore or persist a longer deployed wait.
-        self.env_dict = {**env_dict, '_local_debug_wireguard_startup_timeout_seconds': timeout}
+        # Older profiles/automation may still pass this setting. Guest health
+        # no longer gates the lifecycle, so there is no readiness wait to tune.
+        self.env_dict = dict(env_dict)
+        self.env_dict.pop('_local_debug_wireguard_startup_timeout_seconds', None)
         self.db = db
         self.unit_class, self.workout_class, self.users_class = unit_class, workout_class, users_class
         self.worker = worker
@@ -515,6 +515,7 @@ class LocalBackend:
                 'endpoint': {key: endpoint.get(key) for key in ('hostname', 'port', 'status')},
                 'wireguard': {'remote_peer_id': lease.get('remote_peer_id') or lease.get('kit_id'),
                               'remote_network_cidr': lease.get('remote_network_cidr') or lease.get('equipment_subnet'),
+                              'health_required_for_build': False,
                               'health_age_seconds': health_age, 'health_error': health_error,
                               **{key: lease.get(key) for key in
                                  ('status', 'service_ready', 'tunnel_ready', 'health_timestamp', 'latest_handshake')}},
@@ -734,7 +735,7 @@ def parser():
     result.add_argument('--project', default=argparse.SUPPRESS, choices=[TEST_PROJECT])
     result.add_argument('--wireguard-api-url', type=_https_url, default=argparse.SUPPRESS,
                         help='HTTPS callback base for a new lab; defaults to the project API')
-    timeout_help = 'Local gateway service startup wait in seconds, 60–3600 (default: 900); no peer handshake required'
+    timeout_help = 'Deprecated and ignored; GCP operations determine completion without guest health polling'
     result.add_argument('--gateway-startup-timeout-seconds', type=_gateway_startup_timeout,
                         default=argparse.SUPPRESS, help=timeout_help)
     commands = result.add_subparsers(dest='command', required=True)

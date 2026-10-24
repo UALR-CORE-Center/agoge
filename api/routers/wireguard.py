@@ -3,12 +3,13 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Response, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import ValidationError
 
+from common.constants.database import DbCollections
 from common.exceptions import BadRequest, Conflict, NotFound, NotReady, Unauthorized
 from common.models.response import AgogeResponse
 from common.models.wireguard import WireGuardPublicEndpointModel
 from common.models.wireguard_provisioning import WireGuardHealthReport, WireGuardKitCreate, WireGuardRemotePeerCreate
 from common.services.wireguard_endpoint import WireGuardEndpointRegistry
-from common.services.wireguard_provisioning import WireGuardProvisioningService
+from common.services.wireguard_provisioning import WireGuardProvisioningService, gateway_lifecycle_ready
 from dependencies import get_cloud_env, teacher_required, admin_required
 
 
@@ -42,8 +43,10 @@ async def resolve_wireguard_endpoint(
             lease = provisioning.get_lease(record.unit_id)
         except NotFound:
             lease = None  # Existing explicitly unmanaged gateway compatibility.
-        if lease and not lease.is_ready(time.time()):
-            raise NotFound('WireGuard endpoint is not ready')
+        if lease:
+            unit = registry.db.get(collection_name=DbCollections.UNIT, doc_id=record.unit_id)
+            if not gateway_lifecycle_ready(lease, unit, record.unit_id, record.id, time.time()):
+                raise NotFound('WireGuard endpoint is not ready')
         # Never cache readiness: a stopped/revoked gateway must disappear at once.
         response.headers['Cache-Control'] = 'no-store'
         return AgogeResponse(data=WireGuardPublicEndpointModel.from_record(record))

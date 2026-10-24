@@ -13,11 +13,14 @@ export const wireGuardReadiness = (endpointStatus: string, lease?: {
     status?: string;
 } | null, now = Date.now() / 1000) => {
     const fresh = !!lease?.health_timestamp && now - lease.health_timestamp >= 0 && now - lease.health_timestamp <= 120;
-    const online = endpointStatus === "active" && fresh && lease?.status !== "released"
+    const available = endpointStatus === "active" && lease?.status !== "released"
         && (lease?.expires === undefined || lease.expires > now);
+    const telemetry = available && fresh;
     return {
-        service: online && lease?.service_ready === true,
-        tunnel: online && lease?.service_ready === true && lease?.tunnel_ready === true,
+        available,
+        telemetry,
+        service: telemetry && lease?.service_ready === true,
+        tunnel: telemetry && lease?.service_ready === true && lease?.tunnel_ready === true,
         fresh,
     };
 };
