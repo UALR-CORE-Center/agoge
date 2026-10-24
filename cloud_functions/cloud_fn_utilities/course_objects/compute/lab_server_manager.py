@@ -682,14 +682,27 @@ class LabServerManager(BaseComputeManager):
         service = self._wireguard_provisioning()
         started = time.monotonic()
         timeout_seconds = self._WIREGUARD_READY_ATTEMPTS * self._WIREGUARD_READY_SECONDS
+        max_attempts = self._WIREGUARD_READY_ATTEMPTS
+        # The CLI runs the worker in its own process, outside the deployed
+        # function's execution deadline. Keep its longer startup grace transient
+        # rather than saving a timeout that could exceed that deadline in GCP.
+        local_timeout = (getattr(self, 'env_dict', None) or {}).get(
+            '_local_debug_wireguard_startup_timeout_seconds')
+        if local_timeout is not None:
+            if type(local_timeout) is not int or not 60 <= local_timeout <= 3600:
+                raise BadRequest('Local gateway startup timeout must be an integer from 60 to 3600 seconds')
+            timeout_seconds = local_timeout
+            # Include a final check at the deadline after a full startup grace.
+            max_attempts = math.ceil(timeout_seconds / self._WIREGUARD_READY_SECONDS) + 1
+        deadline = started + timeout_seconds
         common = {'unit_id': self.parent_build_id, 'server': self.server_name,
-                  'max_attempts': self._WIREGUARD_READY_ATTEMPTS, 'timeout_seconds': timeout_seconds}
+                  'max_attempts': max_attempts, 'timeout_seconds': timeout_seconds}
         self.logger.info(
             'Waiting for a fresh WireGuard gateway service health report; '
             'a remote-peer handshake is not required for this step.',
             **common, attempt=0, elapsed_seconds=0, status='waiting_for_guest_health')
         progress = {}
-        for attempt in range(self._WIREGUARD_READY_ATTEMPTS):
+        for attempt in range(max_attempts):
             lease = service.get_lease(self.parent_build_id)
             now = time.time()
             timestamp = getattr(lease, 'health_timestamp', None)
@@ -730,11 +743,15 @@ class LabServerManager(BaseComputeManager):
                 return
             if attempt % 6 == 0:
                 self.logger.info('Still waiting for WireGuard gateway service health.', **progress)
-            if attempt + 1 < self._WIREGUARD_READY_ATTEMPTS:
-                time.sleep(self._WIREGUARD_READY_SECONDS)
+            if attempt + 1 < max_attempts:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(self._WIREGUARD_READY_SECONDS, remaining))
         self.logger.warning('WireGuard gateway service health wait timed out.', **progress)
         raise TimeoutError(
-            f'WireGuard gateway {self.server_name} did not report a healthy service within five minutes. '
+            f'WireGuard gateway {self.server_name} did not report a healthy service within {timeout_seconds} seconds. '
+            'A remote-peer connection is not required. '
             f'Inspect debug_lab.py status --unit-id {self.parent_build_id} and the configured HTTPS health endpoint. '
             'Check outbound Ubuntu package/Secret Manager/API access and '
             'journalctl -u google-startup-scripts -u wg-quick@wg0 -u agoge-wireguard-health.'

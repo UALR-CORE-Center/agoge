@@ -5,5 +5,6 @@
   "remote_peer_id": "remote-lab-01",
   "count": 1,
   "expires_hours": 2,
+  "gateway_startup_timeout_seconds": 900,
   "student_email": "wireguard-test@example.com"
 }

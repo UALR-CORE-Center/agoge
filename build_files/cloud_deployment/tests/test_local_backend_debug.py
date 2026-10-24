@@ -70,13 +70,13 @@ def test_create_lab_commits_through_api_then_dispatches_local_worker(local):
     unit_id = ready_lab(local)
     local.unit_class.return_value.build.return_value = unit_id
     result = local.backend.create_lab(args)
-    local.unit_class.assert_called_once_with(env_dict=local.env, debug=True)
+    local.unit_class.assert_called_once_with(env_dict=local.backend.env_dict, debug=True)
     data = local.unit_class.return_value.build.call_args.kwargs['data']
     assert data['build_file'] == 'wireguard-factory-lab' and data['remote_peer_id'] == 'kit-one'
     assert data['test'] and data['build_count'] == 1 and not data['lms_integration']
     local.users_class.return_value.get_user.assert_called_once_with(user_email='teacher@example.edu')
     attrs, env = local.worker.call_args.args
-    assert env is local.env and attrs['course_object'] == str(PubSub.CourseObjects.UNIT.value)
+    assert env is local.backend.env_dict and attrs['course_object'] == str(PubSub.CourseObjects.UNIT.value)
     assert attrs['build_id'] == unit_id and result['state_name'] == 'READY'
     assert result['connection_id'] == f'{cli.TEST_PROJECT}:{unit_id}'
     assert result['endpoint']['hostname'] == 'wg.example.edu'
@@ -142,6 +142,80 @@ def test_minimal_profile_keeps_existing_cli_defaults(tmp_path):
     assert args.count == 1 and args.expires_hours == 2
     assert args.student_email is None and args.wireguard_api_url is None
     assert args.project == cli.TEST_PROJECT
+    assert args.gateway_startup_timeout_seconds == 900
+
+
+@pytest.mark.parametrize('command', ['create-lab', 'run-lab'])
+def test_gateway_timeout_profile_and_command_line_precedence(tmp_path, command):
+    profile = write_json(tmp_path, profile_data(gateway_startup_timeout_seconds=1200))
+    args = cli.parser().parse_args([command, '--profile', str(profile)])
+    assert args.gateway_startup_timeout_seconds == 1200
+    args = cli.parser().parse_args([
+        '--gateway-startup-timeout-seconds', '1500', command, '--profile', str(profile)])
+    assert args.gateway_startup_timeout_seconds == 1500
+    args = cli.parser().parse_args([
+        command, '--profile', str(profile), '--gateway-startup-timeout-seconds', '1800'])
+    assert args.gateway_startup_timeout_seconds == 1800
+
+
+@pytest.mark.parametrize('scope', ['unit', 'workout'])
+def test_lifecycle_action_accepts_gateway_timeout_before_or_after_subcommand(scope):
+    action = [f'{scope}-action', f'--{scope}-id', 'abcdefghij', '--action', 'start']
+    assert cli.parser().parse_args(action).gateway_startup_timeout_seconds == 900
+    for arguments in ([ '--gateway-startup-timeout-seconds', '60', *action],
+                      [*action, '--gateway-startup-timeout-seconds', '3600']):
+        assert cli.parser().parse_args(arguments).gateway_startup_timeout_seconds in (60, 3600)
+
+
+@pytest.mark.parametrize('value', ['59', '3601', '0', '-1', 'true', '900.0', 'nan', 'invalid'])
+def test_invalid_gateway_timeout_flags_fail_before_cloud_access(monkeypatch, value):
+    load = Mock()
+    monkeypatch.setattr(cli, 'load_backend', load)
+    with pytest.raises(SystemExit) as error:
+        cli.main(['unit-action', '--unit-id', 'abcdefghij', '--action', 'build',
+                  '--gateway-startup-timeout-seconds', value])
+    assert error.value.code == 2
+    load.assert_not_called()
+
+
+@pytest.mark.parametrize('value', [True, False, 900.0, 900.5, '900', None, 59, 3601])
+def test_invalid_gateway_timeout_profile_values_fail_before_cloud_access(monkeypatch, tmp_path, value):
+    profile = write_json(tmp_path, profile_data(gateway_startup_timeout_seconds=value))
+    load = Mock()
+    monkeypatch.setattr(cli, 'load_backend', load)
+    with pytest.raises(SystemExit) as error:
+        cli.main(['run-lab', '--profile', str(profile)])
+    assert error.value.code == 2
+    load.assert_not_called()
+
+
+def test_local_default_timeout_is_transient_and_reaches_worker_without_mutating_source(local):
+    before = dict(local.env)
+    local.backend.dispatch({'build_id': 'abcdefghij'})
+    attrs, env = local.worker.call_args.args
+    assert attrs == {'build_id': 'abcdefghij'}
+    assert env is local.backend.env_dict and env is not local.env
+    assert env['_local_debug_wireguard_startup_timeout_seconds'] == 900
+    assert local.env == before
+    assert '_local_debug_wireguard_startup_timeout_seconds' not in local.env
+
+
+def test_main_passes_selected_timeout_into_backend_before_dispatch(local, monkeypatch, tmp_path):
+    profile = write_json(tmp_path, profile_data(gateway_startup_timeout_seconds=1200))
+    backend = Mock()
+    backend.run_lab.return_value = {'exit_code': 0}
+    load = Mock(return_value=backend)
+    monkeypatch.setattr(cli, 'load_backend', load)
+    assert cli.main(['run-lab', '--profile', str(profile),
+                     '--gateway-startup-timeout-seconds', '1800']) == 0
+    load.assert_called_once_with(cli.TEST_PROJECT, None, gateway_startup_timeout_seconds=1800)
+
+
+def test_direct_backend_accepts_timeout_without_changing_source_environment(local):
+    backend = cli.LocalBackend(local.env, local.db, Mock(), Mock(), Mock(),
+                               gateway_startup_timeout_seconds=1800)
+    assert backend.env_dict['_local_debug_wireguard_startup_timeout_seconds'] == 1800
+    assert '_local_debug_wireguard_startup_timeout_seconds' not in local.env
 
 
 def test_profile_accepts_utf8_bom_from_windows_editors(tmp_path):
@@ -207,7 +281,7 @@ def test_profile_is_resolved_before_backend_changes_working_directory(monkeypatc
     monkeypatch.chdir(tmp_path)
     backend = Mock()
     backend.create_lab.return_value = {'unit_id': 'abcdefghij'}
-    def load(project, wireguard_api_url=None):
+    def load(project, wireguard_api_url=None, gateway_startup_timeout_seconds=900):
         monkeypatch.chdir(other)
         return backend
     monkeypatch.setattr(cli, 'load_backend', load)
@@ -291,7 +365,7 @@ def test_enrollment_spec_and_token_path_are_parsed_before_backend_changes_direct
     monkeypatch.chdir(tmp_path)
     backend = Mock()
     backend.enroll_peer.return_value = {'remote_peer': {'id': 'remote-lab-02'}}
-    def load(project, wireguard_api_url=None):
+    def load(project, wireguard_api_url=None, gateway_startup_timeout_seconds=900):
         monkeypatch.chdir(other)
         return backend
     monkeypatch.setattr(cli, 'load_backend', load)
@@ -507,7 +581,9 @@ def test_bootstrap_pins_default_and_explicit_projects_without_editing_environmen
     assert database.call_args.kwargs['project_id'] == cli.TEST_PROJECT
     assert database.call_args.kwargs['database_name'] == 'agoge-v1'
     assert backend.env_dict['wireguard_api_url'] == 'https://debug.example.edu'
+    assert backend.env_dict['_local_debug_wireguard_startup_timeout_seconds'] == 900
     assert 'wireguard_api_url' not in local.env
+    assert '_local_debug_wireguard_startup_timeout_seconds' not in local.env
 
 
 def test_local_worker_failure_propagates_without_queue_fallback(local):

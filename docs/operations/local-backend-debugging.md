@@ -143,6 +143,7 @@ settings for each test build:
   "remote_peer_id": "remote-lab-01",
   "count": 1,
   "expires_hours": 2,
+  "gateway_startup_timeout_seconds": 900,
   "student_email": "wireguard-test@example.com"
 }
 ```
@@ -162,13 +163,16 @@ with two workstations and a one-hour expiration:
 ```
 
 The profile is a flat JSON object. Supported fields are `template`, `instructor`,
-`remote_peer_id`, `count`, `expires_hours`, `student_email`, `project`, and
-`wireguard_api_url`. The latter two are optional: the project remains limited
+`remote_peer_id`, `count`, `expires_hours`, `gateway_startup_timeout_seconds`,
+`student_email`, `project`, and `wireguard_api_url`. The latter two are optional: the project remains limited
 to `test-dev-787001`, and the API URL normally comes from the environment.
 Use `wireguard_api_url` only for an HTTPS callback override, such as a public
 tunnel to the local API. Omit `student_email` or set it to `null` to build only
 the shared gateway first. Defaults remain one workstation, a two-hour expiration,
-and the `wireguard-factory-lab` template when those fields are omitted.
+and the `wireguard-factory-lab` template when those fields are omitted. Local
+gateway startup waits up to 900 seconds (15 minutes) by default; the optional
+timeout accepts an integer from 60 to 3600 seconds. It does not change the lab's
+expiration or require a remote peer to connect.
 
 Malformed JSON, unknown fields, invalid values, and missing instructor/peer
 settings fail before cloud access. Relative file paths are resolved from the
@@ -442,13 +446,36 @@ Firestore states manually to bypass recovery checks. Use explicit
 A message such as **Successfully built server!** confirms that Compute Engine
 created the VM. Ubuntu can still be installing packages and configuring WireGuard.
 The managed gateway then waits for a fresh, authenticated **service health** report.
-This wait is bounded to 60 checks with five seconds between checks: about five
-minutes plus database/request latency. Progress messages at the start, about every
-30 seconds, and on success or timeout identify what the worker is waiting for.
+The local debug runner allows 15 minutes for startup by default and checks about
+every five seconds. Progress messages at the start, about every 30 seconds, and
+on success or timeout identify what the worker is waiting for. Set
+`gateway_startup_timeout_seconds` in the JSON profile, or override it on the
+command line when building or resuming:
+
+```powershell
+# Allow up to 20 minutes for a new gateway to install packages and report health.
+.\venv\Scripts\python.exe debug_lab.py run-lab --profile .local/debug-lab/profile.json --gateway-startup-timeout-seconds 1200
+
+# Resume a retained, unexpired lab with the same startup grace.
+.\venv\Scripts\python.exe debug_lab.py unit-action --unit-id abcdefghij --action build --gateway-startup-timeout-seconds 1200
+```
+
+This setting applies only to the local process and is not saved to Firestore.
+The deployed Cloud Function keeps its five-minute service wait to stay within
+its configured execution limit. Database requests can finish after the local
+wait deadline; a longer timeout does not suppress genuine bootstrap or callback
+errors.
 
 The service-health check does not require a WireGuard handshake. An offline Pi or
 a temporary peer public key can leave `tunnel_ready` false while gateway service
-health succeeds. Repeated reads of the same lab document after VM creation mean
+health succeeds. Without the Pi, successful status is `service_ready: true`,
+`tunnel_ready: false`, and `latest_handshake: 0`; the lab can still build, start,
+stop, and delete. Keep a registered remote peer with a syntactically valid public
+key so the gateway has a configuration to install. You can test provisioning
+before the physical device is available, but traffic to its private LAN needs
+the device online with its matching private key.
+
+Repeated reads of the same lab document after VM creation mean
 the worker is polling for that health report; they do not show a stalled GCP VM
 creation operation.
 

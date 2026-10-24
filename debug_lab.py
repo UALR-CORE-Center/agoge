@@ -20,6 +20,7 @@ from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parent
 TEST_PROJECT = 'test-dev-787001'
+DEFAULT_GATEWAY_STARTUP_TIMEOUT_SECONDS = 900
 
 
 class DebugLabStageError(RuntimeError):
@@ -53,10 +54,15 @@ def invoke_local_worker(attributes: dict, env_dict: dict) -> None:
 
 class LocalBackend:
     def __init__(self, env_dict, db, unit_class, workout_class, users_class,
-                 worker=invoke_local_worker):
+                 worker=invoke_local_worker,
+                 gateway_startup_timeout_seconds=DEFAULT_GATEWAY_STARTUP_TIMEOUT_SECONDS):
         if env_dict.get('project') != TEST_PROJECT:
             raise ValueError(f'Local debug builds require project {TEST_PROJECT}')
-        self.env_dict, self.db = env_dict, db
+        timeout = _gateway_startup_timeout(gateway_startup_timeout_seconds)
+        # This override belongs only to the local process. Never mutate the
+        # environment loaded from Firestore or persist a longer deployed wait.
+        self.env_dict = {**env_dict, '_local_debug_wireguard_startup_timeout_seconds': timeout}
+        self.db = db
         self.unit_class, self.workout_class, self.users_class = unit_class, workout_class, users_class
         self.worker = worker
 
@@ -516,7 +522,8 @@ class LocalBackend:
                               'student_email': w.get('student_email')} for w in workouts]}
 
 
-def load_backend(project, wireguard_api_url=None):
+def load_backend(project, wireguard_api_url=None,
+                 gateway_startup_timeout_seconds=DEFAULT_GATEWAY_STARTUP_TIMEOUT_SECONDS):
     if project != TEST_PROJECT:
         raise ValueError(f'This runner is limited to {TEST_PROJECT}')
     # Set before importing application modules: older nested factories use ADC's
@@ -542,7 +549,8 @@ def load_backend(project, wireguard_api_url=None):
     db = DocumentDatabaseFactory.create_db_object(db_type=DatabaseTypes.firestore,
                                                  project_id=project, database_name=DATABASE_NAME)
     print(f'Local API + Cloud Function execution; real resources in {project}/{DATABASE_NAME}.', flush=True)
-    return LocalBackend(env_dict, db, Unit, Workout, Users)
+    return LocalBackend(env_dict, db, Unit, Workout, Users,
+                        gateway_startup_timeout_seconds=gateway_startup_timeout_seconds)
 
 
 def _identifier(value):
@@ -569,6 +577,18 @@ def _hours(value):
     number = float(value)
     if not math.isfinite(number) or not 0 < number <= 168:
         raise argparse.ArgumentTypeError('Choose more than zero and at most 168 hours')
+    return number
+
+
+def _gateway_startup_timeout(value):
+    if type(value) is int:
+        number = value
+    elif isinstance(value, str) and re.fullmatch(r'[0-9]+', value):
+        number = int(value)
+    else:
+        raise argparse.ArgumentTypeError('Gateway startup timeout must be an integer from 60 to 3600 seconds')
+    if not 60 <= number <= 3600:
+        raise argparse.ArgumentTypeError('Gateway startup timeout must be an integer from 60 to 3600 seconds')
     return number
 
 
@@ -625,6 +645,8 @@ class DebugArgumentParser(argparse.ArgumentParser):
             else:
                 parsed.project = getattr(parsed, 'project', TEST_PROJECT)
                 parsed.wireguard_api_url = getattr(parsed, 'wireguard_api_url', None)
+                parsed.gateway_startup_timeout_seconds = getattr(
+                    parsed, 'gateway_startup_timeout_seconds', DEFAULT_GATEWAY_STARTUP_TIMEOUT_SECONDS)
             if parsed.command == 'enroll-peer':
                 from pydantic import ValidationError
                 from common.models.wireguard_provisioning import WireGuardRemotePeerCreate
@@ -665,7 +687,8 @@ class DebugArgumentParser(argparse.ArgumentParser):
     def _lab_profile(args):
         defaults = {'project': TEST_PROJECT, 'wireguard_api_url': None,
                     'template': 'wireguard-factory-lab', 'count': 1, 'expires_hours': 2,
-                    'student_email': None}
+                    'student_email': None,
+                    'gateway_startup_timeout_seconds': DEFAULT_GATEWAY_STARTUP_TIMEOUT_SECONDS}
         allowed = {*defaults, 'instructor', 'remote_peer_id'}
         profile = _json_object(args.profile, 'debug profile') if getattr(args, 'profile', None) else {}
         unknown = profile.keys() - allowed
@@ -698,6 +721,10 @@ class DebugArgumentParser(argparse.ArgumentParser):
         if type(values['expires_hours']) not in (int, float):
             raise ValueError('Debug profile expires_hours must be a number')
         values['expires_hours'] = _hours(values['expires_hours'])
+        if type(values['gateway_startup_timeout_seconds']) is not int:
+            raise ValueError('Debug profile gateway_startup_timeout_seconds must be an integer')
+        values['gateway_startup_timeout_seconds'] = _gateway_startup_timeout(
+            values['gateway_startup_timeout_seconds'])
         for name, value in values.items():
             setattr(args, name, value)
 
@@ -707,6 +734,9 @@ def parser():
     result.add_argument('--project', default=argparse.SUPPRESS, choices=[TEST_PROJECT])
     result.add_argument('--wireguard-api-url', type=_https_url, default=argparse.SUPPRESS,
                         help='HTTPS callback base for a new lab; defaults to the project API')
+    timeout_help = 'Local gateway service startup wait in seconds, 60–3600 (default: 900); no peer handshake required'
+    result.add_argument('--gateway-startup-timeout-seconds', type=_gateway_startup_timeout,
+                        default=argparse.SUPPRESS, help=timeout_help)
     commands = result.add_subparsers(dest='command', required=True)
     for name, description in (
             ('create-lab', 'Create a lab from the uploaded catalog template'),
@@ -715,6 +745,8 @@ def parser():
         lab.add_argument('--profile', type=_absolute_path, help='JSON debug profile; explicit flags override its values')
         lab.add_argument('--project', default=argparse.SUPPRESS, choices=[TEST_PROJECT])
         lab.add_argument('--wireguard-api-url', type=_https_url, default=argparse.SUPPRESS)
+        lab.add_argument('--gateway-startup-timeout-seconds', type=_gateway_startup_timeout,
+                         default=argparse.SUPPRESS, help=timeout_help)
         lab.add_argument('--template', default=argparse.SUPPRESS)
         lab.add_argument('--instructor', default=argparse.SUPPRESS, type=_email)
         lab.add_argument('--remote-peer-id', '--kit-id', dest='remote_peer_id', default=argparse.SUPPRESS, type=_remote_peer_id,
@@ -760,6 +792,8 @@ def parser():
         action.add_argument(f'--{scope}-id', required=True, type=_identifier)
         action.add_argument('--action', required=True, choices=['build', 'start', 'stop', 'delete'])
         action.add_argument('--duration-hours', type=int, default=2, choices=range(1, 11))
+        action.add_argument('--gateway-startup-timeout-seconds', type=_gateway_startup_timeout,
+                            default=argparse.SUPPRESS, help=timeout_help)
     return result
 
 
@@ -768,7 +802,8 @@ def main(argv=None):
     from common.exceptions import BaseAgogeException
 
     try:
-        backend = load_backend(args.project, args.wireguard_api_url)
+        backend = load_backend(args.project, args.wireguard_api_url,
+                               gateway_startup_timeout_seconds=args.gateway_startup_timeout_seconds)
         if args.command == 'create-lab':
             result = backend.create_lab(args)
         elif args.command == 'run-lab':

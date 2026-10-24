@@ -241,7 +241,7 @@ def test_execute_uses_normal_delete_worker_and_confirms_all_release_states(clean
     assert cleanup.worker.call_count == 2
     for call in cleanup.worker.call_args_list:
         attrs, env = call.args
-        assert env is cleanup.env
+        assert env is cleanup.backend.env_dict
         assert attrs['handler'] == PubSub.Handlers.CONTROL.value
         assert attrs['action'] == str(PubSub.Actions.DELETE.value)
         assert attrs['course_object'] == str(PubSub.CourseObjects.UNIT.value)
