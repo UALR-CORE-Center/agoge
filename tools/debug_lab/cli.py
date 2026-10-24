@@ -274,7 +274,8 @@ class LocalBackend:
         for server in unit.get('servers') or []:
             parents = [unit_id] if server.get('community_server') else [w['workout_id'] for w in workouts]
             expected.update(f'{parent}-{server["name"]}' for parent in parents)
-        if unit.get('wireguard_lease'):
+        shared_proxy = any(server.get('community_proxy') for server in unit.get('servers') or [])
+        if unit.get('wireguard_lease') and not shared_proxy:
             expected.update(f'{w["workout_id"]}-display-guacamole-server' for w in workouts)
         # Include dynamically created resources such as display proxies and
         # firewalls, rather than accepting a READY parent with BROKEN servers.
@@ -287,7 +288,7 @@ class LocalBackend:
         active_workouts = any(workout.get('state') in (WorkoutStates.STARTING.value, WorkoutStates.RUNNING.value)
                               for workout in workouts)
         idle_gateways = ({f'{unit_id}-{server["name"]}' for server in unit.get('servers') or []
-                          if server.get('wireguard_gateway') is True}
+                          if server.get('wireguard_gateway') is True or server.get('community_proxy') is True}
                          if stage == 'build' and status['state'] == UnitStates.READY.value and not active_workouts else set())
         idle_students = ({workout['workout_id'] for workout in workouts
                           if workout.get('state') == WorkoutStates.READY.value}
@@ -329,28 +330,42 @@ class LocalBackend:
         for workout_id in workouts:
             expected = {f'{workout_id}-{server["name"]}' for server in unit.get('servers') or []
                         if not server.get('community_server')}
-            if unit.get('wireguard_lease'):
-                expected.add(f'{workout_id}-display-guacamole-server')
             records = self.db.query(collection_name=DbCollections.SERVER,
                                     filters=[('parent_id', DbOperators.EQUAL, workout_id)]) or []
             expected.update(record['name'] if record['name'].startswith(f'{workout_id}-')
                             else f'{workout_id}-{record["name"]}' for record in records
                             if record.get('name') and record.get('state') != ServerStates.DELETED.value)
+            if f'{workout_id}-display-guacamole-server' in expected:
+                raise DebugLabStageError('A community workout must use the Unit shared Guacamole proxy, not its own proxy VM')
             wanted = ServerStates.RUNNING.value if workout_id in running else ServerStates.STOPPED.value
             for name in sorted(expected):
                 record = self.db.get(collection_name=DbCollections.SERVER, doc_id=name) or {}
                 if record.get('state') != wanted:
                     raise DebugLabStageError(f'Student server {name} did not reach expected state {wanted}')
-        gateway = status.get('gateway') or {}
-        server_name = gateway.get('server_name')
+                wanted_cloud = 'RUNNING' if workout_id in running else 'TERMINATED'
+                cloud_status = self._gateway_cloud_status(name)
+                if cloud_status != wanted_cloud:
+                    raise DebugLabStageError(f'GCP reports student server {name} as {cloud_status}; expected {wanted_cloud}')
+        shared = [server for server in unit.get('servers') or []
+                  if server.get('community_server') and (server.get('wireguard_gateway') or server.get('community_proxy'))]
+        if sum(server.get('community_proxy') is True for server in shared) != 1:
+            raise DebugLabStageError('The community lifecycle requires exactly one shared Guacamole proxy')
+        if sum(server.get('wireguard_gateway') is True for server in shared) != 1:
+            raise DebugLabStageError('The WireGuard community lifecycle requires exactly one shared gateway')
         wanted_state = ServerStates.RUNNING.value if running else ServerStates.STOPPED.value
         wanted_cloud = 'RUNNING' if running else 'TERMINATED'
-        if not server_name or gateway.get('state') != wanted_state:
-            raise DebugLabStageError(f'The shared gateway did not automatically reach {wanted_cloud}')
-        cloud_status = self._gateway_cloud_status(server_name)
-        if cloud_status != wanted_cloud:
-            raise DebugLabStageError(f'GCP reports the shared gateway as {cloud_status}; expected {wanted_cloud}')
-        status['gateway'] = {**gateway, 'gcp_status': cloud_status}
+        for template in shared:
+            server_name = f'{unit_id}-{template["name"]}'
+            record = self.db.get(collection_name=DbCollections.SERVER, doc_id=server_name) or {}
+            role = 'Guacamole proxy' if template.get('community_proxy') else 'WireGuard gateway'
+            if record.get('state') != wanted_state:
+                raise DebugLabStageError(f'The shared {role} did not automatically reach {wanted_cloud}')
+            cloud_status = self._gateway_cloud_status(server_name)
+            if cloud_status != wanted_cloud:
+                raise DebugLabStageError(f'GCP reports the shared {role} as {cloud_status}; expected {wanted_cloud}')
+            key = 'guacamole_proxy' if template.get('community_proxy') else 'gateway'
+            status[key] = {**(status.get(key) or {}), 'server_name': server_name,
+                           'state': record.get('state'), 'gcp_status': cloud_status}
         return status
 
     def _student_lifecycle_steps(self, unit_id, args, confirm, result):
@@ -594,18 +609,21 @@ class LocalBackend:
         health_error = lease.get('health_error')
         if health_error and health_error not in ('wireguard_service_unready', 'bootstrap_failed'):
             health_error = 'other_error'
-        gateway = {}
+        gateway, guacamole_proxy = {}, {}
         for server in unit.get('servers') or []:
-            if server.get('wireguard_gateway') is True:
+            if server.get('wireguard_gateway') is True or server.get('community_proxy') is True:
                 server_name = f'{unit_id}-{server["name"]}'
                 record = self.db.get(collection_name=DbCollections.SERVER, doc_id=server_name) or {}
                 try:
                     server_state_name = ServerStates(record.get('state')).name
                 except ValueError:
                     server_state_name = 'UNKNOWN'
-                gateway = {'server_name': server_name, 'state': record.get('state'),
+                details = {'server_name': server_name, 'state': record.get('state'),
                            'state_name': server_state_name}
-                break
+                if server.get('community_proxy'):
+                    guacamole_proxy = details
+                else:
+                    gateway = details
         try:
             state_name = UnitStates(unit.get('state')).name
         except ValueError:
@@ -614,6 +632,7 @@ class LocalBackend:
                 'connection_id': f'{TEST_PROJECT}:{unit_id}' if endpoint else None,
                 'state': unit.get('state'), 'state_name': state_name,
                 'gateway': gateway,
+                'guacamole_proxy': guacamole_proxy,
                 'endpoint': {key: endpoint.get(key) for key in ('hostname', 'port', 'status')},
                 'wireguard': {'remote_peer_id': lease.get('remote_peer_id') or lease.get('kit_id'),
                               'remote_network_cidr': lease.get('remote_network_cidr') or lease.get('equipment_subnet'),
@@ -857,7 +876,7 @@ def parser():
     for name, description in (
             ('create-lab', 'Create a lab from the uploaded catalog template'),
             ('run-lab', 'Build, start, stop, and delete a lab with prompts between stages'),
-            ('student-lifecycle', 'Verify automatic shared gateway start/stop with two students')):
+            ('student-lifecycle', 'Verify automatic shared WireGuard and Guacamole start/stop with two students')):
         lab = commands.add_parser(name, help=description)
         lab.add_argument('--profile', type=_absolute_path, help='JSON debug profile; explicit flags override its values')
         lab.add_argument('--project', default=argparse.SUPPRESS, choices=[TEST_PROJECT])

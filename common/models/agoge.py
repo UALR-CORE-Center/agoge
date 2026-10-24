@@ -155,11 +155,20 @@ class NetworkModel(BaseModel):
         default_factory=list,
         description="Unit-scoped IP addresses reserved from dynamic allocation"
     )
+    lease_quarantines: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Released student IPs unavailable until these UTC timestamps"
+    )
 
     @field_validator('reservations', mode='before')
     @classmethod
     def normalize_null_reservations(cls, value):
         return value or []
+
+    @field_validator('lease_quarantines', mode='before')
+    @classmethod
+    def normalize_null_lease_quarantines(cls, value):
+        return value or {}
 
 
 class NicModel(BaseModel):
@@ -254,7 +263,8 @@ class ProxyConnectionModel(BaseModel):
     url: Optional[str] = Field(default=None, description="Full URL path to server connection")
     username: str = Field(..., description="Username for the proxy connection")
     internal_ip_address: str = Field(..., description="Internal IP address for the proxy connection")
-    password: str = Field(..., description="Password for the proxy connection")
+    password: Optional[str] = Field(default=None, description="Legacy JDBC proxy password; shared JSON authentication does not store one")
+    auth_type: Literal['jdbc', 'json'] = Field(default='jdbc', description="Guacamole authentication used for this connection")
     server: str = Field(..., description="Server name for the proxy connection")
 
 
@@ -267,6 +277,9 @@ class ServerModel(BaseModel):
     build_type: Optional[str] = Field(default=None, description="Build type of the server")
     can_ip_forward: Optional[bool] = Field(default=False, description="Whether IP forwarding is enabled")
     community_server: Optional[bool] = Field(default=False, description="Whether this server should be a shared server in a community build unit.")
+    community_proxy: bool = Field(default=False, description="Generated shared multi-user Guacamole proxy for a community Unit")
+    guacamole_secret_version_name: Optional[str] = Field(default=None, description="Secret Manager reference for shared Guacamole JSON authentication")
+    service_accounts: Optional[List[Dict[str, Any]]] = Field(default=None, description="Explicit runtime GCP identities for a generated server")
     wireguard_gateway: Optional[bool] = Field(
         default=False,
         description="Whether this shared server is the WireGuard gateway for a community unit"
@@ -285,7 +298,7 @@ class ServerModel(BaseModel):
     hostname: Optional[str] = Field(default=None, description="Public DNS record associated with server.")
     image: str = Field(..., description="Image of the server")
     machine_type: Optional[str] = Field(default="e1-standard1", description="Machine type of the server")
-    metadata: Optional[str] = Field(default=None, description="Metadata of the server")
+    metadata: Optional[Union[str, Dict[str, Any], List[Dict[str, Any]]]] = Field(default=None, description="Metadata of the server")
     guacamole_startup_script: Optional[str] = Field(default=None, description="Optional startup script for Guacamole service")
     startup_script: Optional[str] = Field(default=None, description="Optional startup script to pass into server")
     min_cpu_platform: Optional[str] = Field(default="", description="Minimum CPU platform of the server")
@@ -478,6 +491,7 @@ class UnitModel(BaseModel):
         description="Runtime public endpoint allocated for this community Unit's WireGuard gateway"
     )
     wireguard_lease: Optional[WireGuardLeaseModel] = None
+    community_proxy_cleanup_pending: bool = Field(default=False, description="Shared proxy signing material or identity may still require cleanup")
     routes: Optional[List[RouteModel]] = Field(default=None, description="Custom static routes for the unit")
     servers: Optional[List[ServerModel]] = Field(default=None)
     web_applications: Optional[List[WebApplicationModel]] = Field(default=None, description="Used for cloud container labs")

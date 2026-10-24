@@ -7,8 +7,10 @@ from unittest.mock import Mock
 import pytest
 
 from cloud_functions.cloud_fn_utilities.course_objects.unit.unit_dhcp_service import UnitDHCP
+from cloud_functions.cloud_fn_utilities.course_objects.unit import unit_dhcp_service as dhcp_module
 from common.document_database import firestore_database
 from common.document_database.firestore_database import FirestoreDatabase
+from common.models.agoge import NetworkModel
 
 
 class _FakeSnapshot:
@@ -385,6 +387,82 @@ def test_stale_release_token_cannot_release_a_new_claim_on_same_server_record():
         '10.20.0.2',
         '10.20.0.3',
     ]
+
+
+def _shared_proxy_unit():
+    unit = _unit()
+    unit['servers'].append({
+        'name': 'display-guacamole-server', 'community_server': True, 'community_proxy': True,
+        'nics': [{'network': 'external', 'internal_ip': '10.20.0.5'}],
+    })
+    return unit
+
+
+def test_shared_proxy_deleted_student_ip_is_quarantined_until_tokens_expire(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(dhcp_module.time, 'time', lambda: clock[0])
+    database = _OptimisticDatabase(_shared_proxy_unit())
+    allocator = _dhcp_with_database(database)
+    template = {'name': 'student', 'parent_id': 'student-one',
+                'nics': [{'network': 'external', 'subnet_name': 'default'}]}
+    first = allocator.claim_server_leases('student-one-student', template)
+    assert first['nics'][0]['internal_ip'] == '10.20.0.3'
+    assert allocator.release_server_leases('student-one-student', first[UnitDHCP.LEASE_CLAIM_FIELD])
+    network = database.get_document('unit', 'unit-12345')['networks'][0]
+    assert network['lease_quarantines'] == {'10.20.0.3': 1300.0}
+    assert '10.20.0.3' not in network['reservations']
+    # This field must survive UnitModel/network serialization on later updates.
+    assert NetworkModel(**network).model_dump()['lease_quarantines'] == {'10.20.0.3': 1300.0}
+
+    clock[0] = 1299.9
+    second = allocator.claim_server_leases('student-two-student', {**template, 'parent_id': 'student-two'})
+    assert second['nics'][0]['internal_ip'] == '10.20.0.4'
+    # A duplicate delete cannot extend the original quarantine.
+    assert not allocator.release_server_leases('student-one-student', first[UnitDHCP.LEASE_CLAIM_FIELD])
+    assert database.get_document('unit', 'unit-12345')['networks'][0]['lease_quarantines'] == {'10.20.0.3': 1300.0}
+
+    clock[0] = 1300.0
+    third = allocator.claim_server_leases('student-three-student', {**template, 'parent_id': 'student-three'})
+    assert third['nics'][0]['internal_ip'] == '10.20.0.3'
+    assert database.get_document('unit', 'unit-12345')['networks'][0]['lease_quarantines'] == {}
+    # The old owner's stale delivery cannot quarantine the replacement's IP.
+    assert not allocator.release_server_leases('student-one-student', first[UnitDHCP.LEASE_CLAIM_FIELD])
+    assert database.get_document('unit', 'unit-12345')['networks'][0]['lease_quarantines'] == {}
+
+
+def test_shared_proxy_stale_claim_release_does_not_quarantine_active_ip(monkeypatch):
+    monkeypatch.setattr(dhcp_module.time, 'time', lambda: 1000.0)
+    database = _OptimisticDatabase(_shared_proxy_unit())
+    allocator = _dhcp_with_database(database)
+    claim = allocator.claim_server_leases('student-one-student', {
+        'name': 'student', 'parent_id': 'student-one', 'nics': [{'network': 'external'}]})
+    assert not allocator.release_server_leases('student-one-student', 'a-stale-claim')
+    network = database.get_document('unit', 'unit-12345')['networks'][0]
+    assert claim['nics'][0]['internal_ip'] in network['reservations']
+    assert not network.get('lease_quarantines')
+
+
+def test_legacy_shared_proxy_release_quarantines_dynamic_ip_once(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(dhcp_module.time, 'time', lambda: clock[0])
+    unit = _shared_proxy_unit()
+    unit['networks'][0]['reservations'] = ['10.20.0.2', '10.20.0.3', '10.20.0.5']
+    allocator = _dhcp(unit)
+    assert allocator.release_network_address('external', '10.20.0.3')
+    clock[0] = 1100.0
+    assert not allocator.release_network_address('external', '10.20.0.3')
+    assert allocator.db.document.data['networks'][0]['lease_quarantines'] == {'10.20.0.3': 1300.0}
+    # A shared service's static address is retained and never quarantined.
+    assert not allocator.release_network_address('external', '10.20.0.5')
+    assert allocator.get_network_address('external') == '10.20.0.4'
+
+
+def test_invalid_quarantine_expiration_prevents_unsafe_address_reuse():
+    unit = _shared_proxy_unit()
+    unit['networks'][0]['lease_quarantines'] = {'10.20.0.3': float('nan')}
+    allocator = _dhcp(unit)
+    with pytest.raises(ValueError, match='invalid expiration'):
+        allocator.get_network_address('external')
 
 
 def test_release_returns_dynamic_address_but_preserves_static_gateway_address():

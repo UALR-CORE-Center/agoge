@@ -157,13 +157,14 @@ def test_managed_workout_persists_actual_student_addresses_before_building_proxy
     manager.env_dict = {'project': 'example-project'}
     manager.db = Database({f'{workout.id}-kali': workout.servers[0].model_dump()})
     manager.update_record = Mock()
-    with patch('cloud_fn_utilities.course_objects.workout.community_workout.DisplayProxy') as constructor:
-        manager._build_managed_display_proxy()
+    manager.env = SimpleNamespace(main_app_url='https://example.edu')
+    manager._prepare_community_connections()
     assert manager.workout.servers[0].nics[0].internal_ip == '10.20.0.2'
     assert len(manager.workout.servers) == 1
-    manager.update_record.assert_called_once_with(doc_id=workout.id, data=workout, update_keys=['servers'])
-    assert constructor.call_args.kwargs['collection'] == DbCollections.WORKOUT
-    constructor.return_value.build.assert_called_once()
+    manager.update_record.assert_called_once_with(doc_id=workout.id, data=workout, update_keys=['servers', 'proxy_connections'])
+    assert workout.proxy_connections[0].auth_type == 'json'
+    assert workout.proxy_connections[0].password is None
+    assert workout.proxy_connections[0].username == f'agoge-{workout.id}'
 
 
 def test_managed_workout_starts_and_stops_its_own_proxy_with_student_machines():

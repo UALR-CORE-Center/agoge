@@ -3,6 +3,7 @@ from ipaddress import ip_network
 
 from common.exceptions import BadRequest
 from common.models.agoge import FirewallRuleModel, NetworkModel, NicModel, RouteModel
+from common.services.community_proxy_spec import COMMUNITY_PROXY_NAME
 
 
 UBUNTU_GATEWAY_IMAGE = "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64"
@@ -48,8 +49,13 @@ def configure_kit_topology(unit, equipment_subnet: str, port: int) -> None:
                 and not server.wireguard_gateway]
     if unit.unit_type != "community" or len(gateways) != 1 or not students:
         raise BadRequest("A managed WireGuard Lab needs one shared gateway and at least one student server")
-    if any(server.community_server and server not in gateways for server in unit.servers or []):
+    if any(server.community_server and server not in gateways
+           and not (getattr(server, 'community_proxy', False) and server.name == COMMUNITY_PROXY_NAME)
+           for server in unit.servers or []):
         raise BadRequest("A WireGuard remote lab supports only its gateway as a shared server")
+    # Shared display services are generated again from trusted code after this
+    # topology is selected; catalog startup scripts and NICs are never reused.
+    unit.servers = [server for server in unit.servers or [] if not getattr(server, 'community_proxy', False)]
     gateway = gateways[0]
     gateway_ip = str(subnet.network_address + 10)
     unit.networks = [NetworkModel(name="external", subnets=[

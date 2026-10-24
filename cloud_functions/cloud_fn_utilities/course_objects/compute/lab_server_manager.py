@@ -392,6 +392,10 @@ class LabServerManager(BaseComputeManager):
         self.server_spec.disks = disks
 
     def _add_metadata(self):
+        if getattr(self.server_spec, 'community_proxy', False):
+            # Generated shared proxies carry only the repository-owned bootstrap.
+            # Assessment scripts must never run under the signing-key identity.
+            return
         if self._managed_wireguard():
             # Managed gateways run only the repository bootstrap. Catalog or
             # assessment scripts must not replace its security policy.
@@ -523,7 +527,7 @@ class LabServerManager(BaseComputeManager):
                 self.server_name,
                 ip_address=self.primary_external_ip,
             )
-            if self._wireguard_endpoint_id() and not success:
+            if (self._wireguard_endpoint_id() or getattr(self.server_spec, 'community_proxy', False)) and not success:
                 raise BaseAgogeException(f'Unable to publish DNS record {dns_record}')
 
     def _delete_routes(self) -> None:
@@ -569,17 +573,22 @@ class LabServerManager(BaseComputeManager):
             )
 
     def _wireguard_action_is_blocked(self, action: str, current_state: int) -> bool:
-        if not self._wireguard_endpoint_id():
+        shared_proxy = getattr(self.server_spec, 'community_proxy', False)
+        if not self._wireguard_endpoint_id() and not shared_proxy:
             return False
         blocked_states = (
             self._WIREGUARD_BUILD_BLOCKED_STATES
             if action == "BUILD"
             else self._WIREGUARD_START_BLOCKED_STATES
         )
-        if current_state not in blocked_states:
+        # A community proxy enters STARTING only after the initial build, when
+        # a student or instructor starts the parked service. Delayed BUILD
+        # deliveries must not race that separate runtime operation.
+        if current_state not in blocked_states and not (
+                shared_proxy and action == 'BUILD' and current_state == self.s.STARTING.value):
             return False
         self.logger.warning(
-            f'{self.class_name}:{self.server_name} - Ignoring stale WireGuard {action} '
+            f'{self.class_name}:{self.server_name} - Ignoring stale shared-service {action} '
             f'event while server is in state {self.s(current_state).name}'
         )
         return True

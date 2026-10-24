@@ -21,6 +21,7 @@ These pages describe the interface and workflows in the matching deployed revisi
 - [Community WireGuard example](examples/community-wireguard.md)
 - [Managed WireGuard factory labs and deployment](operations/wireguard-provisioning.md)
 - [Debug API and Cloud Function builds locally](operations/local-backend-debugging.md)
+- [Validate community and solo behavior before deployment](operations/local-backend-debugging.md#validate-community-and-solo-behavior-without-gcp)
 - [Build and deploy the Markdown help app](operations/help-docs-app.md)
 - [Contributing](../CONTRIBUTING.md)
 - [Security policy](../SECURITY.md)

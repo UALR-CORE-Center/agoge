@@ -7,8 +7,9 @@ Instructors can build a managed Community Lab in either of two ways:
 | **Lab Catalog → Build WireGuard Lab** | Build directly, choosing a student image in the dialog; no catalog upload is required. |
 | Select an uploaded **WireGuard template** → **Build Lab** | Reuse a named catalog template with its student image already selected by the setup operator. Existing records may still be named **WireGuard Factory Lab**. |
 
-Both paths create one shared Ubuntu gateway, one enrolled remote peer for a private remote LAN, and a
-workstation for each student who claims the lab. No catalog JSON or network
+Both paths create one shared Ubuntu WireGuard gateway, one shared Guacamole
+proxy, one enrolled remote peer for a private remote LAN, and a workstation for
+each student who claims the lab. No catalog JSON or network
 configuration editing is needed.
 Existing WireGuard catalog templates also require a registered remote peer when building
 a new lab. The selected registration supplies the private LAN default. An
@@ -25,6 +26,13 @@ routing setup. The gateway uses the official GCP image family
 not required. Ubuntu package repositories and Secret Manager must be reachable
 from the gateway. A tenant API health callback is not required for bootstrap
 or for lab build/start/stop completion.
+
+The shared Guacamole VM uses the target project's TLS-enabled image,
+`projects/<project>/global/images/image-guac-<project>`. Prepare it with
+**Server Images & Build Specs → Refresh/Create guacamole image and certificate**
+if that image or its certificate is missing. The embedded shared-proxy startup
+code configures Guacamole/guacd 1.6.0 with JSON authentication; a student join
+requires neither another image build nor a proxy restart.
 
 The startup code is maintained in `common/services/wireguard_startup.py` and is
 embedded directly in the Compute instance's `startup-script` metadata. It does
@@ -48,17 +56,20 @@ Secret Manager secret creation/version access/deletion and secret IAM policy
 permissions, and service-account creation/get/delete/IAM policy permissions.
 `roles/secretmanager.admin` and `roles/iam.serviceAccountAdmin` cover the new
 management operations in installations that have replaced the historical broad
-runtime role with restricted roles. The runtime is granted `actAs` on each
-dedicated gateway account, not on arbitrary accounts. The operator running setup
-needs API-enable and DNS-zone IAM permissions. Do not grant secret access to
+runtime role with restricted roles. The runtime is granted `actAs` on the
+dedicated gateway and Guacamole accounts. The operator running setup needs
+API-enable and DNS-zone IAM permissions. Do not grant secret access to
 student VM identities.
 
 Each gateway gets `agoge-wg-<unit ID>@<project>.iam.gserviceaccount.com` and read
-access only to `agoge-wg-<unit ID>` in Secret Manager. Managed students and their
-display proxies have no attached service account. Gateway private keys and health
-callback tokens never enter catalog/Unit records or instance metadata. Retries
-reuse the gateway identity; stop/start keeps its key and lab number. Successful
-deletion revokes the lease, releases the remote peer, and deletes its secret/account.
+access only to `agoge-wg-<unit ID>` in Secret Manager. Managed student VMs have
+no attached service account. The shared Guacamole proxy gets
+`agoge-guac-<unit ID>@<project>.iam.gserviceaccount.com`, scoped to its own
+Guacamole signing-key secret; it cannot read the WireGuard key. Gateway private
+keys, Guacamole signing keys, and health callback tokens never enter catalog/Unit
+records or instance metadata. Retries reuse these identities; stop/start keeps
+the keys and lab number. Successful deletion removes both shared VMs, deletes
+their secrets/accounts, revokes the lease, and releases the remote peer.
 
 ## Register a remote lab and enroll its peer
 
@@ -120,8 +131,9 @@ See [the instructor steps](../guides/instructor-guide.md#change-the-remote-lab-f
 
 The CLI is packaged under `tools/debug_lab/`. From the repository root, run
 `python -m tools.debug_lab student-lifecycle` with a two-student profile to build,
-claim two Workouts, test the first/last-student gateway transitions, and confirm
-deletion. It reads the gateway's Compute Engine status at each stage and does
+claim two Workouts, test first/last-student transitions for both shared VMs, and
+confirm deletion. It verifies that there is exactly one Unit-owned Guacamole
+proxy and reads both VMs' Compute Engine status at each stage. It does
 not require a Pi or guest health callback. See the
 [complete two-student instructions](local-backend-debugging.md#verify-two-students-and-automatic-gateway-startstop).
 
@@ -393,12 +405,22 @@ implemented in this change**; that integration remains future work. The current
 flow provides instructor-visible connection details and authenticated peer
 configuration.
 
-Students claim their normal workouts and use the browser display proxy to reach
-their workstation. After an initial student build, its workstation and display
-proxy stop before the Workout becomes READY. Starting that student's session
-starts its VMs and, for the first active student, the shared gateway. Stopping
-the last active student also stops the gateway. Labs without configured packet
-mirroring do not create or start packet collectors.
+Students claim their normal Workouts and use the shared browser display proxy
+to reach their own workstation. The community Lab owns one Guacamole VM,
+regardless of student count. Each student receives a separate Guacamole identity
+with only that Workout's connection; adding a student does not create another
+proxy or restart Guacamole. The API supplies encrypted connection data through
+Guacamole JSON authentication. Solo Workouts retain their own proxy and JDBC
+authentication. JSON credentials allow new connections for at most two
+minutes; deleted student IPs are held for five minutes before reuse.
+
+After the initial community build, both shared VMs stop before the Lab becomes
+READY. After an initial student build, its workstation stops before the Workout
+becomes READY. The first active student starts the shared WireGuard and
+Guacamole VMs together; later students reuse them. Both stop after the last
+active student stops. Instructor Lab start/stop controls and Lab deletion also
+include both shared VMs. Labs without configured packet mirroring do not create
+or start packet collectors.
 
 Routes select only approved student machines and point only
 to the assigned private LAN. Gateway/Pi guest rules restrict tunnel forwarding;
@@ -414,6 +436,14 @@ Existing built labs retain their legacy image, static address, and unmanaged
 behavior. Deploying this code does not modify running legacy gateways. Enroll the
 remote peer and create a new managed lab to adopt Ubuntu startup provisioning. Existing
 five-digit allocations are preserved until their normal lifecycle releases them.
+Create a new community Lab to adopt the shared proxy; this deployment does not
+convert existing per-Workout proxy VMs in place. New student claims on an older
+Lab without the shared proxy require rebuilding the Lab.
+
+Before deploying backend changes, run `python -m tools.functional_tests` from
+the repository root. It checks community and solo lifecycle behavior without
+GCP credentials. See [the functional runner](../../tools/functional_tests/README.md)
+for its scope and focused suite options.
 
 The automated reference flow in
 `common/tests/test_wireguard_build_flow.py` exercises instructor creation, remote peer
@@ -425,8 +455,9 @@ HTTP authorization, proxy allocation, revocation, and UI forms. These are
 repeatable local tests, not a claim of a live remote LAN connection.
 
 Before closing issue #15, deploy a reference lab and record: the safe connection ID and lab number,
-hostname and readiness screen; actual VM Ubuntu source and empty student service
-accounts; `systemctl is-active wg-quick@wg0`; a recent handshake; successful Kali
+hostname and readiness screen; actual gateway Ubuntu source, empty student
+service accounts, and the shared proxy's scoped identity;
+`systemctl is-active wg-quick@wg0`; a recent handshake; successful Kali
 access to its equipment; denied access to another remote LAN; and stop/start recovery
 with updated DNS. Never attach `wg showconf`, private keys, tokens, or full secret
 payloads to issue evidence. The dependency on agreed physical remote LAN addressing and

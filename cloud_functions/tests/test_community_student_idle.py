@@ -1,4 +1,4 @@
-"""Initial student claims finish idle, including their own display proxy."""
+"""Initial student claims finish idle, without stopping the Unit display proxy."""
 from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -81,7 +81,7 @@ class Compute:
 def initial():
     unit_id, workout_id = 'abcdefghij', 'klmnopqrst'
     record = {'state': WorkoutStates.COMPLETED_SERVERS.value}
-    names = [f'{workout_id}-student', f'{workout_id}-display-guacamole-server']
+    names = [f'{workout_id}-student']
     servers = {name: {'name': name.split('-', 1)[1], 'parent_id': workout_id,
                       'state': ServerStates.RUNNING.value} for name in names}
     servers[f'{unit_id}-wireguard'] = {'name': 'wireguard', 'parent_id': unit_id,
@@ -92,13 +92,14 @@ def initial():
     value.class_name, value.s = 'CommunityWorkout', WorkoutStates
     value.unit_model = SimpleNamespace(wireguard_lease={'kit_id': 'remote-lab'}, servers=[
         SimpleNamespace(name='wireguard', community_server=True),
+        SimpleNamespace(name='display-guacamole-server', community_server=True, community_proxy=True),
         SimpleNamespace(name='student', community_server=False)])
     value.logger = Mock()
     value.state_manager = State(record)
     value.db = Database(servers)
     value.db_queries = SimpleNamespace(get_servers=lambda parent_id: [deepcopy(server)
         for server in servers.values() if server['parent_id'] == parent_id])
-    value._build_managed_display_proxy = Mock()
+    value._prepare_community_connections = Mock()
     value._CommunityWorkout__send_server_build_msg = Mock()
     value.compute_manager = Compute(servers)
     value.pubsub_manager = Mock()
@@ -113,7 +114,7 @@ def test_managed_build_stops_real_student_and_proxy_before_ready_without_shared_
     value.build()
 
     assert value.state_manager.transitions == [WorkoutStates.COMPLETED_STUDENT_ENTRY, WorkoutStates.READY]
-    value._build_managed_display_proxy.assert_called_once()
+    value._prepare_community_connections.assert_called_once()
     assert set(value.compute_manager.stopped) == set(initial.names)
     assert all(initial.servers[name]['state'] == ServerStates.STOPPED.value for name in initial.names)
     assert all(value.compute_manager.provider[name] == 'TERMINATED' for name in initial.names)
@@ -131,10 +132,10 @@ def test_partial_stop_retry_uses_checkpoint_without_rebuilding_stopped_proxy(ini
 
     value.build()
 
-    value._build_managed_display_proxy.assert_called_once()
+    value._prepare_community_connections.assert_called_once()
     assert value.state_manager.get_state() == WorkoutStates.READY.value
     assert set(value.compute_manager.stopped) == set(initial.names)
-    assert len(value.compute_manager.stopped) == 2
+    assert len(value.compute_manager.stopped) == 1
 
 
 def test_provider_must_confirm_stopped_even_if_record_says_stopped(initial):
@@ -148,7 +149,7 @@ def test_provider_must_confirm_stopped_even_if_record_says_stopped(initial):
 
     assert value.state_manager.get_state() == WorkoutStates.COMPLETED_STUDENT_ENTRY.value
     assert WorkoutStates.READY not in value.state_manager.transitions
-    value._build_managed_display_proxy.assert_not_called()
+    value._prepare_community_connections.assert_not_called()
 
 
 def test_async_build_publishes_only_owned_stops_and_waits_for_gcp_completion(initial):
@@ -163,7 +164,7 @@ def test_async_build_publishes_only_owned_stops_and_waits_for_gcp_completion(ini
 
     value.build()
 
-    assert value.pubsub_manager.msg.call_count == 2
+    assert value.pubsub_manager.msg.call_count == 1
     assert value.compute_manager.stopped == []
     assert value.state_manager.get_state() == WorkoutStates.READY.value
 
@@ -188,7 +189,7 @@ def test_stale_build_delivery_never_stops_an_existing_runtime_or_terminal_workou
 
     assert initial.value.compute_manager.stopped == []
     assert initial.record['state'] == state.value
-    initial.value._build_managed_display_proxy.assert_not_called()
+    initial.value._prepare_community_connections.assert_not_called()
 
 
 def test_initial_entry_checkpoint_has_a_valid_ready_transition():
@@ -202,6 +203,8 @@ def test_initial_entry_checkpoint_has_a_valid_ready_transition():
 def test_non_managed_community_build_retains_existing_behavior(initial):
     value = initial.value
     value.unit_model.wireguard_lease = None
+    value.unit_model.servers = [server for server in value.unit_model.servers
+                                if not getattr(server, 'community_proxy', False)]
 
     value.build()
 

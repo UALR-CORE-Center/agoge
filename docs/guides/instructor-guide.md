@@ -72,9 +72,10 @@ not create a gateway or assign a remote peer.
    student and a short future expiration. Leave **Build with LMS** disabled.
 5. Click the dialog's **Build Lab** button and wait for the lab detail page.
 6. Verify the assigned remote peer, connection ID, private LAN CIDR, hostname, DNS
-   suffix, and UDP port. A gateway with no active student sessions stops to avoid
-   idle cost. The first student session starts it automatically; the last student
-   stop shuts it down. Optional service/tunnel telemetry does not determine lab
+   suffix, and UDP port. Each community Lab has one shared Guacamole proxy
+   for all students, with separate access to their own workstations. The
+   WireGuard gateway and Guacamole proxy stop when idle. The first student
+   session starts both automatically; the last student stop shuts both down. Optional service/tunnel telemetry does not determine lab
    build completion.
 7. Copy the claim URL and join code, claim a test Workout, and open its browser
    workstation. Confirm access to the assigned equipment and isolation from
@@ -105,7 +106,8 @@ for setup prompts, private LAN registration, peer enrollment, readiness checks, 
 
 ### Change the remote lab for an existing Lab
 
-1. Stop every student Workout and wait for the shared gateway to stop. If an
+1. Stop every student Workout and wait for the shared gateway and Guacamole
+   proxy to stop. If an
    instructor started the whole Lab manually, stop the Lab as well.
 2. On the Lab details card, open **Remote lab settings**.
 3. Select an authorized, available remote lab. Your Lab's current assignment is

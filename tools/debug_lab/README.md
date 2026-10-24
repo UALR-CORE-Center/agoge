@@ -13,7 +13,7 @@ repository root as the working directory, and put the subcommand/options in
 the argument field. Breakpoints in the API and Cloud Function code work in the
 same process.
 
-## Two-student gateway lifecycle
+## Two-student community lifecycle
 
 Save public test settings in `.local/debug-lab/students.json`:
 
@@ -35,17 +35,19 @@ Then run:
 ```
 
 This offers recent-lab cleanup and then builds the lab. It verifies that the
-idle shared gateway is stopped, prompts to claim each student workout, prompts
-to start each workout, prompts to stop each workout, and finally offers lab
-deletion. A student join claims a workout; starting that workout makes the
-student active. The checks require:
+idle shared WireGuard gateway and Guacamole proxy are stopped, prompts to claim
+each student workout, prompts to start each workout, prompts to stop each
+workout, and finally offers lab deletion. A student join claims a workout; starting that workout makes the
+student active.
 
-Both the workstation and display proxy are stopped before a newly claimed
-Workout becomes READY. A student start runs those VMs; a student stop shuts them
-down. The debug checks include these owned resource states as well as the shared
-gateway, so an idle claim cannot silently leave student VMs running.
+Each student's workstation is stopped before a newly claimed Workout becomes
+READY. A student start runs that workstation; a student stop shuts it down.
+There is exactly one Guacamole proxy for the community, owned by the Unit. Each
+student receives only their own connection through that proxy. The debug checks
+reject an additional per-student proxy and verify the actual VM state for both
+shared servers and the student resources.
 
-| Step | Shared gateway |
+| Step | Shared WireGuard + Guacamole |
 | --- | --- |
 | Build, with no active students | Stopped |
 | Claim the two student workouts | Stopped |
@@ -55,7 +57,7 @@ gateway, so an idle claim cannot silently leave student VMs running.
 | Stop the last student | Stopped |
 
 The command reads the actual GCP VM status after every step, in addition to
-checking saved lab, workout, and gateway states. It never manually starts or
+checking saved lab, workout, and shared-server states. It never manually starts or
 stops the Unit, so those actions cannot conceal a failure of the automatic
 student lifecycle. The Pi can remain offline; no guest health callback or
 WireGuard handshake is required.
@@ -76,3 +78,7 @@ checks pass. You can also inspect and explicitly delete a retained test lab:
 
 For account setup, peer enrollment, individual commands, and additional
 troubleshooting, see [the operations guide](../../docs/operations/local-backend-debugging.md).
+
+For fast predeployment checks of community and solo orchestration without GCP
+credentials or resources, run `python -m tools.functional_tests`. See the
+[offline functional test guide](../functional_tests/README.md) for its scope.

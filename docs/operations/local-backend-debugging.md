@@ -12,6 +12,22 @@ The runner is limited to **`test-dev-787001`** and its **`agoge-v1`** Firestore
 database. It explicitly sets the Python clients' project before importing the
 application, so a previous gcloud project selection cannot redirect the build.
 
+## Validate community and solo behavior without GCP
+
+Run the functional scenarios before the live debug loop:
+
+```powershell
+.\venv\Scripts\python.exe -m tools.functional_tests
+```
+
+This runs both community and solo lifecycle scenarios using the application's
+business logic with fake cloud, storage, and Guacamole HTTP boundaries. It needs
+no credentials or remote peer and creates no resources. Use `--suite community`
+or `--suite solo` to focus on one, and `--verbose` for scenario names. A failure
+returns a nonzero exit code. See [the runner documentation](../../tools/functional_tests/README.md)
+for coverage and limits. Guest startup, IAM, DNS, firewall connectivity, and GCP
+operation timing still need the live workflow below.
+
 ## Prepare once
 
 1. Use a checkout containing the `tools/debug_lab/` package. These changes are on
@@ -199,13 +215,14 @@ profile first. It must contain two distinct `student_emails` and a `count` of at
 least two. The emails identify test student Workouts; they do not need to be
 separate browser sign-ins. The selected peer must be available and authorized.
 
-The command prompts between stages and verifies the gateway's recorded state
-and actual Compute Engine instance status:
+The command prompts between stages and verifies both shared VMs' recorded
+states and actual Compute Engine instance status. It requires exactly one
+Unit-owned Guacamole proxy and rejects per-student proxy VMs:
 
-| Stage | Expected shared gateway |
+| Stage | Expected shared WireGuard and Guacamole VMs |
 | --- | --- |
 | Build the lab with no active students | Stopped |
-| Claim both student Workouts | Stopped; each student's workstation and display proxy are also stopped before READY |
+| Claim both student Workouts | Both remain stopped; each student's workstation also stops before READY |
 | Start the first student session | Running automatically |
 | Start the second student session | Remains running |
 | Stop the first student | Remains running for the second student |
@@ -213,9 +230,9 @@ and actual Compute Engine instance status:
 | Confirm final deletion | Managed resources deleted and remote peer released |
 
 This sequence uses student start/stop operations; it never starts or stops the
-parent lab to force the expected gateway result. It checks GCP lifecycle state
+parent lab to force the expected shared-VM result. It checks GCP lifecycle state
 without requiring the physical Pi, a WireGuard handshake, or a guest callback.
-Each claim completes only after its student VMs and display proxy have stopped;
+Each claim completes only after its student VMs have stopped;
 the debug flow also verifies their stopped/running records after each action.
 Use the printed student Workouts to inspect the student API/Cloud Function path
 in the debugger. Claiming a Workout and starting its session are separate
@@ -256,11 +273,13 @@ recent-lab cleanup continues to the new build; declining the final deletion
 keeps the new lab. Answer `q` at the initial cleanup prompt to cancel before
 building anything.
 
-A managed WireGuard gateway is stopped automatically after its initial build
-when no student sessions are active. The explicit lab start in this generic
-runner exercises instructor controls. Use `student-lifecycle` below to verify
-automatic first/last-student behavior without issuing any lab start/stop command. The runner also starts and stops the student workout explicitly so its
-display proxy and lifecycle state are handled along with the shared gateway.
+The shared WireGuard gateway and Guacamole proxy stop automatically after the
+initial community build when no student sessions are active. The explicit Lab
+start in this generic runner exercises instructor controls. Use
+`student-lifecycle` above to verify automatic first/last-student behavior without
+issuing a Lab start/stop command. The runner also starts and stops the student
+Workout explicitly so its workstation lifecycle is checked along with the two
+shared VMs.
 Omit `student_email` from the profile to exercise only the shared lab. Use
 `--duration-hours 2` to set the workout's start duration; the default is two
 hours, and values from 1 through 10 are supported.
@@ -507,8 +526,8 @@ Firestore states manually to bypass recovery checks. Use explicit
 A message such as **Successfully built server!** confirms that Compute Engine
 created and started the VM. A managed lab completes its build after the GCP
 operation and its DNS, routes, and firewall dependencies succeed, then stops an
-idle managed gateway before marking the Lab ready. The first student session
-starts that gateway again. Start and stop
+idle managed gateway and shared Guacamole proxy before marking the Lab ready.
+The first student session starts both VMs again. Start and stop
 complete from their GCP operations as well. The worker does not wait for guest
 health, an HTTP callback, or a WireGuard handshake.
 
