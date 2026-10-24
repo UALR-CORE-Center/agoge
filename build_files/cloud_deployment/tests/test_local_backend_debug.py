@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 import pytest
 
-import debug_lab as cli
+from tools.debug_lab import cli
 from common.constants.database import DbCollections
 from common.constants.pub_sub import PubSub
 from common.constants.states import UnitStates, WorkoutStates
@@ -373,7 +373,7 @@ def test_enrollment_spec_and_token_path_are_parsed_before_backend_changes_direct
                      '--token-out', 'remote-lab-02.token']) == 0
     admin, parsed_spec, token_path = backend.enroll_peer.call_args.args
     assert admin == 'admin@example.edu'
-    assert parsed_spec == peer_spec()
+    assert all(parsed_spec[key] == value for key, value in peer_spec().items())
     assert token_path == tmp_path / 'remote-lab-02.token'
 
 

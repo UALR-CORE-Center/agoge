@@ -2,14 +2,24 @@ import React from "react";
 import {Alert, Box, Chip, Stack, Typography} from "@mui/material";
 import {WireGuardEndpoint, WireGuardLease} from "../../../services/Unit/unit.model";
 import {wireGuardDnsSuffix, wireGuardReadiness} from "../../../services/WireGuard/wireguard.utils";
+import {WorkoutStates} from "../../../types/AgogeStates";
 
-export const WireGuardLabStatus: React.FC<{endpoint: WireGuardEndpoint; lease?: WireGuardLease | null}> = ({endpoint, lease}) => {
+export const WireGuardLabStatus: React.FC<{
+    endpoint: WireGuardEndpoint;
+    lease?: WireGuardLease | null;
+    unitState?: number | string;
+}> = ({endpoint, lease, unitState}) => {
     const ready = wireGuardReadiness(endpoint.status, lease);
+    // Unit and workout lifecycle state codes share READY. A reserved endpoint
+    // alone can also mean BUILDING/STARTING; only a completed idle lab is stopped.
+    const idle = Number(unitState) === WorkoutStates.READY && endpoint.status === "reserved"
+        && lease?.status === "reserved" && lease.endpoint_id === endpoint.id
+        && Number.isFinite(lease.expires) && lease.expires > Date.now() / 1000;
     return <Box sx={{mt: 1.5, overflowWrap: "anywhere"}}>
         <Typography variant="subtitle2">Remote lab telemetry</Typography>
         <Typography variant="body2">DNS suffix: {wireGuardDnsSuffix(endpoint.hostname)}</Typography>
         <Typography variant="body2">UDP port: {endpoint.port}</Typography>
-        <Chip sx={{mt: 1}} label={ready.available ? "Gateway running" : "Gateway unavailable"}
+        <Chip sx={{mt: 1}} label={idle ? "Gateway stopped (idle)" : ready.available ? "Gateway running" : "Gateway unavailable"}
             color={ready.available ? "success" : "default"} size="small" />
         {lease ? <>
             <Typography sx={{mt: 1}}>Remote peer: <strong>{lease.remote_peer_id || lease.kit_id}</strong> ({lease.device_id})</Typography>
@@ -32,7 +42,9 @@ export const WireGuardLabStatus: React.FC<{endpoint: WireGuardEndpoint; lease?: 
                 Last remote peer handshake: {new Date(lease.latest_handshake * 1000).toLocaleString()}
             </Typography>}
             <Typography variant="body2">
-                {!ready.available
+                {idle
+                    ? "The lab is built and its gateway is stopped while idle. The first student start starts the gateway; the last student stop stops it."
+                    : !ready.available
                     ? "The gateway endpoint is unavailable. Check the lab lifecycle status."
                     : !ready.telemetry
                     ? "The gateway is running. Service and tunnel telemetry have not been reported recently. A remote peer connection is optional for lab completion."

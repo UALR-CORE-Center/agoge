@@ -36,6 +36,7 @@ import {
     URL_TEACHER_SETTINGS,
     URL_TEACHER_SPECIFICATIONS_BASE,
     URL_LOGIN,
+    URL_HELP,
     URL_ADMIN_MANAGE_USERS,
     URL_ADMIN_BASE,
     URL_ADMIN_MANAGE_IMAGES, URL_ADMIN_MANAGE_PROJECT
@@ -233,7 +234,8 @@ const AgogeAppBar: React.FC<AgogeAppBarProps> = ({ onSidebarToggle }) => {
                 )}
                 <Tooltip title={"Help & Documentation"} leaveDelay={200}>
                     <IconButton
-                        onClick={() => window.open('https://docs.bastazo.com/agoge')}
+                        component={Link}
+                        to={URL_HELP}
                         color="inherit"
                         aria-label="Open documentation"
                     >

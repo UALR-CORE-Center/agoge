@@ -7,9 +7,10 @@ interface Props {
     value: string;
     onChange: (id: string) => void;
     onAvailabilityChange: (available: boolean) => void;
+    onPeerChange?: (peer: WireGuardRemotePeer | undefined) => void;
 }
 
-export const WireGuardRemotePeerSelector: React.FC<Props> = ({open, value, onChange, onAvailabilityChange}) => {
+export const WireGuardRemotePeerSelector: React.FC<Props> = ({open, value, onChange, onAvailabilityChange, onPeerChange}) => {
     const [remotePeers, setRemotePeers] = useState<WireGuardRemotePeer[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -25,7 +26,10 @@ export const WireGuardRemotePeerSelector: React.FC<Props> = ({open, value, onCha
             if (!current) return;
             const available = items.filter(peer => peer.enabled && !peer.assigned_unit_id);
             setRemotePeers(available);
-            if (!available.some(peer => peer.id === value)) onChange("");
+            if (!available.some(peer => peer.id === value)) {
+                onChange("");
+                onPeerChange?.(undefined);
+            }
             onAvailabilityChange(available.length > 0);
         }).catch(err => {
             if (current) setError(err instanceof Error ? err.message : "Could not load registered remote peers.");
@@ -54,9 +58,12 @@ export const WireGuardRemotePeerSelector: React.FC<Props> = ({open, value, onCha
         <FormControl fullWidth required margin="normal" disabled={loading || !!error || remotePeers.length === 0}>
             <InputLabel id="wireguard-remote-peer-label">Remote peer</InputLabel>
             <Select labelId="wireguard-remote-peer-label" label="Remote peer" value={selectedPeer ? value : ""}
-                onChange={event => onChange(event.target.value)}>
+                onChange={event => {
+                    onChange(event.target.value);
+                    onPeerChange?.(remotePeers.find(peer => peer.id === event.target.value));
+                }}>
                 {remotePeers.map(peer => <MenuItem key={peer.id} value={peer.id}>
-                    {peer.id} — {peer.device_id} ({peer.remote_network_cidr})
+                    {peer.name ? `${peer.name} — ` : ""}{peer.id} — {peer.device_id} ({peer.remote_network_cidr})
                 </MenuItem>)}
             </Select>
             <FormHelperText>{loading ? "Loading authorized remote peers…" : selectedPeer

@@ -5,7 +5,7 @@ from pathlib import Path
 from google.api_core.exceptions import InvalidArgument
 import pytest
 
-from common.utilities.debug_error_trace import safe_error_trace
+from tools.debug_lab.errors import safe_error_trace
 
 
 ROOT = Path(__file__).resolve().parents[3]

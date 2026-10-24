@@ -72,8 +72,10 @@ not create a gateway or assign a remote peer.
    student and a short future expiration. Leave **Build with LMS** disabled.
 5. Click the dialog's **Build Lab** button and wait for the lab detail page.
 6. Verify the assigned remote peer, connection ID, private LAN CIDR, hostname, DNS
-   suffix, and UDP port. Wait for **Gateway service ready** and, with the remote peer
-   online, **Remote tunnel connected**. Read any reported error before proceeding.
+   suffix, and UDP port. A gateway with no active student sessions stops to avoid
+   idle cost. The first student session starts it automatically; the last student
+   stop shuts it down. Optional service/tunnel telemetry does not determine lab
+   build completion.
 7. Copy the claim URL and join code, claim a test Workout, and open its browser
    workstation. Confirm access to the assigned equipment and isolation from
    other remote LANs before sharing the lab with learners.
@@ -100,6 +102,28 @@ A shared HMI lookup/polling API remains future work; use the displayed connectio
 details for the current setup.
 See the [WireGuard deployment and remote peer setup guide](../operations/wireguard-provisioning.md)
 for setup prompts, private LAN registration, peer enrollment, readiness checks, and troubleshooting.
+
+### Change the remote lab for an existing Lab
+
+1. Stop every student Workout and wait for the shared gateway to stop. If an
+   instructor started the whole Lab manually, stop the Lab as well.
+2. On the Lab details card, open **Remote lab settings**.
+3. Select an authorized, available remote lab. Your Lab's current assignment is
+   also shown. Review or change **Remote LAN for this lab (IPv4 CIDR)**.
+4. Choose **Save remote lab settings**. The new assignment and network are saved
+   for this Lab; the administrator's registered defaults are unchanged.
+5. Start a student Workout. Agoge applies the saved gateway configuration and
+   routes before starting the gateway. The Lab's connection ID stays the same.
+
+The editor explains why settings cannot be changed while students or the gateway
+are active. Other instructors' Labs and remote peers already assigned elsewhere
+cannot be selected. Test access to the intended remote devices before resuming
+class use; changing a CIDR does not reconfigure devices on that physical LAN.
+
+Administrators add and maintain remote lab registrations under **Admins → Build
+Manager → Remote Labs**. A registration includes a name, description, private
+LAN, device identity, public key, and authorized instructors. Private keys stay
+on the remote device, and its enrollment token is shown only at registration.
 
 ## Distribute a join-code Lab
 

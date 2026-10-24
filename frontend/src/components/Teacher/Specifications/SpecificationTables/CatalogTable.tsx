@@ -122,7 +122,8 @@ const CatalogTable: React.FC = () => {
         try {
             const response = selectedRow?.managed_wireguard
                 ? await wireguardService.createLab({remote_peer_id: formData.remote_peer_id, build_count: formData.build_count,
-                    expires: formData.expires, student_image: formData.student_image})
+                    expires: formData.expires, student_image: formData.student_image,
+                    ...(formData.remote_network_cidr ? {remote_network_cidr: formData.remote_network_cidr} : {})})
                 : await unitService.create(formData);
             if (response?.build_id) {
                 navigate(`${URL_TEACHER_UNIT}/${response.build_id}`);

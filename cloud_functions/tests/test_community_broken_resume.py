@@ -96,6 +96,10 @@ def lab(monkeypatch):
     gateway.primary_external_ip = None
     gateway.compute_instance = Mock()
     gateway.compute_instance.get.side_effect = NotFound('not created')
+    gateway.compute_instance.stop.side_effect = lambda **kwargs: events.append('compute.stop') or True
+    gateway.wireguard_registry = Mock()
+    gateway.wireguard_registry.get.return_value = SimpleNamespace(id='10000', public_ip=None)
+    gateway.dns_manager = Mock()
 
     def insert(**kwargs):
         events.append('compute.insert')
@@ -152,7 +156,7 @@ def lab(monkeypatch):
 def test_real_broken_unit_build_reaches_bootstrap_and_compute_insert_without_recreating_network(lab):
     lab.unit.build()
 
-    assert lab.events == ['secret.grant', 'compute.insert', 'endpoint.activate']
+    assert lab.events == ['secret.grant', 'compute.insert', 'endpoint.activate', 'compute.stop']
     request = lab.gateway.compute_instance.create.call_args.kwargs
     assert request['resource_name'] == 'abcdefghij-wireguard' and request['wait'] is True
     instance = request['instance_resource']
@@ -165,7 +169,8 @@ def test_real_broken_unit_build_reaches_bootstrap_and_compute_insert_without_rec
     lab.unit.vpc_manager.networks_client.get.assert_called_once_with(resource='abcdefghij-external')
     lab.unit.vpc_manager.subnetworks_client.get.assert_called_once_with(resource='abcdefghij-external-default')
     assert lab.unit.state_manager.get_state() == UnitStates.READY.value
-    assert lab.gateway.state_manager.get_state() == ServerStates.RUNNING.value
+    assert lab.gateway.state_manager.get_state() == ServerStates.STOPPED.value
+    lab.unit._activate_wireguard_endpoint.assert_called_once_with()
     assert lab.lease['expires'] == 2000 and lab.lease['status'] == 'reserved'
 
 

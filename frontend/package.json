@@ -49,8 +49,11 @@
     "firebase": "$firebase"
   },
   "scripts": {
+    "prestart": "node scripts/build-help.mjs",
     "start": "vite --debug",
+    "prebuild": "node scripts/build-help.mjs",
     "build": "vite build",
+    "test:help-build": "node --test scripts/build-help.test.mjs",
     "test": "vitest run",
     "preview": "vite preview"
   },

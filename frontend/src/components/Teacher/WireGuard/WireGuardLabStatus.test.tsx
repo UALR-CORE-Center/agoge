@@ -5,6 +5,7 @@ import {afterEach, describe, expect, it} from "vitest";
 import "@testing-library/jest-dom/vitest";
 import {WireGuardLabStatus} from "./WireGuardLabStatus";
 import {WireGuardEndpoint, WireGuardLease} from "../../../services/Unit/unit.model";
+import {WorkoutStates} from "../../../types/AgogeStates";
 
 const endpoint: WireGuardEndpoint = {id: "10000", hostname: "wg10000.example.edu.",
     server_name: "gateway", port: 51820, status: "active"};
@@ -46,8 +47,23 @@ describe("remote lab telemetry", () => {
         expect(screen.queryByText("Gateway service not ready")).not.toBeInTheDocument();
     });
 
+    it("shows a completed idle lab as stopped without requiring telemetry", () => {
+        render(<WireGuardLabStatus unitState={WorkoutStates.READY} endpoint={{...endpoint, status: "reserved"}}
+            lease={{...lease, service_ready: false, tunnel_ready: false, health_timestamp: null, latest_handshake: 0}} />);
+        expect(screen.getByText("Gateway stopped (idle)")).toBeInTheDocument();
+        expect(screen.getByText(/The lab is built and its gateway is stopped while idle/)).toBeInTheDocument();
+        expect(screen.getByText(/first student start starts the gateway; the last student stop stops it/)).toBeInTheDocument();
+        expect(screen.queryByText("Gateway unavailable")).not.toBeInTheDocument();
+    });
+
+    it.each([WorkoutStates.BUILDING_SERVERS, WorkoutStates.STARTING, WorkoutStates.EXPIRED])(
+        "does not infer idle completion from a reserved endpoint while state is %s", state => {
+            render(<WireGuardLabStatus unitState={state} endpoint={{...endpoint, status: "reserved"}} lease={lease} />);
+            expect(screen.queryByText("Gateway stopped (idle)")).not.toBeInTheDocument();
+        });
+
     it.each([
-        {endpoint: {...endpoint, status: "reserved"}, lease},
+        {endpoint: {...endpoint, status: "reserved" as const}, lease},
         {endpoint, lease: {...lease, status: "released"}},
         {endpoint, lease: {...lease, expires: Date.now() / 1000 - 1}},
     ])("does not show inactive gateways as running despite a recent health report", value => {

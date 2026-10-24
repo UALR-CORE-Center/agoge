@@ -7,7 +7,7 @@ import {WireGuardRemotePeerManager} from "./WireGuardKitManager";
 import {wireguardService} from "../../../services/WireGuard/wireguard.service";
 
 vi.mock("../../../services/WireGuard/wireguard.service", () => ({
-    wireguardService: {listRemotePeers: vi.fn(), enrollRemotePeer: vi.fn()},
+    wireguardService: {listRemotePeers: vi.fn(), enrollRemotePeer: vi.fn(), updateRemotePeer: vi.fn()},
 }));
 vi.mock("../../../hooks/useClipboard", () => ({useClipboard: () => ({copy: vi.fn()})}));
 
@@ -53,5 +53,35 @@ describe("remote peer enrollment", () => {
         expect(await screen.findByRole("alert")).toHaveTextContent("Remote LAN must be a private IPv4 CIDR.");
         expect(screen.getByLabelText(/Remote LAN \(IPv4 CIDR\)/)).toHaveValue("8.8.8.0/24");
         expect(screen.queryByLabelText("One-time enrollment token")).not.toBeInTheDocument();
+    });
+
+    it("edits a named remote lab without re-enrolling the device or exposing another token", async () => {
+        const peer = {id: "remote-lab-01", name: "Pump station", description: "Training skid", device_id: "pi-01",
+            remote_network_cidr: "192.168.50.0/24", peer_public_key: "public", authorized_instructors: ["teacher@example.edu"], enabled: true};
+        vi.mocked(wireguardService.listRemotePeers).mockResolvedValue([peer]);
+        vi.mocked(wireguardService.updateRemotePeer).mockResolvedValue({...peer, name: "Water lab"});
+        render(<WireGuardRemotePeerManager />);
+        fireEvent.click(await screen.findByRole("button", {name: "Edit remote lab Pump station"}));
+        expect(screen.getByLabelText(/Remote peer ID/)).toBeDisabled();
+        expect(screen.getByLabelText(/Remote device identity/)).toBeDisabled();
+        fireEvent.change(screen.getByLabelText("Remote lab name"), {target: {value: "Water lab"}});
+        fireEvent.click(screen.getByRole("button", {name: "Save remote lab"}));
+        await waitFor(() => expect(wireguardService.updateRemotePeer).toHaveBeenCalledWith(peer.id, expect.objectContaining({name: "Water lab"})));
+        expect(await screen.findByText(/Water lab — remote-lab-01/)).toBeInTheDocument();
+        expect(wireguardService.enrollRemotePeer).not.toHaveBeenCalled();
+        expect(screen.queryByLabelText("One-time enrollment token")).not.toBeInTheDocument();
+    });
+
+    it("protects the registered network and key while a remote lab is assigned", async () => {
+        const peer = {id: "remote-lab-01", device_id: "pi-01", remote_network_cidr: "192.168.50.0/24",
+            peer_public_key: "public", authorized_instructors: ["teacher@example.edu"], enabled: true, assigned_unit_id: "abcdefghij"};
+        vi.mocked(wireguardService.listRemotePeers).mockResolvedValue([peer]);
+        render(<WireGuardRemotePeerManager />);
+        fireEvent.click(await screen.findByRole("button", {name: "Edit remote lab remote-lab-01"}));
+        expect(screen.getByLabelText(/Remote LAN \(IPv4 CIDR\)/)).toBeDisabled();
+        expect(screen.getByLabelText(/Remote peer WireGuard public key/)).toBeDisabled();
+        expect(screen.getByLabelText(/Authorized instructor emails/)).toBeDisabled();
+        expect(screen.getByRole("checkbox", {name: "Remote lab enabled"})).toBeDisabled();
+        expect(screen.getByText(/Change that lab's remote connection settings/)).toBeInTheDocument();
     });
 });

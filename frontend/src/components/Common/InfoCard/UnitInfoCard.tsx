@@ -1,22 +1,28 @@
 import {CopyAll, OpenInNew} from "@mui/icons-material";
-import {Box, Button, Divider, IconButton, Link, Paper, Tooltip, Typography} from "@mui/material";
+import {Alert, Box, Button, Divider, IconButton, Link, Paper, Tooltip, Typography} from "@mui/material";
 import Chip from "@mui/material/Chip";
-import React from "react";
+import React, {useState} from "react";
 import {useClipboard} from "../../../hooks/useClipboard";
 import {URL_STUDENT_JOIN} from "../../../router/urls";
 import {absoluteUrl} from "../../../utilities/appContext";
 import {WireGuardLabStatus} from "../../Teacher/WireGuard/WireGuardLabStatus";
+import {WireGuardLabSettingsDialog} from "../../Teacher/WireGuard/WireGuardLabSettingsDialog";
 
 interface UnitInfoCardProps {
     data: any;
     isLoading?: boolean;
+    buildId?: string;
+    onRemoteLabSettingsSaved?: () => void | Promise<void>;
 }
 
 export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
     const {copy} = useClipboard();
+    const [editingRemoteLab, setEditingRemoteLab] = useState(false);
+    const [settingsSaved, setSettingsSaved] = useState(false);
     const {summary, workspace_settings, join_code, roster, wireguard_endpoint, wireguard_lease} = props.data;
     const totalCapacity = workspace_settings ? workspace_settings.count : 0;
     const joinUrl = absoluteUrl(URL_STUDENT_JOIN);
+    const unitId = props.buildId || props.data.id;
     return (
         <>
             <Paper
@@ -209,7 +215,20 @@ export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
                                 </span>
                             </Tooltip>
                         </Box>
-                        <WireGuardLabStatus endpoint={wireguard_endpoint} lease={wireguard_lease} />
+                        <WireGuardLabStatus endpoint={wireguard_endpoint} lease={wireguard_lease} unitState={props.data.state} />
+                        {settingsSaved && <Alert severity="success" sx={{my: 1}}>
+                            Remote lab settings saved. They will be applied before the gateway next starts.
+                        </Alert>}
+                        {wireguard_lease && unitId && <>
+                            <Button variant="outlined" sx={{mt: 2}} onClick={() => {
+                                setSettingsSaved(false); setEditingRemoteLab(true);
+                            }}>Edit remote lab settings</Button>
+                            <WireGuardLabSettingsDialog open={editingRemoteLab} unitId={unitId}
+                                onClose={() => setEditingRemoteLab(false)} onSaved={async () => {
+                                    await props.onRemoteLabSettingsSaved?.();
+                                    setSettingsSaved(true);
+                                }} />
+                        </>}
                     </Box>
                 )}
             </Paper>

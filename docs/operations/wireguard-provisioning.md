@@ -11,8 +11,9 @@ Both paths create one shared Ubuntu gateway, one enrolled remote peer for a priv
 workstation for each student who claims the lab. No catalog JSON or network
 configuration editing is needed.
 Existing WireGuard catalog templates also require a registered remote peer when building
-a new lab. The backend derives the private LAN route from that remote peer's registration;
-browser-supplied routes cannot substitute another remote network.
+a new lab. The selected registration supplies the private LAN default. An
+instructor can provide a per-Lab private LAN override; the backend validates its
+RFC1918 CIDR and rejects overlaps with the student and WireGuard tunnel networks.
 
 ## Deploy this release
 
@@ -65,9 +66,9 @@ deletion revokes the lease, releases the remote peer, and deletes its secret/acc
    directory to the Pi and run its local installer. It prints the Pi public key
    and retains its private key locally.
 2. Open **Admins → Build Manager → Remote Labs** and select **Register a remote
-   peer**. Enter a unique **Remote peer ID**, **Remote device identity**, **Remote
-   LAN (IPv4 CIDR)**, **Remote peer WireGuard public key**, and **Authorized
-   instructor emails**.
+   peer**. Optionally add its name and description, then enter a unique **Remote peer ID**, **Remote
+   device identity**, **Remote LAN (IPv4 CIDR)**, **Remote peer WireGuard public
+   key**, and **Authorized instructor emails**.
 3. Save the one-time enrollment token in the root-only file on the Pi and set its
    API base URL, remote peer ID, and private LAN interface as described in the Pi guide.
 4. Start the peer's bundled polling service. A remote peer can be assigned to only one lab
@@ -93,6 +94,36 @@ uses `remote_network_cidr` for this subnet; a lab build selects `remote_peer_id`
 Existing `/wireguard/kits/` requests and the Pi client's `kit_id` setting remain
 compatible with previous versions. In those older names, a "kit" means the
 registered remote peer, not a different kind of network or credential.
+
+### Edit registrations and saved Lab settings
+
+An administrator can edit a remote lab's registration in the same inventory.
+Registrations assigned to a Lab are protected against changes that would alter
+that Lab's connection; use that Lab's instructor settings for an assignment or
+network change. Enrollment tokens are not displayed again by editing.
+
+Instructors can choose an available authorized remote lab and an optional private
+LAN override in the build dialog. For an already built Lab, stop all student
+Workouts and the gateway, then open **Remote lab settings** on its details card.
+Save the selected peer and private LAN. The backend validates authorization,
+exclusive assignment, expiration, and subnet overlap before changing records.
+It saves a new configuration secret version while the gateway is stopped; the
+next student start applies the saved configuration and reconciles its routes.
+An update that races with a student start is rejected instead of altering an
+active connection. The gateway's connection ID and hostname are retained.
+
+This is a Lab-specific configuration. It does not change the administrator's
+registered LAN default or assign addresses on the remote physical network.
+See [the instructor steps](../guides/instructor-guide.md#change-the-remote-lab-for-an-existing-lab).
+
+### Verify the student lifecycle locally
+
+The CLI is packaged under `tools/debug_lab/`. From the repository root, run
+`python -m tools.debug_lab student-lifecycle` with a two-student profile to build,
+claim two Workouts, test the first/last-student gateway transitions, and confirm
+deletion. It reads the gateway's Compute Engine status at each stage and does
+not require a Pi or guest health callback. See the
+[complete two-student instructions](local-backend-debugging.md#verify-two-students-and-automatic-gateway-startstop).
 
 ## Upload a starter template with setup.py
 

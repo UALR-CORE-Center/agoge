@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-import debug_lab as cli
+from tools.debug_lab import cli
 from common.constants.database import DbCollections
 from common.constants.states import ServerStates, UnitStates, WorkoutStates
 from common.document_database.firestore_database import FirestoreDatabase
@@ -182,5 +182,5 @@ def test_run_captures_created_id_before_real_build_failure(persisted, capsys):
     assert result['error'] == 'TimeoutError'
     prompt.assert_not_called()
     output = capsys.readouterr().out
-    assert f'Cleanup: debug_lab.py delete-labs --instructor {args.instructor} --unit-id {persisted.unit_id} --yes' in output
+    assert f'Cleanup: python -m tools.debug_lab delete-labs --instructor {args.instructor} --unit-id {persisted.unit_id} --yes' in output
     assert 'private-worker-error' not in output

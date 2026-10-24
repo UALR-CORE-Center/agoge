@@ -36,6 +36,27 @@ def grant(monkeypatch):
     return store, client, sleep
 
 
+def test_configuration_staging_uses_a_new_secret_and_immutable_numeric_version(grant):
+    store, client, _ = grant
+    reference = 'projects/tenant-project/secrets/agoge-wg-abcdefghij-cfg-revision/versions/1'
+    client.add_secret_version.return_value.name = reference
+    assert store.stage_configuration('abcdefghij', 'revision', {'private_key': 'private-value'}) == reference
+    assert client.create_secret.call_args.kwargs['request']['secret_id'] == 'agoge-wg-abcdefghij-cfg-revision'
+    assert client.add_secret_version.call_args.kwargs['request']['parent'] == reference.split('/versions/')[0]
+    client.access_secret_version.assert_not_called()
+    assert 'private-value' not in repr(store.logger.mock_calls)
+
+
+def test_failed_version_staging_cleans_unselected_new_secret(grant):
+    store, client, _ = grant
+    client.add_secret_version.side_effect = PermissionDenied('private response')
+    with pytest.raises(PermissionDenied):
+        store.stage_configuration('abcdefghij', 'revision', {'private_key': 'private-value'})
+    client.delete_secret.assert_called_once_with(request={
+        'name': 'projects/tenant-project/secrets/agoge-wg-abcdefghij-cfg-revision'})
+    assert 'private-value' not in repr(store.logger.mock_calls)
+
+
 def test_grant_preserves_real_policy_etag_version_and_conditional_bindings(grant):
     store, client, sleep = grant
     original = policy()

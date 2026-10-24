@@ -1,6 +1,6 @@
 """Run API and Cloud Function build code locally against real test-dev resources.
 
-Run ``python debug_lab.py --help`` from any working directory. No application
+Run ``python -m tools.debug_lab --help`` from the repository root. No application
 deployment or Pub/Sub emulator is required. Debug execution is always enabled.
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 TEST_PROJECT = 'test-dev-787001'
 DEFAULT_GATEWAY_STARTUP_TIMEOUT_SECONDS = 900
 
@@ -32,7 +32,7 @@ class DebugLabInputError(ValueError):
 
 
 def report_error_location(error):
-    from common.utilities.debug_error_trace import safe_error_trace
+    from tools.debug_lab.errors import safe_error_trace
 
     frames = safe_error_trace(error, ROOT)
     if frames:
@@ -55,7 +55,8 @@ def invoke_local_worker(attributes: dict, env_dict: dict) -> None:
 class LocalBackend:
     def __init__(self, env_dict, db, unit_class, workout_class, users_class,
                  worker=invoke_local_worker,
-                 gateway_startup_timeout_seconds=DEFAULT_GATEWAY_STARTUP_TIMEOUT_SECONDS):
+                 gateway_startup_timeout_seconds=DEFAULT_GATEWAY_STARTUP_TIMEOUT_SECONDS,
+                 gateway_status_reader=None):
         if env_dict.get('project') != TEST_PROJECT:
             raise ValueError(f'Local debug builds require project {TEST_PROJECT}')
         # Older profiles/automation may still pass this setting. Guest health
@@ -65,6 +66,7 @@ class LocalBackend:
         self.db = db
         self.unit_class, self.workout_class, self.users_class = unit_class, workout_class, users_class
         self.worker = worker
+        self.gateway_status_reader = gateway_status_reader
 
     def dispatch(self, attributes):
         self.worker(attributes, self.env_dict)
@@ -282,11 +284,85 @@ class LocalBackend:
             expected.update(record['name'] if record['name'].startswith(f'{parent}-')
                             else f'{parent}-{record["name"]}' for record in records
                             if record.get('name') and record.get('state') != ServerStates.DELETED.value)
+        active_workouts = any(workout.get('state') in (WorkoutStates.STARTING.value, WorkoutStates.RUNNING.value)
+                              for workout in workouts)
+        idle_gateways = ({f'{unit_id}-{server["name"]}' for server in unit.get('servers') or []
+                          if server.get('wireguard_gateway') is True}
+                         if stage == 'build' and status['state'] == UnitStates.READY.value and not active_workouts else set())
         for name in sorted(expected):
             record = self.db.get(collection_name=DbCollections.SERVER, doc_id=name) or {}
-            if record.get('state') != expected_server:
-                raise DebugLabStageError(f'Server {name} did not complete {stage}; expected state {expected_server}')
+            wanted = ServerStates.STOPPED.value if name in idle_gateways else expected_server
+            if record.get('state') != wanted:
+                raise DebugLabStageError(f'Server {name} did not complete {stage}; expected state {wanted}')
         return status
+
+    def _gateway_cloud_status(self, server_name):
+        if self.gateway_status_reader is not None:
+            return self.gateway_status_reader(server_name)
+        from common.utilities.gcp.compute.compute_instance import ComputeInstanceAPI
+
+        if not self.env_dict.get('region') or not self.env_dict.get('zone'):
+            raise DebugLabInputError('The environment must configure a region and zone for GCP verification')
+        instance = ComputeInstanceAPI(project=TEST_PROJECT, region=self.env_dict['region'],
+                                      zone=self.env_dict['zone']).get(resource_name=server_name)
+        return instance.get('status') if isinstance(instance, dict) else instance.status
+
+    def _verify_student_stage(self, unit_id, workouts, running):
+        from common.constants.states import ServerStates, UnitStates, WorkoutStates
+
+        status = self.status(unit_id)
+        if status['state'] not in (UnitStates.READY.value, UnitStates.RUNNING.value):
+            raise DebugLabStageError(f'Lab {unit_id} has not completed provisioning')
+        current = {item['workout_id']: item for item in status['workouts']}
+        if set(current) != set(workouts):
+            raise DebugLabStageError('The student lifecycle must contain only its two selected test workouts')
+        for workout_id in workouts:
+            wanted = WorkoutStates.RUNNING.value if workout_id in running else WorkoutStates.READY.value
+            if current[workout_id].get('state') != wanted:
+                raise DebugLabStageError(f'Workout {workout_id} did not reach the expected lifecycle state')
+        gateway = status.get('gateway') or {}
+        server_name = gateway.get('server_name')
+        wanted_state = ServerStates.RUNNING.value if running else ServerStates.STOPPED.value
+        wanted_cloud = 'RUNNING' if running else 'TERMINATED'
+        if not server_name or gateway.get('state') != wanted_state:
+            raise DebugLabStageError(f'The shared gateway did not automatically reach {wanted_cloud}')
+        cloud_status = self._gateway_cloud_status(server_name)
+        if cloud_status != wanted_cloud:
+            raise DebugLabStageError(f'GCP reports the shared gateway as {cloud_status}; expected {wanted_cloud}')
+        status['gateway'] = {**gateway, 'gcp_status': cloud_status}
+        return status
+
+    def _student_lifecycle_steps(self, unit_id, args, confirm, result):
+        # Exercise only student actions. Explicit Unit start/stop calls would
+        # conceal a broken first-student/last-student gateway lifecycle.
+        workouts, running = [], set()
+        status = self._verify_student_stage(unit_id, workouts, running)
+        print(json.dumps(status, indent=2), flush=True)
+        for number, email in enumerate(args.student_emails, 1):
+            if not confirm(f'Join student {number} ({email}) to lab {unit_id}? [Y/n/q]: ', default=True):
+                return False
+            joined = self.create_workout(unit_id, email)
+            if joined['workout_id'] in workouts or joined.get('exists'):
+                raise DebugLabStageError('The student lifecycle requires two newly claimed test workouts')
+            workouts.append(joined['workout_id'])
+            status = self._verify_student_stage(unit_id, workouts, running)
+            result['completed_steps'].append(f'join_student_{number}')
+            result['students'] = [{'student_email': address, 'workout_id': identifier}
+                                  for address, identifier in zip(args.student_emails, workouts)]
+            print(json.dumps(status, indent=2), flush=True)
+        for operation, number in (('start', 1), ('start', 2), ('stop', 1), ('stop', 2)):
+            if not confirm(f'{operation.capitalize()} student {number} workout? [Y/n/q]: ', default=True):
+                return False
+            workout_id = workouts[number - 1]
+            self.action('workout', workout_id, operation, args.duration_hours)
+            if operation == 'start':
+                running.add(workout_id)
+            else:
+                running.remove(workout_id)
+            status = self._verify_student_stage(unit_id, workouts, running)
+            result['completed_steps'].append(f'{operation}_student_{number}')
+            print(json.dumps(status, indent=2), flush=True)
+        return True
 
     def run_lab(self, args, read_input=None):
         """Run one prompted lifecycle, retaining failed runs for inspection."""
@@ -348,25 +424,30 @@ class LocalBackend:
             result['completed_steps'].append('build')
             print(json.dumps(status, indent=2), flush=True)
 
-            stage = 'start'
-            if not confirm(f'Start lab {unit_id} and its workouts? [Y/n/q]: ', default=True):
-                return result
-            self.action('unit', unit_id, 'start')
-            for workout_id in workout_ids:
-                self.action('workout', workout_id, 'start', args.duration_hours)
-            status = self._verify_lab_stage(unit_id, 'start')
-            result['completed_steps'].append('start')
-            print(json.dumps(status, indent=2), flush=True)
+            if getattr(args, 'command', None) == 'student-lifecycle':
+                stage = 'student lifecycle'
+                if not self._student_lifecycle_steps(unit_id, args, confirm, result):
+                    return result
+            else:
+                stage = 'start'
+                if not confirm(f'Start lab {unit_id} and its workouts? [Y/n/q]: ', default=True):
+                    return result
+                self.action('unit', unit_id, 'start')
+                for workout_id in workout_ids:
+                    self.action('workout', workout_id, 'start', args.duration_hours)
+                status = self._verify_lab_stage(unit_id, 'start')
+                result['completed_steps'].append('start')
+                print(json.dumps(status, indent=2), flush=True)
 
-            stage = 'stop'
-            if not confirm(f'Stop lab {unit_id} and its workouts? [Y/n/q]: ', default=True):
-                return result
-            for workout_id in workout_ids:
-                self.action('workout', workout_id, 'stop')
-            self.action('unit', unit_id, 'stop')
-            status = self._verify_lab_stage(unit_id, 'stop')
-            result['completed_steps'].append('stop')
-            print(json.dumps(status, indent=2), flush=True)
+                stage = 'stop'
+                if not confirm(f'Stop lab {unit_id} and its workouts? [Y/n/q]: ', default=True):
+                    return result
+                for workout_id in workout_ids:
+                    self.action('workout', workout_id, 'stop')
+                self.action('unit', unit_id, 'stop')
+                status = self._verify_lab_stage(unit_id, 'stop')
+                result['completed_steps'].append('stop')
+                print(json.dumps(status, indent=2), flush=True)
 
             stage = 'delete'
             if confirm(f'Delete test lab {unit_id} and its managed resources? [y/N/q]: '):
@@ -392,9 +473,9 @@ class LocalBackend:
                 print(result['detail'], flush=True)
         finally:
             if result['unit_id'] and result['outcome'] != 'deleted':
-                print(f'Lab {result["unit_id"]} was retained. Inspect it with debug_lab.py status '
+                print(f'Lab {result["unit_id"]} was retained. Inspect it with python -m tools.debug_lab status '
                       f'--unit-id {result["unit_id"]}.', flush=True)
-                print(f'Cleanup: debug_lab.py delete-labs --instructor {args.instructor} '
+                print(f'Cleanup: python -m tools.debug_lab delete-labs --instructor {args.instructor} '
                       f'--unit-id {result["unit_id"]} --yes', flush=True)
         return result
 
@@ -641,7 +722,7 @@ class DebugArgumentParser(argparse.ArgumentParser):
     def parse_args(self, args=None, namespace=None):
         parsed = super().parse_args(args, namespace)
         try:
-            if parsed.command in ('create-lab', 'run-lab'):
+            if parsed.command in ('create-lab', 'run-lab', 'student-lifecycle'):
                 self._lab_profile(parsed)
             else:
                 parsed.project = getattr(parsed, 'project', TEST_PROJECT)
@@ -687,8 +768,9 @@ class DebugArgumentParser(argparse.ArgumentParser):
     @staticmethod
     def _lab_profile(args):
         defaults = {'project': TEST_PROJECT, 'wireguard_api_url': None,
-                    'template': 'wireguard-factory-lab', 'count': 1, 'expires_hours': 2,
-                    'student_email': None,
+                    'template': 'wireguard-factory-lab',
+                    'count': 2 if args.command == 'student-lifecycle' else 1, 'expires_hours': 2,
+                    'student_email': None, 'student_emails': None,
                     'gateway_startup_timeout_seconds': DEFAULT_GATEWAY_STARTUP_TIMEOUT_SECONDS}
         allowed = {*defaults, 'instructor', 'remote_peer_id'}
         profile = _json_object(args.profile, 'debug profile') if getattr(args, 'profile', None) else {}
@@ -719,6 +801,18 @@ class DebugArgumentParser(argparse.ArgumentParser):
         if type(values['count']) is not int:
             raise ValueError('Debug profile count must be an integer')
         values['count'] = _count(values['count'])
+        students = values['student_emails']
+        if students is not None:
+            if not isinstance(students, list) or any(not isinstance(value, str) for value in students):
+                raise ValueError('student_emails must be a list of email addresses')
+            values['student_emails'] = [_email(value) for value in students]
+        if args.command == 'student-lifecycle':
+            if len(values['student_emails'] or []) != 2 or len(set(values['student_emails'])) != 2:
+                raise ValueError('student-lifecycle requires exactly two distinct student_emails or repeated --student-email flags')
+            if values['count'] < 2:
+                raise ValueError('student-lifecycle requires a lab capacity of at least two (--count 2)')
+            # Student claims happen explicitly after the idle gateway check.
+            values['student_email'] = None
         if type(values['expires_hours']) not in (int, float):
             raise ValueError('Debug profile expires_hours must be a number')
         values['expires_hours'] = _hours(values['expires_hours'])
@@ -731,7 +825,7 @@ class DebugArgumentParser(argparse.ArgumentParser):
 
 
 def parser():
-    result = DebugArgumentParser(description=__doc__)
+    result = DebugArgumentParser(prog='python -m tools.debug_lab', description=__doc__)
     result.add_argument('--project', default=argparse.SUPPRESS, choices=[TEST_PROJECT])
     result.add_argument('--wireguard-api-url', type=_https_url, default=argparse.SUPPRESS,
                         help='HTTPS callback base for a new lab; defaults to the project API')
@@ -741,7 +835,8 @@ def parser():
     commands = result.add_subparsers(dest='command', required=True)
     for name, description in (
             ('create-lab', 'Create a lab from the uploaded catalog template'),
-            ('run-lab', 'Build, start, stop, and delete a lab with prompts between stages')):
+            ('run-lab', 'Build, start, stop, and delete a lab with prompts between stages'),
+            ('student-lifecycle', 'Verify automatic shared gateway start/stop with two students')):
         lab = commands.add_parser(name, help=description)
         lab.add_argument('--profile', type=_absolute_path, help='JSON debug profile; explicit flags override its values')
         lab.add_argument('--project', default=argparse.SUPPRESS, choices=[TEST_PROJECT])
@@ -754,9 +849,14 @@ def parser():
                         help='Registered remote peer ID (--kit-id is a compatibility alias)')
         lab.add_argument('--count', default=argparse.SUPPRESS, type=_count)
         lab.add_argument('--expires-hours', default=argparse.SUPPRESS, type=_hours)
-        lab.add_argument('--student-email', default=argparse.SUPPRESS, type=_email,
-                         help='Also claim and build one student workout')
-        if name == 'run-lab':
+        if name == 'student-lifecycle':
+            lab.add_argument('--student-email', dest='student_emails', action='append',
+                             default=argparse.SUPPRESS, type=_email,
+                             help='Repeat twice for the two test students; overrides student_emails in the profile')
+        else:
+            lab.add_argument('--student-email', default=argparse.SUPPRESS, type=_email,
+                             help='Also claim and build one student workout')
+        if name in ('run-lab', 'student-lifecycle'):
             lab.set_defaults(recent_cleanup='ask')
             cleanup_mode = lab.add_mutually_exclusive_group()
             cleanup_mode.add_argument('--delete-recent', dest='recent_cleanup', action='store_const', const='delete',
@@ -807,7 +907,7 @@ def main(argv=None):
                                gateway_startup_timeout_seconds=args.gateway_startup_timeout_seconds)
         if args.command == 'create-lab':
             result = backend.create_lab(args)
-        elif args.command == 'run-lab':
+        elif args.command in ('run-lab', 'student-lifecycle'):
             result = backend.run_lab(args)
         elif args.command == 'list-peers':
             result = backend.list_peers(args.instructor)
@@ -832,7 +932,7 @@ def main(argv=None):
         report_error_location(error)
         return 1
     print(json.dumps(result, indent=2))
-    if args.command == 'run-lab':
+    if args.command in ('run-lab', 'student-lifecycle'):
         return result['exit_code']
     return 1 if args.command == 'delete-labs' and result.get('failed', 0) else 0
 

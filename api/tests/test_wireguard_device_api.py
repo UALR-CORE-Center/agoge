@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 import pytest
 
-from common.exceptions import BadRequest, NotFound, NotReady, Unauthorized
+from common.exceptions import BadRequest, Conflict, NotFound, NotReady, Unauthorized
 from common.constants.states import UnitStates
 from common.models.wireguard import WireGuardEndpointRecordModel
 from dependencies import admin_required, get_cloud_env, teacher_required
@@ -68,6 +68,41 @@ def test_instructor_and_admin_routes_require_their_own_authorization(http):
     assert http.client.post('/wireguard/labs/', json={'kit_id': 'kit-one'}).status_code == 403
     http.service.list_kits.assert_not_called()
     http.service.enroll.assert_not_called()
+
+
+def test_remote_lab_edit_routes_require_role_authentication(http):
+    assert http.client.patch('/wireguard/remote-peers/kit-one/', json={'name': 'Pump station'}).status_code == 403
+    assert http.client.get('/wireguard/labs/abcdefghij/remote-peer/').status_code == 403
+    assert http.client.patch('/wireguard/labs/abcdefghij/remote-peer/', json={
+        'remote_peer_id': 'kit-one', 'remote_network_cidr': '192.168.50.0/24'}).status_code == 403
+    http.service.update_lab_settings.assert_not_called()
+
+
+def test_teacher_remote_lab_settings_save_and_conflict_contract(http):
+    user = SimpleNamespace(is_admin=False, email='teacher@example.edu')
+    http.app.dependency_overrides[teacher_required] = lambda: user
+    saved = {'unit_id': 'abcdefghij', 'remote_peer_id': 'kit-one',
+             'remote_network_cidr': '192.168.50.0/24', 'configuration_status': 'saved',
+             'can_edit': True, 'blocked_reason': None}
+    http.service.lab_settings.return_value = saved
+    http.service.update_lab_settings.return_value = saved
+    response = http.client.get('/wireguard/labs/abcdefghij/remote-peer/')
+    assert response.status_code == 200 and response.json()['data'] == saved
+    assert response.headers['cache-control'] == 'no-store'
+    data = {'remote_peer_id': 'kit-one', 'remote_network_cidr': '192.168.50.0/24'}
+    response = http.client.patch('/wireguard/labs/abcdefghij/remote-peer/', json=data)
+    assert response.status_code == 200 and response.json()['data']['configuration_status'] == 'saved'
+    http.service.update_lab_settings.assert_called_once()
+    http.service.update_lab_settings.side_effect = Conflict('Stop all students and the gateway first')
+    assert http.client.patch('/wireguard/labs/abcdefghij/remote-peer/', json=data).status_code == 409
+
+
+def test_lab_settings_request_rejects_secrets_and_nonprivate_lan(http):
+    http.app.dependency_overrides[teacher_required] = lambda: SimpleNamespace(is_admin=True)
+    for data in ({'remote_peer_id': 'kit-one', 'remote_network_cidr': '8.8.8.0/24'},
+                 {'remote_peer_id': 'kit-one', 'remote_network_cidr': '192.168.50.0/24', 'private_key': 'do-not-accept'}):
+        assert http.client.patch('/wireguard/labs/abcdefghij/remote-peer/', json=data).status_code == 422
+    http.service.update_lab_settings.assert_not_called()
 
 
 def test_teacher_can_list_kits_but_cannot_enroll(http):

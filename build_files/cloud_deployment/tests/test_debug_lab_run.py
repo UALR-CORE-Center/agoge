@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
-import debug_lab as cli
+from tools.debug_lab import cli
 from common.constants.database import DbCollections
 from common.constants.states import UnitStates, WorkoutStates
 

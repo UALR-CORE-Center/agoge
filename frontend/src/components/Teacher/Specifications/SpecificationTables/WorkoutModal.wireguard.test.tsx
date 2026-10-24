@@ -41,9 +41,11 @@ describe("WireGuard build flow", () => {
         fireEvent.mouseDown(screen.getByRole("combobox", {name: /Remote peer/}));
         fireEvent.click(screen.getByRole("option", {name: /remote-lab-01/}));
         expect(button).toBeEnabled();
+        expect(screen.getByLabelText(/Remote LAN for this lab/)).toHaveValue("172.30.0.0/24");
+        fireEvent.change(screen.getByLabelText(/Remote LAN for this lab/), {target: {value: "192.168.50.0/24"}});
         fireEvent.click(button);
         expect(submit).toHaveBeenCalledWith(expect.objectContaining({remote_peer_id: "remote-lab-01", build_count: 1,
-            student_image: "student-kali-record"}));
+            remote_network_cidr: "192.168.50.0/24", student_image: "student-kali-record"}));
         expect(screen.queryByLabelText("Build with LMS")).not.toBeInTheDocument();
     });
 

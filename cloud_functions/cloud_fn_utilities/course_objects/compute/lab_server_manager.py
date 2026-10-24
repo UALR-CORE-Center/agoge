@@ -134,7 +134,9 @@ class LabServerManager(BaseComputeManager):
             self._mark_wireguard_endpoint_error()
             raise
 
-    def start(self) -> None:
+    def start(self, *, community_start_claim=None) -> None:
+        if community_start_claim is not None and not self._community_claim_is_current('start', community_start_claim):
+            return
         # A retry after DNS publication failed must not issue another start for
         # an instance that is already running. Reuse the VM and retry only the
         # public endpoint dependencies.
@@ -176,7 +178,9 @@ class LabServerManager(BaseComputeManager):
                 self._mark_wireguard_endpoint_error()
                 raise
 
-    def stop(self) -> None:
+    def stop(self, *, community_stop_claim=None) -> None:
+        if community_stop_claim is not None and not self._community_claim_is_current('stop', community_stop_claim):
+            return
         endpoint = None
         if self._managed_wireguard():
             self._require_wireguard_provisionable()
@@ -201,6 +205,45 @@ class LabServerManager(BaseComputeManager):
                     record_name=endpoint.hostname, ip_address=endpoint.public_ip,
                 ):
                     raise BaseAgogeException('WireGuard stopped, but DNS removal failed; retry stop')
+        if community_stop_claim is not None:
+            # A duplicate stop RPC can observe the first RPC still STOPPING.
+            # Do not release a waiting first-student start until GCP and this
+            # stop's endpoint/DNS cleanup have both finished.
+            deadline = time.monotonic() + 300
+            while self._get_instance_status() != 'TERMINATED':
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f'Automatic stop was not confirmed by GCP for {self.server_name}')
+                time.sleep(5)
+            self._complete_community_stop(community_stop_claim)
+
+    def _complete_community_stop(self, token):
+        reference = self.db.db.collection(DbCollections.SERVER.value).document(self.server_name)
+
+        def complete(transaction):
+            snapshot = reference.get(transaction=transaction)
+            record = snapshot.to_dict() if snapshot.exists else {}
+            claim = record.get('community_stop_claim') or {}
+            if claim.get('token') == token and record.get('state') == ServerStates.STOPPED.value:
+                transaction.set(reference, {'community_stop_claim': {**claim, 'completed': True}}, merge=True)
+
+        self.db.transaction(complete)
+
+    def _community_claim_is_current(self, action, token):
+        record = self.db.get(collection_name=DbCollections.SERVER, doc_id=self.server_name) or {}
+        claim = record.get(f'community_{action}_claim') or {}
+        if action == 'stop':
+            # GCP can finish before endpoint/DNS cleanup fails. Keep that exact
+            # unfinished claim retryable from STOPPED, while completed claims
+            # and claims replaced by a later start remain harmless redeliveries.
+            expected_state = record.get('state') in (ServerStates.STOPPING.value, ServerStates.STOPPED.value)
+            expected_state = expected_state and claim.get('completed') is not True
+        else:
+            expected_state = record.get('state') == ServerStates.STARTING.value
+        current = (isinstance(token, str) and bool(token) and claim.get('token') == token
+                   and expected_state)
+        if not current:
+            self.logger.info(f'Ignoring obsolete automatic community {action} for {self.server_name}')
+        return current
 
     def delete(
         self,
@@ -637,9 +680,15 @@ class LabServerManager(BaseComputeManager):
                   for item in items}
         if existing:
             accounts = self._resource_field(existing, 'service_accounts', []) or []
+            status = str(self._resource_field(existing, 'status', '')).upper()
+            prior_configurations = [getattr(lease, 'previous_secret_version_name', None),
+                                    *(getattr(lease, 'secret_history', None) or [])]
+            saved_change = (for_start and status == 'TERMINATED' and getattr(lease, 'configuration_pending', False)
+                            and bool(fields.get(SECRET_METADATA_KEY))
+                            and fields.get(SECRET_METADATA_KEY) in prior_configurations)
             if (
                 not any(self._resource_field(account, 'email') == email for account in accounts)
-                or fields.get(SECRET_METADATA_KEY) != lease.secret_version_name
+                or (fields.get(SECRET_METADATA_KEY) != lease.secret_version_name and not saved_change)
             ):
                 raise BadRequest('Existing gateway identity or configuration differs; rebuild the lab')
 
@@ -654,6 +703,9 @@ class LabServerManager(BaseComputeManager):
         metadata = managed_metadata(lease.secret_version_name, nonce)
         self._managed_wireguard_metadata = metadata
         if for_start and existing and not running:
+            if getattr(lease, 'configuration_pending', False):
+                from cloud_fn_utilities.server_specific.wireguard_configuration import apply_saved_wireguard_network
+                apply_saved_wireguard_network(self, lease)
             # Fingerprint prevents overwriting concurrent metadata changes.
             metadata['fingerprint'] = self._resource_field(current_metadata, 'fingerprint')
             preserved = [
@@ -666,6 +718,8 @@ class LabServerManager(BaseComputeManager):
             metadata['items'] = preserved + metadata['items']
             if not self.compute_instance.set_metadata(self.server_name, metadata, wait=True):
                 raise BaseAgogeException('Unable to update WireGuard startup configuration; retry start')
+            if getattr(lease, 'configuration_pending', False):
+                service.configuration_applied(self.parent_build_id, lease.configuration_revision)
 
     def _refresh_wireguard_external_ip(self) -> None:
         instance = self.compute_instance.get(resource_name=self.server_name)

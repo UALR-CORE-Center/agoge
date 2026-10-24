@@ -94,7 +94,8 @@ class ControlHandler:
         if self.course_object == str(PubSub.CourseObjects.LAB_SERVER.value):
             cm = ComputeManagerFactory.create_manager_object(env_dict=self.env_dict)
             cm.load(server_name=self.build_id)
-            cm.start()
+            claim = self.event_attributes.get('community_start_claim')
+            cm.start(**({'community_start_claim': claim} if claim else {}))
         elif self.course_object == str(PubSub.CourseObjects.WORKOUT.value):
             duration_hours = self.event_attributes.get(self.event_attr_keys.DURATION, 2)
             workout = WorkoutFactory.create_workout_object(
@@ -133,7 +134,8 @@ class ControlHandler:
         if self.course_object == str(PubSub.CourseObjects.LAB_SERVER.value):
             cm = ComputeManagerFactory.create_manager_object(env_dict=self.env_dict)
             cm.load(server_name=self.build_id)
-            cm.stop()
+            claim = self.event_attributes.get('community_stop_claim')
+            cm.stop(**({'community_stop_claim': claim} if claim else {}))
         elif self.course_object == str(PubSub.CourseObjects.WORKOUT.value):
             workout = WorkoutFactory.create_workout_object(
                 workout_id=self.build_id,

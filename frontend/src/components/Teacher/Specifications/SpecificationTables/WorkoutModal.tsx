@@ -15,6 +15,7 @@ import {
     Divider,
     useMediaQuery,
     useTheme,
+    TextField,
 } from '@mui/material';
 import Alert from "@mui/material/Alert";
 import DialogActions from "@mui/material/DialogActions";
@@ -50,6 +51,7 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
     const [displayedCourses, setDisplayedCourses] = useState([{ value: '', label: '-- Select a LMS --' }]);
     const [displayedCodes, setDisplayedCodes] = useState([{ value: '', label: '-- Select a Course Code --' }]);
     const [remotePeerId, setRemotePeerId] = useState("");
+    const [remoteNetworkCidr, setRemoteNetworkCidr] = useState("");
     const [remotePeersAvailable, setRemotePeersAvailable] = useState(false);
     const [studentImage, setStudentImage] = useState("");
     const [studentImagesAvailable, setStudentImagesAvailable] = useState(false);
@@ -168,6 +170,7 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
         if (validateForm()) {
             setErrorMessage(null);
             onSubmit(wireguardLab ? {...formData, remote_peer_id: remotePeerId,
+                ...(remoteNetworkCidr.trim() ? {remote_network_cidr: remoteNetworkCidr.trim()} : {}),
                 ...(managedWireguardLab ? {student_image: studentImage} : {})} : formData);
         } else {
             setErrorMessage("Please fill out all required fields.");
@@ -231,7 +234,12 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
                     flexDirection={"column"}
                 >
                     {wireguardLab && <WireGuardRemotePeerSelector open={open} value={remotePeerId}
-                        onChange={setRemotePeerId} onAvailabilityChange={setRemotePeersAvailable} />}
+                        onChange={setRemotePeerId} onAvailabilityChange={setRemotePeersAvailable}
+                        onPeerChange={peer => setRemoteNetworkCidr(peer?.remote_network_cidr || "")} />}
+                    {wireguardLab && <TextField label="Remote LAN for this lab (IPv4 CIDR)"
+                        value={remoteNetworkCidr} disabled={!remotePeerId} margin="normal"
+                        onChange={event => setRemoteNetworkCidr(event.target.value)}
+                        helperText="Defaults to the remote lab's registered LAN. Changing this value affects this Agoge lab only; the server checks network overlap." />}
                     {managedWireguardLab && <WireGuardStudentImageSelector open={open} value={studentImage}
                         onChange={setStudentImage} onAvailabilityChange={setStudentImagesAvailable} />}
                     <FormControl margin={"normal"} required={true}>

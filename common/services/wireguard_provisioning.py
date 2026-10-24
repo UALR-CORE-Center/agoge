@@ -4,6 +4,7 @@ Private keys and callback credentials live only in Secret Manager. Firestore and
 Unit/API payloads contain public keys, digests and non-secret lease metadata.
 """
 import base64
+from copy import deepcopy
 import hashlib
 import hmac
 import ipaddress
@@ -12,14 +13,15 @@ import math
 import re
 import secrets
 import time
+from uuid import uuid4
 from urllib.parse import urlsplit
 
-from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections
-from common.constants.states import UnitStates
+from common.constants.database import DATABASE_NAME, DatabaseTypes, DbCollections, DbOperators
+from common.constants.states import ServerStates, UnitStates, WorkoutStates
 from common.exceptions import BadRequest, Conflict, NotFound, NotReady, Unauthorized
 from common.models.wireguard_provisioning import (
     WireGuardHealthReport, WireGuardKitCreate, WireGuardKitModel, WireGuardLeaseModel,
-    WireGuardRemotePeerCreate, WireGuardRemotePeerModel,
+    WireGuardRemotePeerCreate, WireGuardRemotePeerModel, WireGuardRemotePeerUpdate, WireGuardLabSettingsUpdate,
 )
 
 
@@ -90,6 +92,26 @@ class WireGuardSecretStore:
     def access(self, version_name):
         response = self.client.access_secret_version(request={'name': version_name})
         return json.loads(response.payload.data.decode('utf-8'))
+
+    def stage_configuration(self, unit_id, revision, payload):
+        """Use a new secret so an old `latest` reference never changes before CAS."""
+        name = f'projects/{self.project}/secrets/agoge-wg-{unit_id}-cfg-{revision}'
+        self.client.create_secret(request={
+            'parent': f'projects/{self.project}', 'secret_id': name.rsplit('/', 1)[-1],
+            'secret': {'replication': {'automatic': {}}, 'labels': {'agoge': 'wireguard'}},
+        })
+        try:
+            response = self.client.add_secret_version(request={
+                'parent': name, 'payload': {'data': json.dumps(payload).encode('utf-8')},
+            })
+        except Exception:
+            # No database pointer can reference this new unique secret yet.
+            try:
+                self.client.delete_secret(request={'name': name})
+            except Exception:
+                self.logger.warning('Unable to remove an uninitialized remote lab configuration secret')
+            raise
+        return response.name
 
     def grant(self, version_name, email):
         from google.api_core.exceptions import InvalidArgument
@@ -233,6 +255,202 @@ class WireGuardProvisioningService:
         kit = self.get_authorized_kit(remote_peer_id, requester)
         return WireGuardRemotePeerModel(**kit.model_dump())
 
+    def update_remote_peer(self, remote_peer_id, data, requester):
+        if not requester.is_admin:
+            raise Unauthorized('Only administrators can edit remote labs')
+        changes = data if isinstance(data, WireGuardRemotePeerUpdate) else WireGuardRemotePeerUpdate(**data)
+        values = changes.model_dump(exclude_unset=True)
+        document = self._doc(DbCollections.WIREGUARD_KIT, remote_peer_id)
+
+        def update(transaction):
+            snapshot = document.get(transaction=transaction)
+            if not snapshot.exists:
+                raise NotFound('Remote lab not found')
+            current = snapshot.to_dict()
+            merged = {**self._safe_kit(current).model_dump(), **values}
+            if 'remote_network_cidr' in merged:
+                merged['equipment_subnet'] = merged.pop('remote_network_cidr')
+            peer = WireGuardRemotePeerModel(**merged)
+            operational = ('equipment_subnet', 'peer_public_key', 'authorized_instructors', 'enabled')
+            if current.get('assigned_unit_id') and any(getattr(peer, name) != current.get(name) for name in operational):
+                raise Conflict('This remote lab is assigned. Change its lab settings, or release it before editing its registration.')
+            old_key = self._doc('wireguard-kit-peer', self._digest(current['peer_public_key']))
+            new_key = self._doc('wireguard-kit-peer', self._digest(peer.peer_public_key))
+            key_snapshot = new_key.get(transaction=transaction)
+            if key_snapshot.exists and key_snapshot.to_dict().get('kit_id') != remote_peer_id:
+                raise Conflict('This public key is already registered to another remote lab')
+            record = peer.model_dump()
+            transaction.set(document, record, merge=True)
+            if peer.peer_public_key != current['peer_public_key']:
+                transaction.delete(old_key)
+                transaction.set(new_key, {'kit_id': remote_peer_id})
+            return peer
+        return self.db.transaction(update)
+
+    @staticmethod
+    def _require_lab_owner(unit, requester):
+        owners = unit.get('instructor_id') or []
+        owners = [owners] if isinstance(owners, str) else owners
+        if not requester.is_admin and (requester.email or '').lower() not in {
+                owner.lower() for owner in owners if isinstance(owner, str)}:
+            raise Unauthorized('Only an assigned instructor or administrator can edit this lab')
+
+    def _lab_settings_context(self, unit_id, requester):
+        unit = self.db.get(collection_name=DbCollections.UNIT, doc_id=unit_id)
+        if not unit:
+            raise NotFound('Lab not found')
+        self._require_lab_owner(unit, requester)
+        lease = self.get_lease(unit_id)
+        gateways = [server for server in unit.get('servers') or [] if server.get('wireguard_gateway')]
+        if len(gateways) != 1:
+            raise BadRequest('This lab does not have one managed WireGuard gateway')
+        server_name = f'{unit_id}-{gateways[0]["name"]}'
+        server = self.db.get(collection_name=DbCollections.SERVER, doc_id=server_name) or {}
+        workouts = self.db.query(collection_name=DbCollections.WORKOUT,
+                                 filters=[('parent_id', DbOperators.EQUAL, unit_id)]) or []
+        endpoint = self.db.get(collection_name=DbCollections.WIREGUARD_ENDPOINT, doc_id=lease.endpoint_id) or {}
+        return unit, lease, server_name, server, workouts, endpoint
+
+    def _settings_blocked_reason(self, unit, lease, server, workouts, endpoint):
+        now = self.clock()
+        expires = (unit.get('workspace_settings') or {}).get('expires')
+        if (lease.status != 'reserved' or lease.unit_id != unit.get('id')
+                or not math.isfinite(lease.expires) or lease.expires <= now
+                or type(expires) not in (int, float) or not math.isfinite(expires) or expires <= now):
+            return 'The lab or remote peer lease has expired or been released.'
+        if unit.get('state') not in (UnitStates.READY.value, UnitStates.RUNNING.value):
+            return 'The lab must finish building before its remote settings can be changed.'
+        if server.get('state') != ServerStates.STOPPED.value:
+            return 'Stop all students and the gateway before changing the remote lab.'
+        if endpoint.get('unit_id') != lease.unit_id or endpoint.get('status') != 'reserved':
+            return 'The gateway endpoint must be stopped and reserved for this lab.'
+        inactive = {WorkoutStates.NOT_BUILT.value, WorkoutStates.READY.value, WorkoutStates.DELETED.value}
+        if any(workout.get('state') not in inactive for workout in workouts):
+            return 'Stop every student workout before changing the remote lab.'
+        return None
+
+    def lab_settings(self, unit_id, requester):
+        unit, lease, _, server, workouts, endpoint = self._lab_settings_context(unit_id, requester)
+        peer = self.db.get(collection_name=DbCollections.WIREGUARD_KIT, doc_id=lease.kit_id)
+        reason = self._settings_blocked_reason(unit, lease, server, workouts, endpoint)
+        return {'unit_id': unit_id, 'remote_peer_id': lease.kit_id,
+                'remote_network_cidr': lease.equipment_subnet,
+                'remote_peer': WireGuardRemotePeerModel(**self._safe_kit(peer).model_dump()).model_dump(by_alias=True) if peer else None,
+                'can_edit': reason is None, 'blocked_reason': reason,
+                'configuration_status': 'saved' if lease.configuration_pending else 'current'}
+
+    def update_lab_settings(self, unit_id, data, requester):
+        settings = data if isinstance(data, WireGuardLabSettingsUpdate) else WireGuardLabSettingsUpdate(**data)
+        unit, lease, server_name, server, workouts, endpoint = self._lab_settings_context(unit_id, requester)
+        reason = self._settings_blocked_reason(unit, lease, server, workouts, endpoint)
+        if reason:
+            raise Conflict(reason)
+        peer = self.get_authorized_kit(settings.remote_peer_id, requester)
+        remote = ipaddress.ip_network(settings.remote_network_cidr)
+        if remote.overlaps(self.TUNNEL_NETWORK) or any(remote.overlaps(ipaddress.ip_network(subnet)) for subnet in lease.student_subnets):
+            raise BadRequest('The remote LAN overlaps the existing student or tunnel networks')
+        if peer.assigned_unit_id not in (None, unit_id):
+            raise Conflict('This remote lab is already assigned to another lab')
+        routes = [route for route in unit.get('routes') or [] if route.get('name') == 'wireguard-equipment']
+        rules = [rule for rule in unit.get('firewall_rules') or [] if rule.get('name') == 'allow-kit-to-students']
+        if len(routes) != 1 or len(rules) != 1:
+            raise BadRequest('This lab does not have the managed remote LAN route and firewall rule')
+        if (lease.kit_id == peer.id and lease.equipment_subnet == str(remote)
+                and lease.peer_public_key == peer.peer_public_key):
+            return self.lab_settings(unit_id, requester)
+        payload = self.secret_store.access(lease.secret_version_name)
+        payload.update(peer_public_key=peer.peer_public_key, equipment_subnet=str(remote))
+        revision = uuid4().hex
+        version = self.secret_store.stage_configuration(unit_id, revision, payload)
+        expected_secret = f'projects/{self.env_dict["project"]}/secrets/agoge-wg-{unit_id}-cfg-{revision}/versions/'
+        if not isinstance(version, str) or not version.startswith(expected_secret) or not version[len(expected_secret):].isdigit():
+            raise BadRequest('Secret Manager did not return an immutable configuration version')
+        record = lease.model_dump()
+        record.update(kit_id=peer.id, device_id=peer.device_id, peer_public_key=peer.peer_public_key,
+                      equipment_subnet=str(remote), remote_peer_id=peer.id, remote_network_cidr=str(remote),
+                      previous_secret_version_name=lease.previous_secret_version_name if lease.configuration_pending else lease.secret_version_name,
+                      secret_version_name=version, configuration_revision=revision, configuration_pending=True,
+                      boot_id=None, service_ready=False, tunnel_ready=False, health_timestamp=None,
+                      latest_handshake=0, health_error=None)
+        record['secret_history'] = sorted(set([*lease.secret_history, lease.secret_version_name]))
+        updated_unit = deepcopy(unit)
+        for route in updated_unit.get('routes') or []:
+            if route.get('name') == 'wireguard-equipment':
+                route['dest_range'] = str(remote)
+        for rule in updated_unit.get('firewall_rules') or []:
+            if rule.get('name') == 'allow-kit-to-students':
+                rule['ip_ranges'] = [str(remote)]
+        updated_unit['wireguard_lease'] = WireGuardLeaseModel(**record).model_dump()
+        unit_ref = self._doc(DbCollections.UNIT, unit_id)
+        lease_ref = self._doc(DbCollections.WIREGUARD_LEASE, unit_id)
+        endpoint_ref = self._doc(DbCollections.WIREGUARD_ENDPOINT, lease.endpoint_id)
+        server_ref = self._doc(DbCollections.SERVER, server_name)
+        old_peer_ref = self._doc(DbCollections.WIREGUARD_KIT, lease.kit_id)
+        new_peer_ref = self._doc(DbCollections.WIREGUARD_KIT, peer.id)
+        workout_refs = [(workout, self._doc(DbCollections.WORKOUT, workout['id'])) for workout in workouts]
+
+        def save(transaction):
+            refs = [unit_ref, lease_ref, endpoint_ref, server_ref, old_peer_ref, new_peer_ref]
+            snapshots = [ref.get(transaction=transaction) for ref in refs]
+            current_unit, current_lease, current_endpoint, current_server, old_peer, new_peer = [
+                snapshot.to_dict() if snapshot.exists else {} for snapshot in snapshots]
+            current_workouts = [ref.get(transaction=transaction).to_dict() or {} for _, ref in workout_refs]
+            self._require_lab_owner(current_unit, requester)
+            current = WireGuardLeaseModel(**current_lease)
+            blocked = self._settings_blocked_reason(current_unit, current, current_server, current_workouts, current_endpoint)
+            if blocked:
+                raise Conflict(blocked)
+            if (current_lease.get('secret_version_name') != lease.secret_version_name
+                    or current_lease.get('configuration_revision') != lease.configuration_revision
+                    or current_lease.get('kit_id') != lease.kit_id):
+                raise Conflict('The lab settings changed; refresh and try again')
+            if old_peer.get('assigned_unit_id') != unit_id:
+                raise Conflict('The current remote peer assignment changed; refresh and try again')
+            if (not new_peer.get('enabled') or new_peer.get('assigned_unit_id') not in (None, unit_id)
+                    or new_peer.get('peer_public_key') != peer.peer_public_key
+                    or new_peer.get('device_id') != peer.device_id
+                    or (not requester.is_admin and (requester.email or '').lower() not in new_peer.get('authorized_instructors', []))):
+                raise Conflict('The selected remote lab is no longer available or authorized')
+            transaction.set(lease_ref, record, merge=True)
+            transaction.set(unit_ref, {'wireguard_lease': updated_unit['wireguard_lease'],
+                                     'routes': updated_unit.get('routes') or [],
+                                     'firewall_rules': updated_unit.get('firewall_rules') or []}, merge=True)
+            transaction.set(server_ref, {'wireguard_configuration_revision': revision}, merge=True)
+            if lease.kit_id != peer.id:
+                if old_peer.get('assigned_unit_id') == unit_id:
+                    transaction.set(old_peer_ref, {'assigned_unit_id': None}, merge=True)
+            transaction.set(new_peer_ref, {'assigned_unit_id': unit_id}, merge=True)
+        try:
+            self.db.transaction(save)
+        except Exception:
+            # A transport failure can be ambiguous after commit. Never delete
+            # a selected secret or one retained in the authoritative history.
+            try:
+                selected = self.db.get(collection_name=DbCollections.WIREGUARD_LEASE, doc_id=unit_id) or {}
+                if version not in [selected.get('secret_version_name'), *(selected.get('secret_history') or [])]:
+                    self.secret_store.delete(version)
+            except Exception:
+                pass  # Preserve the original failure; uncertain selections stay intact.
+            raise
+        return self.lab_settings(unit_id, requester)
+
+    def configuration_applied(self, unit_id, revision):
+        lease_ref = self._doc(DbCollections.WIREGUARD_LEASE, unit_id)
+        unit_ref = self._doc(DbCollections.UNIT, unit_id)
+
+        def finish(transaction):
+            lease_snapshot = lease_ref.get(transaction=transaction)
+            unit_snapshot = unit_ref.get(transaction=transaction)
+            if not lease_snapshot.exists or not unit_snapshot.exists:
+                raise NotReady('The lab configuration no longer exists')
+            record = lease_snapshot.to_dict()
+            if record.get('configuration_revision') != revision or record.get('status') != 'reserved':
+                raise Conflict('The remote lab configuration changed while applying it')
+            record.update(configuration_pending=False, previous_secret_version_name=None)
+            transaction.set(lease_ref, {'configuration_pending': False, 'previous_secret_version_name': None}, merge=True)
+            transaction.set(unit_ref, {'wireguard_lease': WireGuardLeaseModel(**record).model_dump()}, merge=True)
+        self.db.transaction(finish)
+
     def get_authorized_kit(self, kit_id, requester):
         if not isinstance(kit_id, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,39}', kit_id):
             raise BadRequest('Invalid remote WireGuard peer ID')
@@ -260,7 +478,7 @@ class WireGuardProvisioningService:
         return (base64.b64encode(key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())).decode('ascii'),
                 base64.b64encode(key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)).decode('ascii'))
 
-    def reserve(self, unit, kit_id, requester):
+    def reserve(self, unit, kit_id, requester, remote_network_cidr=None):
         if not re.fullmatch(r'[a-z]{10}', unit.id):
             raise BadRequest('Invalid WireGuard lab ID')
         kit = self.get_authorized_kit(kit_id, requester)
@@ -271,7 +489,8 @@ class WireGuardProvisioningService:
         if not subnets:
             raise BadRequest('Managed WireGuard labs require student network subnets')
         networks = [ipaddress.ip_network(value) for value in subnets]
-        equipment = ipaddress.ip_network(kit.equipment_subnet)
+        effective_subnet = self.validate_remote_network(remote_network_cidr or kit.equipment_subnet)
+        equipment = ipaddress.ip_network(effective_subnet)
         private_ranges = [ipaddress.ip_network(value) for value in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')]
         if any(network.version != 4 or not any(network.subnet_of(private) for private in private_ranges)
                or network.overlaps(equipment) or network.overlaps(self.TUNNEL_NETWORK)
@@ -287,7 +506,7 @@ class WireGuardProvisioningService:
         payload = {
             'unit_id': unit.id, 'private_key': private_key, 'gateway_public_key': public_key,
             'peer_public_key': kit.peer_public_key, 'gateway_address': '10.254.254.1/30',
-            'peer_address': '10.254.254.2/32', 'equipment_subnet': kit.equipment_subnet,
+            'peer_address': '10.254.254.2/32', 'equipment_subnet': effective_subnet,
             'student_subnets': subnets, 'listen_port': unit.wireguard_endpoint.port,
             'health_reporting_enabled': health_reporting,
         }
@@ -297,13 +516,13 @@ class WireGuardProvisioningService:
         payload = self.secret_store.ensure(unit.id, payload)
         if any(payload.get(key) != expected for key, expected in (
             ('unit_id', unit.id), ('peer_public_key', kit.peer_public_key),
-            ('equipment_subnet', kit.equipment_subnet), ('student_subnets', subnets),
+            ('equipment_subnet', effective_subnet), ('student_subnets', subnets),
             ('listen_port', unit.wireguard_endpoint.port),
         )):
             raise Conflict('Existing gateway configuration does not match this lab and remote peer')
         lease = WireGuardLeaseModel(
             unit_id=unit.id, kit_id=kit.id, device_id=kit.device_id,
-            endpoint_id=unit.wireguard_endpoint.id, equipment_subnet=kit.equipment_subnet,
+            endpoint_id=unit.wireguard_endpoint.id, equipment_subnet=effective_subnet,
             student_subnets=subnets, gateway_public_key=payload['gateway_public_key'],
             peer_public_key=kit.peer_public_key,
             secret_version_name=f'projects/{self.env_dict["project"]}/secrets/agoge-wg-{unit.id}/versions/latest',
@@ -340,6 +559,13 @@ class WireGuardProvisioningService:
             if server.wireguard_gateway:
                 server.wireguard_managed = True
         return claimed
+
+    @staticmethod
+    def validate_remote_network(value):
+        try:
+            return WireGuardKitCreate.subnet(value)
+        except (ValueError, TypeError):
+            raise BadRequest('Use an explicit RFC1918 private IPv4 remote LAN') from None
 
     def get_lease(self, unit_id):
         record = self.db.get(collection_name=DbCollections.WIREGUARD_LEASE, doc_id=unit_id)
@@ -457,9 +683,9 @@ class WireGuardProvisioningService:
                                        'boot_id': None}, merge=True)
             if kit.get('assigned_unit_id') == unit_id:
                 transaction.set(kit_doc, {'assigned_unit_id': None}, merge=True)
-            return lease['secret_version_name']
-        name = self.db.transaction(release_claim)
-        if name:
+            return [lease['secret_version_name'], *(lease.get('secret_history') or [])]
+        names = self.db.transaction(release_claim)
+        for name in set(names or []):
             self.secret_store.delete(name)
 
     def cancel_if_uncommitted(self, unit):

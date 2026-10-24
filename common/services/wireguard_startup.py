@@ -450,6 +450,10 @@ for attempt in 1 2 3 4 5; do
         echo 'Agoge WireGuard package installation failed.' >&2
         exit 1
     fi
+    # A lifecycle stop can interrupt first-boot package configuration. Finish
+    # pending packages before retrying apt; a busy dpkg lock is retried by this
+    # bounded loop. Keep existing config files and never prompt for input.
+    dpkg --force-confdef --force-confold --configure -a || true
     sleep 5
 done
 install -d -m 0755 /etc/systemd/system/wg-quick@wg0.service.d

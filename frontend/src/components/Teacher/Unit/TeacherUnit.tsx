@@ -169,8 +169,10 @@ const TeacherUnit: React.FC = () => {
                     <>
                         <InfoCard
                             buildType='unit'
+                            buildId={String(build_id)}
                             data={{ ...unitFull.value, roster: memoizedRosterSize }}
                             isLoading={isLoading}
+                            onRemoteLabSettingsSaved={() => fetchData()}
                         />
                         <Box sx={{ mt: 2, width: '100%' }}>
                             <UnitTable

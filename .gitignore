@@ -46,3 +46,5 @@ CLAUDE.md
 bugReport.md
 /.local/debug-lab/
 /debug.local.json
+/frontend/.help-docs/
+/frontend/public/help-content/

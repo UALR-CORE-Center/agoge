@@ -7,7 +7,10 @@ from common.constants.database import DbCollections
 from common.exceptions import BadRequest, Conflict, NotFound, NotReady, Unauthorized
 from common.models.response import AgogeResponse
 from common.models.wireguard import WireGuardPublicEndpointModel
-from common.models.wireguard_provisioning import WireGuardHealthReport, WireGuardKitCreate, WireGuardRemotePeerCreate
+from common.models.wireguard_provisioning import (
+    WireGuardHealthReport, WireGuardKitCreate, WireGuardRemotePeerCreate,
+    WireGuardRemotePeerUpdate, WireGuardLabSettingsUpdate,
+)
 from common.services.wireguard_endpoint import WireGuardEndpointRegistry
 from common.services.wireguard_provisioning import WireGuardProvisioningService, gateway_lifecycle_ready
 from dependencies import get_cloud_env, teacher_required, admin_required
@@ -107,6 +110,45 @@ async def create_wireguard_lab(
     try:
         build_id = WireGuardLab(env_dict=env_dict).build(requester=current_user, data=data)
         return AgogeResponse(data={'build_id': build_id})
+    except (BadRequest, Conflict, NotFound, Unauthorized, ValidationError) as error:
+        raise _http_error(error)
+
+
+@wireguard_router.patch('/remote-peers/{remote_peer_id}/')
+async def update_wireguard_remote_peer(
+    data: WireGuardRemotePeerUpdate, response: Response,
+    remote_peer_id: str = Path(..., pattern=r'^[a-z][a-z0-9-]{0,39}$'),
+    env_dict: dict = Depends(get_cloud_env), current_user=Depends(admin_required),
+):
+    response.headers['Cache-Control'] = 'no-store'
+    try:
+        peer = WireGuardProvisioningService(env_dict).update_remote_peer(remote_peer_id, data, current_user)
+        return AgogeResponse(data={'remote_peer': peer.model_dump(by_alias=True)})
+    except (BadRequest, Conflict, NotFound, Unauthorized, ValidationError) as error:
+        raise _http_error(error)
+
+
+@wireguard_router.get('/labs/{unit_id}/remote-peer/')
+async def get_wireguard_lab_settings(
+    response: Response, unit_id: str = Path(..., pattern=r'^[a-z]{10}$'),
+    env_dict: dict = Depends(get_cloud_env), current_user=Depends(teacher_required),
+):
+    response.headers['Cache-Control'] = 'no-store'
+    try:
+        return AgogeResponse(data=WireGuardProvisioningService(env_dict).lab_settings(unit_id, current_user))
+    except (BadRequest, Conflict, NotFound, Unauthorized) as error:
+        raise _http_error(error)
+
+
+@wireguard_router.patch('/labs/{unit_id}/remote-peer/')
+async def update_wireguard_lab_settings(
+    data: WireGuardLabSettingsUpdate, response: Response,
+    unit_id: str = Path(..., pattern=r'^[a-z]{10}$'),
+    env_dict: dict = Depends(get_cloud_env), current_user=Depends(teacher_required),
+):
+    response.headers['Cache-Control'] = 'no-store'
+    try:
+        return AgogeResponse(data=WireGuardProvisioningService(env_dict).update_lab_settings(unit_id, data, current_user))
     except (BadRequest, Conflict, NotFound, Unauthorized, ValidationError) as error:
         raise _http_error(error)
 

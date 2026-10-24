@@ -283,9 +283,14 @@ class Unit:
                     kit = provisioning.get_authorized_kit(kit_id, requester)
                     equipment_subnet = (kit.get('equipment_subnet') if isinstance(kit, dict)
                                         else kit.equipment_subnet)
+                    if data.get('remote_network_cidr') is not None:
+                        equipment_subnet = provisioning.validate_remote_network(data['remote_network_cidr'])
                     configure_kit_topology(unit, equipment_subnet, int(self.env_dict.get('wireguard_port') or 51820))
                     endpoint_registry = self._allocate_wireguard_endpoint(unit)
-                    provisioning.reserve(unit, kit_id, requester)
+                    if data.get('remote_network_cidr') is not None:
+                        provisioning.reserve(unit, kit_id, requester, remote_network_cidr=equipment_subnet)
+                    else:
+                        provisioning.reserve(unit, kit_id, requester)
                     gateways[0].wireguard_managed = True
                 if lms_integration:
                     build_spec = self._lms_integrate(requester=requester, build_spec=unit, data=data)

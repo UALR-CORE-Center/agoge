@@ -37,6 +37,56 @@ def payload():
 
 
 class StartupRendererTests(unittest.TestCase):
+    @staticmethod
+    def package_loop():
+        script = render_wireguard_startup(
+            'projects/test-project/secrets/wg-abcdefghij/versions/1', 'a' * 32)
+        start = script.index('for attempt in 1 2 3 4 5; do')
+        end = script.index('\ndone\n', start) + len('\ndone\n')
+        return script[start:end]
+
+    def test_interrupted_package_configuration_recovers_before_retrying_install(self):
+        # Execute the actual rendered loop with shell-only package commands.
+        # No apt/dpkg commands, sleeps, cloud calls, or privileged writes run.
+        setup = '''set -euo pipefail
+interrupted=1
+apt_get_calls=0
+apt-get() {
+    apt_get_calls=$((apt_get_calls + 1))
+    if [[ " $* " == *" install "* ]] && [ "$interrupted" = 1 ]; then
+        echo 'install:interrupted'
+        return 100
+    fi
+    echo 'apt:success'
+}
+dpkg() {
+    echo "recovery:$*"
+    interrupted=0
+}
+sleep() { :; }
+'''
+        result = subprocess.run(['bash'], input=setup + self.package_loop() +
+                                'echo "done:$interrupted:$apt_get_calls"\n',
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('install:interrupted\nrecovery:--force-confdef --force-confold --configure -a',
+                      result.stdout)
+        self.assertTrue(result.stdout.endswith('done:0:4\n'))
+
+    def test_package_recovery_does_not_hide_persistent_install_or_lock_failure(self):
+        setup = '''set -euo pipefail
+apt-get() { echo 'apt:failed'; return 100; }
+dpkg() { echo 'recovery:locked'; return 2; }
+sleep() { :; }
+'''
+        result = subprocess.run(['bash'], input=setup + self.package_loop() + 'echo unexpected-success\n',
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout.count('apt:failed'), 5)
+        self.assertEqual(result.stdout.count('recovery:locked'), 4)
+        self.assertIn('Agoge WireGuard package installation failed.', result.stderr)
+        self.assertNotIn('unexpected-success', result.stdout)
+
     def test_bash_and_embedded_python_parse_without_network_or_cloud_sdk(self):
         script = render_wireguard_startup(
             'projects/test-project/secrets/wg-abcdefghij/versions/1', 'a' * 32)

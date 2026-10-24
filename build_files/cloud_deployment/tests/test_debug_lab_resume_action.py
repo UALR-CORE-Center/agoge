@@ -5,7 +5,7 @@ from unittest.mock import Mock
 from google.api_core.exceptions import InvalidArgument
 import pytest
 
-import debug_lab as cli
+from tools.debug_lab import cli
 from common.constants.database import DbCollections, DbOperators
 from common.constants.pub_sub import PubSub
 from common.constants.states import ServerStates, UnitStates
@@ -61,7 +61,7 @@ def test_unit_build_worker_return_is_not_success_when_unit_remains_broken(resume
     }
 
 
-@pytest.mark.parametrize('gateway_state', [None, ServerStates.BROKEN.value, ServerStates.STOPPED.value])
+@pytest.mark.parametrize('gateway_state', [None, ServerStates.BROKEN.value, ServerStates.RUNNING.value])
 def test_ready_parent_cannot_hide_an_unbuilt_gateway_after_resume(resume, gateway_state):
     resume.unit['state'] = UnitStates.READY.value
     if gateway_state is None:
@@ -80,7 +80,8 @@ def test_resume_checks_state_after_worker_finishes_and_accepts_completed_build(r
     def finish(attributes, environment):
         assert resume.unit['state'] == UnitStates.BROKEN.value
         resume.unit['state'] = completed_state
-        resume.gateway['state'] = ServerStates.RUNNING.value
+        resume.gateway['state'] = (ServerStates.STOPPED.value if completed_state == UnitStates.READY.value
+                                   else ServerStates.RUNNING.value)
 
     resume.worker.side_effect = finish
 

@@ -45,6 +45,12 @@ python setup.py
 - [Documentation Index](docs/README.md)
 - [Managed WireGuard factory labs](docs/operations/wireguard-provisioning.md)
 - [Debug backend builds locally](docs/operations/local-backend-debugging.md)
+- [Build and deploy the Markdown help app](docs/operations/help-docs-app.md)
+
+The application's **Help & Documentation** button opens a searchable help app
+built from `docs/` with each frontend release. Backend debug tools live under
+[`tools/debug_lab/`](tools/debug_lab/README.md); run them from the repository root
+with `python -m tools.debug_lab`.
 
 ## Architecture Overview
 Agoge runs entirely in Google Cloud and uses several managed services:

@@ -21,6 +21,9 @@ from .base_unit import BaseUnit
 
 
 class CommunityUnit(BaseUnit):
+    _IDLE_GATEWAY_WAIT_SECONDS = 300
+    _IDLE_GATEWAY_POLL_SECONDS = 5
+
     def __init__(self, unit_model: UnitModel, workout_id=None, form_data=None, debug=False, force=False,
                  env_dict=None):
         super().__init__(unit_model=unit_model, workout_id=workout_id, form_data=form_data, debug=debug, force=force,
@@ -127,9 +130,46 @@ class CommunityUnit(BaseUnit):
         if self.promiscuous_mode:
             self.packet_mirroring.create()
 
+        # Building an idle managed gateway verifies its GCP create operation,
+        # then parks it until the first student starts a Workout. Other shared
+        # servers retain their existing build behavior.
         self._activate_wireguard_endpoint()
+        self._stop_idle_managed_wireguard()
         self.state_manager.state_transition(self.s.READY)
         self.logger.info(f"Finished community unit build for {self.unit_id}!")
+
+    def _stop_idle_managed_wireguard(self):
+        gateways = [f'{self.unit_id}-{server.name}' for server in self.unit_model.servers or []
+                    if getattr(server, 'community_server', False)
+                    and getattr(server, 'wireguard_gateway', False)
+                    and getattr(server, 'wireguard_managed', False)]
+        if not gateways:
+            return False
+        workouts = self.db_queries.get_children(
+            parent_id=self.unit_id, child_collection=DbCollections.WORKOUT)
+        if any(workout.get('state') in (WorkoutStates.RUNNING.value, WorkoutStates.STARTING.value)
+               for workout in workouts):
+            return False
+        for name in gateways:
+            if self.debug:
+                self.compute_manager.load(server_name=name)
+                self.compute_manager.stop()
+            else:
+                self.pubsub_manager.msg(
+                    handler=str(PubSub.Handlers.CONTROL.value),
+                    action=str(PubSub.Actions.STOP.value), build_id=name,
+                    course_object=str(PubSub.CourseObjects.LAB_SERVER.value))
+        deadline = time.monotonic() + self._IDLE_GATEWAY_WAIT_SECONDS
+        while True:
+            records = [self.db.get(collection_name=DbCollections.SERVER, doc_id=name) or {}
+                       for name in gateways]
+            if all(record.get('state') == ServerStates.STOPPED.value for record in records):
+                self.logger.info(f'Parked idle managed WireGuard gateway for Unit {self.unit_id}')
+                return True
+            if any(record.get('state') in (ServerStates.BROKEN.value, ServerStates.DELETED.value)
+                   for record in records) or time.monotonic() >= deadline:
+                raise TimeoutError(f'Could not confirm idle WireGuard gateway stopped for Unit {self.unit_id}')
+            time.sleep(self._IDLE_GATEWAY_POLL_SECONDS)
 
     def _resume_broken_initial_build(self):
         """Resume an explicit local managed-gateway build, never a stale event.

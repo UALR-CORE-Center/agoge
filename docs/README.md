@@ -1,6 +1,8 @@
 # Agoge Documentation
 
-Agoge documentation is organized by audience. These pages describe the current interface and workflows on the main branch.
+Agoge documentation is organized by audience and shipped with the web application.
+Use the application's **Help** link to browse and search these Markdown guides.
+These pages describe the interface and workflows in the matching deployed revision.
 
 ## User guides
 
@@ -19,6 +21,7 @@ Agoge documentation is organized by audience. These pages describe the current i
 - [Community WireGuard example](examples/community-wireguard.md)
 - [Managed WireGuard factory labs and deployment](operations/wireguard-provisioning.md)
 - [Debug API and Cloud Function builds locally](operations/local-backend-debugging.md)
+- [Build and deploy the Markdown help app](operations/help-docs-app.md)
 - [Contributing](../CONTRIBUTING.md)
 - [Security policy](../SECURITY.md)
 - [Release notes](../release-notes/)

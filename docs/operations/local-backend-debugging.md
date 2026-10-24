@@ -1,7 +1,7 @@
 # Debug API and Cloud Function builds locally
 
 Use `setup.py` for authentication, environment preparation, and uploading the
-WireGuard Community Lab template. Use `debug_lab.py` for the repeated backend
+WireGuard Community Lab template. Use `python -m tools.debug_lab` for the repeated backend
 build/debug loop. It runs the API's build logic and the Cloud Function entry
 point in the same Python process, with synchronous worker execution enabled.
 You can step from `api/core/` into `cloud_functions/` in your debugger without
@@ -14,7 +14,7 @@ application, so a previous gcloud project selection cannot redirect the build.
 
 ## Prepare once
 
-1. Use a checkout containing `debug_lab.py`. These changes are on
+1. Use a checkout containing the `tools/debug_lab/` package. These changes are on
    `feature/local-backend-debug`, based on `release/2027-spring`, and have not
    been merged into the release. Fetch, switch to that branch, and pull its latest
    changes before running the commands below.
@@ -94,7 +94,7 @@ the actual remote network and device:
 Enroll it with an existing **Agoge administrator** account:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py enroll-peer `
+.\venv\Scripts\python.exe -m tools.debug_lab enroll-peer `
   --admin pdhuff@ualr.edu `
   --spec .local/debug-lab/remote-peer.json `
   --token-out .local/debug-lab/remote-lab-01.token
@@ -123,7 +123,7 @@ endpoint when it is available; gateway health reporting is optional.
 List the peers visible to the instructor:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py list-peers --instructor pdhuff@ualr.edu
+.\venv\Scripts\python.exe -m tools.debug_lab list-peers --instructor pdhuff@ualr.edu
 ```
 
 The result includes registered IDs, private LANs, enabled state, and current lab
@@ -151,14 +151,14 @@ settings for each test build:
 For the repeated build/start/stop/delete loop, run the profile interactively:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py run-lab --profile .local/debug-lab/profile.json
+.\venv\Scripts\python.exe -m tools.debug_lab run-lab --profile .local/debug-lab/profile.json
 ```
 
 An explicit command-line flag overrides its profile value. For example, test
 with two workstations and a one-hour expiration:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py run-lab `
+.\venv\Scripts\python.exe -m tools.debug_lab run-lab `
   --profile .local/debug-lab/profile.json --count 2 --expires-hours 1
 ```
 
@@ -182,6 +182,53 @@ exists, is enabled, is authorized for the instructor, and is unassigned before
 provisioning. If that check fails, inspect `list-peers` or enroll the missing peer
 with the administrator account. Peer enrollment data stays in the registration;
 the profile only references its ID.
+
+## Verify two students and automatic gateway start/stop
+
+The debug tools live in `tools/debug_lab/`. Run them from the repository root
+with `python -m tools.debug_lab`; there is no root `debug_lab.py` entry point.
+For the full student-driven test, copy the two-student example:
+
+```powershell
+Copy-Item docs/examples/local-backend-debug/two-student-profile.example.json .local/debug-lab/two-student-profile.json
+.\venv\Scripts\python.exe -m tools.debug_lab student-lifecycle --profile .local/debug-lab/two-student-profile.json
+```
+
+Edit the instructor, remote peer, and student email addresses in that local
+profile first. It must contain two distinct `student_emails` and a `count` of at
+least two. The emails identify test student Workouts; they do not need to be
+separate browser sign-ins. The selected peer must be available and authorized.
+
+The command prompts between stages and verifies the gateway's recorded state
+and actual Compute Engine instance status:
+
+| Stage | Expected shared gateway |
+| --- | --- |
+| Build the lab with no active students | Stopped |
+| Claim both student Workouts | Stopped; claiming alone does not start a session |
+| Start the first student session | Running automatically |
+| Start the second student session | Remains running |
+| Stop the first student | Remains running for the second student |
+| Stop the last student | Stops automatically |
+| Confirm final deletion | Managed resources deleted and remote peer released |
+
+This sequence uses student start/stop operations; it never starts or stops the
+parent lab to force the expected gateway result. It checks GCP lifecycle state
+without requiring the physical Pi, a WireGuard handshake, or a guest callback.
+Use the printed student Workouts to inspect the student API/Cloud Function path
+in the debugger. Claiming a Workout and starting its session are separate
+application operations.
+
+To reuse your existing profile instead:
+
+```powershell
+.\venv\Scripts\python.exe -m tools.debug_lab student-lifecycle --profile .local/debug-lab/profile.json --count 2 --student-email wireguard-student-1@example.com --student-email wireguard-student-2@example.com --delete-recent
+```
+
+`--delete-recent` automatically cleans up matching recent test runs before the
+new build; omit it to be prompted, or use `--skip-cleanup` to bypass that check.
+Final deletion still requires confirmation. A failure or interruption preserves
+the lab and prints its inspection and cleanup commands.
 
 ## Run an interactive lifecycle
 
@@ -207,9 +254,10 @@ recent-lab cleanup continues to the new build; declining the final deletion
 keeps the new lab. Answer `q` at the initial cleanup prompt to cancel before
 building anything.
 
-A fresh build already starts its VMs. The first explicit start tests the start
-lifecycle path for an already running lab and may skip the Compute Engine start
-request. The runner also starts and stops the student workout explicitly so its
+A managed WireGuard gateway is stopped automatically after its initial build
+when no student sessions are active. The explicit lab start in this generic
+runner exercises instructor controls. Use `student-lifecycle` below to verify
+automatic first/last-student behavior without issuing any lab start/stop command. The runner also starts and stops the student workout explicitly so its
 display proxy and lifecycle state are handled along with the shared gateway.
 Omit `student_email` from the profile to exercise only the shared lab. Use
 `--duration-hours 2` to set the workout's start duration; the default is two
@@ -219,13 +267,13 @@ Choose how to handle previous runs at the beginning:
 
 ```powershell
 # Ask about recent labs, then prompt between lifecycle steps.
-.\venv\Scripts\python.exe debug_lab.py run-lab --profile .local/debug-lab/profile.json
+.\venv\Scripts\python.exe -m tools.debug_lab run-lab --profile .local/debug-lab/profile.json
 
 # Delete matching recent labs automatically before building.
-.\venv\Scripts\python.exe debug_lab.py run-lab --profile .local/debug-lab/profile.json --delete-recent
+.\venv\Scripts\python.exe -m tools.debug_lab run-lab --profile .local/debug-lab/profile.json --delete-recent
 
 # Skip the recent-lab check and begin the new build.
-.\venv\Scripts\python.exe debug_lab.py run-lab --profile .local/debug-lab/profile.json --skip-cleanup
+.\venv\Scripts\python.exe -m tools.debug_lab run-lab --profile .local/debug-lab/profile.json --skip-cleanup
 ```
 
 `--delete-recent` and `--skip-cleanup` are mutually exclusive. They control only
@@ -256,7 +304,7 @@ Run from the repository root. Replace `remote-lab-01` with your enrolled remote 
 and the instructor email with its authorized Agoge account:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py create-lab `
+.\venv\Scripts\python.exe -m tools.debug_lab create-lab `
   --template wireguard-factory-lab `
   --instructor pdhuff@ualr.edu `
   --remote-peer-id remote-lab-01 `
@@ -292,7 +340,7 @@ be labeled **WireGuard Factory Lab**.
 After the lab reaches `READY` or `RUNNING`:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py create-workout `
+.\venv\Scripts\python.exe -m tools.debug_lab create-workout `
   --unit-id abcdefghij `
   --student-email wireguard-test@example.com
 ```
@@ -308,10 +356,11 @@ Create a **Python** run/debug configuration:
 
 | Field | Value |
 | --- | --- |
-| Script path | Your checkout's `debug_lab.py` |
+| Run configuration | **Module name:** `tools.debug_lab` |
 | Python interpreter | Your checkout's `venv\Scripts\python.exe` |
 | Working directory | Your Agoge repository root |
 | Parameters, full lifecycle | `run-lab --profile .local/debug-lab/profile.json` |
+| Parameters, two students | `student-lifecycle --profile .local/debug-lab/two-student-profile.json` |
 | Parameters, build only | `create-lab --profile .local/debug-lab/profile.json` |
 | Parameters, existing lab | `create-workout --unit-id abcdefghij --student-email wireguard-test@example.com` |
 
@@ -319,7 +368,7 @@ Start with the IDE's **Debug** button. Useful breakpoint locations:
 
 - `api/core/unit.py`: `Unit.build` and `Unit.commit`.
 - `api/core/workout.py`: `Workout.build` and `_send_or_debug`.
-- `debug_lab.py`: `invoke_local_worker`.
+- `tools/debug_lab/cli.py`: `invoke_local_worker` and `run_lab`.
 - `cloud_functions/main.py`: `agoge_cloud_function`.
 - `cloud_functions/handlers/build_handler.py`: `BuildHandler.route`.
 - `cloud_functions/cloud_fn_utilities/course_objects/unit/community_unit.py`:
@@ -375,7 +424,7 @@ can override it, including a tenant prefix when needed. A CLI override affects
 only the local process, for example:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py `
+.\venv\Scripts\python.exe -m tools.debug_lab `
   --wireguard-api-url https://your-debug-api.example.com `
   create-lab --instructor pdhuff@ualr.edu --remote-peer-id remote-lab-01
 ```
@@ -423,8 +472,8 @@ An old deployed build message cannot trigger this debug-only recovery.
 For an eligible retained lab:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py unit-action --unit-id uljrlxqhjm --action build
-.\venv\Scripts\python.exe debug_lab.py status --unit-id uljrlxqhjm
+.\venv\Scripts\python.exe -m tools.debug_lab unit-action --unit-id uljrlxqhjm --action build
+.\venv\Scripts\python.exe -m tools.debug_lab status --unit-id uljrlxqhjm
 ```
 
 The command verifies persisted lab and server readiness before reporting
@@ -436,7 +485,7 @@ student workout. When the existing lab reaches
 failed before creating it:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py create-workout --unit-id uljrlxqhjm --student-email wireguard-test@example.com
+.\venv\Scripts\python.exe -m tools.debug_lab create-workout --unit-id uljrlxqhjm --student-email wireguard-test@example.com
 ```
 
 If the lab has expired or you want to clean up and start again, run the full
@@ -444,7 +493,7 @@ sequence with recent-lab cleanup. The default expiration is two hours; use a
 longer expiration for an extended debugging session:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py run-lab --profile .local/debug-lab/profile.json --delete-recent --expires-hours 4
+.\venv\Scripts\python.exe -m tools.debug_lab run-lab --profile .local/debug-lab/profile.json --delete-recent --expires-hours 4
 ```
 
 This deletes matching recent test labs before creating a new one. Do not edit
@@ -455,7 +504,9 @@ Firestore states manually to bypass recovery checks. Use explicit
 
 A message such as **Successfully built server!** confirms that Compute Engine
 created and started the VM. A managed lab completes its build after the GCP
-operation and its DNS, routes, and firewall dependencies succeed. Start and stop
+operation and its DNS, routes, and firewall dependencies succeed, then stops an
+idle managed gateway before marking the Lab ready. The first student session
+starts that gateway again. Start and stop
 complete from their GCP operations as well. The worker does not wait for guest
 health, an HTTP callback, or a WireGuard handshake.
 
@@ -470,7 +521,7 @@ private key.
 Inspect the cloud lifecycle and guest separately, for example:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py status --unit-id ksqxzoaisa
+.\venv\Scripts\python.exe -m tools.debug_lab status --unit-id ksqxzoaisa
 gcloud compute instances describe ksqxzoaisa-wireguard --project=test-dev-787001 --zone=us-central1-a --format="yaml(name,status)"
 gcloud compute instances get-serial-port-output ksqxzoaisa-wireguard --project=test-dev-787001 --zone=us-central1-a --port=1
 ```
@@ -505,8 +556,8 @@ Stop the old local worker/debugger, pull the current feature branch, and resume
 the retained lab while its lease and lab remain unexpired:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py unit-action --unit-id ksqxzoaisa --action build
-.\venv\Scripts\python.exe debug_lab.py status --unit-id ksqxzoaisa
+.\venv\Scripts\python.exe -m tools.debug_lab unit-action --unit-id ksqxzoaisa --action build
+.\venv\Scripts\python.exe -m tools.debug_lab status --unit-id ksqxzoaisa
 ```
 
 The retry reuses eligible existing resources and completes from their GCP
@@ -530,14 +581,14 @@ keeps optional callback failures separate from configuration failures.
 
 ```powershell
 # Read current lab, workout, and WireGuard status.
-.\venv\Scripts\python.exe debug_lab.py status --unit-id abcdefghij
+.\venv\Scripts\python.exe -m tools.debug_lab status --unit-id abcdefghij
 
 # Resume an interrupted shared gateway/network build using the saved lab ID.
-.\venv\Scripts\python.exe debug_lab.py unit-action --unit-id abcdefghij --action build
+.\venv\Scripts\python.exe -m tools.debug_lab unit-action --unit-id abcdefghij --action build
 
 # Start or stop the named student workout locally.
-.\venv\Scripts\python.exe debug_lab.py workout-action --workout-id klmnopqrst --action stop
-.\venv\Scripts\python.exe debug_lab.py workout-action --workout-id klmnopqrst --action start --duration-hours 2
+.\venv\Scripts\python.exe -m tools.debug_lab workout-action --workout-id klmnopqrst --action stop
+.\venv\Scripts\python.exe -m tools.debug_lab workout-action --workout-id klmnopqrst --action start --duration-hours 2
 ```
 
 Status includes `remote_peer_id`, `remote_network_cidr`, and the non-secret
@@ -562,13 +613,13 @@ Agoge instructor/admin account, including runs created by earlier versions of
 the CLI:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py list-labs --instructor pdhuff@ualr.edu
+.\venv\Scripts\python.exe -m tools.debug_lab list-labs --instructor pdhuff@ualr.edu
 
 # Narrow the list to a registered remote peer.
-.\venv\Scripts\python.exe debug_lab.py list-labs --instructor pdhuff@ualr.edu --remote-peer-id remote-lab-01
+.\venv\Scripts\python.exe -m tools.debug_lab list-labs --instructor pdhuff@ualr.edu --remote-peer-id remote-lab-01
 
 # Include retained records for previously deleted labs.
-.\venv\Scripts\python.exe debug_lab.py list-labs --instructor pdhuff@ualr.edu --include-deleted
+.\venv\Scripts\python.exe -m tools.debug_lab list-labs --instructor pdhuff@ualr.edu --include-deleted
 ```
 
 The output shows lab IDs, names, states, creation/expiration timestamps, instructor
@@ -583,21 +634,21 @@ Stop the local build/debugger for a lab before deleting it. Preview deletion of
 the example run:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py delete-labs --instructor pdhuff@ualr.edu --unit-id kuiatckhzm
+.\venv\Scripts\python.exe -m tools.debug_lab delete-labs --instructor pdhuff@ualr.edu --unit-id kuiatckhzm
 ```
 
 The default is a preview: it validates and lists the selected labs without
 deleting resources. Add **`--yes`** to execute the selected deletions:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py delete-labs --instructor pdhuff@ualr.edu --unit-id kuiatckhzm --yes
+.\venv\Scripts\python.exe -m tools.debug_lab delete-labs --instructor pdhuff@ualr.edu --unit-id kuiatckhzm --yes
 ```
 
 For several previous runs, repeat `--unit-id`. Replace the example IDs below with
 IDs from your list:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py delete-labs `
+.\venv\Scripts\python.exe -m tools.debug_lab delete-labs `
   --instructor pdhuff@ualr.edu `
   --unit-id kuiatckhzm `
   --unit-id abcdefghij `
@@ -623,7 +674,7 @@ quarantine; cleanup does not purge them or remove Firestore records directly.
 The existing lower-level command remains available and starts deletion immediately:
 
 ```powershell
-.\venv\Scripts\python.exe debug_lab.py unit-action --unit-id kuiatckhzm --action delete
+.\venv\Scripts\python.exe -m tools.debug_lab unit-action --unit-id kuiatckhzm --action delete
 ```
 
 Prefer `delete-labs` when cleaning up repeated runs because it checks the test-lab
