@@ -54,7 +54,8 @@ def persisted():
     servers = records[DbCollections.SERVER.value]
     for name in names:
         parent, short_name = name.split('-', 1)
-        servers[name] = {'name': short_name, 'parent_id': parent, 'state': ServerStates.RUNNING.value}
+        servers[name] = {'name': short_name, 'parent_id': parent,
+                         'state': ServerStates.RUNNING.value if parent == unit_id else ServerStates.STOPPED.value}
     queries = []
     database = object.__new__(FirestoreDatabase)
     database.logger = Mock()
@@ -69,7 +70,24 @@ def complete_stage(persisted, stage):
     persisted.unit['state'] = UnitStates.RUNNING.value if stage == 'start' else UnitStates.READY.value
     persisted.workout['state'] = WorkoutStates.RUNNING.value if stage == 'start' else WorkoutStates.READY.value
     for server in persisted.servers.values():
-        server['state'] = ServerStates.STOPPED.value if stage == 'stop' else ServerStates.RUNNING.value
+        idle_student = stage == 'build' and server['parent_id'] == persisted.workout_id
+        server['state'] = ServerStates.STOPPED.value if stage == 'stop' or idle_student else ServerStates.RUNNING.value
+
+
+@pytest.mark.parametrize('server_index', [1, 2], ids=['student', 'display-proxy'])
+def test_initial_student_build_cannot_leave_owned_vms_running(persisted, server_index):
+    persisted.servers[persisted.names[server_index]]['state'] = ServerStates.RUNNING.value
+
+    with pytest.raises(cli.DebugLabStageError, match='did not complete build'):
+        persisted.backend._verify_lab_stage(persisted.unit_id, 'build')
+
+
+def test_nonmanaged_lab_keeps_its_existing_initial_build_policy(persisted):
+    persisted.unit.pop('wireguard_lease')
+    for server in persisted.servers.values():
+        server['state'] = ServerStates.RUNNING.value
+
+    assert persisted.backend._verify_lab_stage(persisted.unit_id, 'build')['state_name'] == 'READY'
 
 
 @pytest.mark.parametrize('stage', ['build', 'start', 'stop'])

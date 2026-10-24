@@ -30,6 +30,7 @@ class WorkoutStatesManager(BaseStateManager):
         (WorkoutStates.COMPLETED_FIREWALL_RULES.value, WorkoutStates.RUNNING.value),
         (WorkoutStates.RUNNING.value, WorkoutStates.STOPPING.value),
         (WorkoutStates.STOPPING.value, WorkoutStates.READY.value),
+        (WorkoutStates.COMPLETED_STUDENT_ENTRY.value, WorkoutStates.READY.value),
         (WorkoutStates.NOT_BUILT.value, WorkoutStates.BUILDING_SERVERS.value)
     ]
 

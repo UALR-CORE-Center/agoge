@@ -289,9 +289,13 @@ class LocalBackend:
         idle_gateways = ({f'{unit_id}-{server["name"]}' for server in unit.get('servers') or []
                           if server.get('wireguard_gateway') is True}
                          if stage == 'build' and status['state'] == UnitStates.READY.value and not active_workouts else set())
+        idle_students = ({workout['workout_id'] for workout in workouts
+                          if workout.get('state') == WorkoutStates.READY.value}
+                         if stage == 'build' and unit.get('wireguard_lease') else set())
         for name in sorted(expected):
             record = self.db.get(collection_name=DbCollections.SERVER, doc_id=name) or {}
-            wanted = ServerStates.STOPPED.value if name in idle_gateways else expected_server
+            idle = name in idle_gateways or name.split('-', 1)[0] in idle_students
+            wanted = ServerStates.STOPPED.value if idle else expected_server
             if record.get('state') != wanted:
                 raise DebugLabStageError(f'Server {name} did not complete {stage}; expected state {wanted}')
         return status
@@ -308,6 +312,7 @@ class LocalBackend:
         return instance.get('status') if isinstance(instance, dict) else instance.status
 
     def _verify_student_stage(self, unit_id, workouts, running):
+        from common.constants.database import DbCollections, DbOperators
         from common.constants.states import ServerStates, UnitStates, WorkoutStates
 
         status = self.status(unit_id)
@@ -320,6 +325,22 @@ class LocalBackend:
             wanted = WorkoutStates.RUNNING.value if workout_id in running else WorkoutStates.READY.value
             if current[workout_id].get('state') != wanted:
                 raise DebugLabStageError(f'Workout {workout_id} did not reach the expected lifecycle state')
+        unit = self._unit(unit_id)
+        for workout_id in workouts:
+            expected = {f'{workout_id}-{server["name"]}' for server in unit.get('servers') or []
+                        if not server.get('community_server')}
+            if unit.get('wireguard_lease'):
+                expected.add(f'{workout_id}-display-guacamole-server')
+            records = self.db.query(collection_name=DbCollections.SERVER,
+                                    filters=[('parent_id', DbOperators.EQUAL, workout_id)]) or []
+            expected.update(record['name'] if record['name'].startswith(f'{workout_id}-')
+                            else f'{workout_id}-{record["name"]}' for record in records
+                            if record.get('name') and record.get('state') != ServerStates.DELETED.value)
+            wanted = ServerStates.RUNNING.value if workout_id in running else ServerStates.STOPPED.value
+            for name in sorted(expected):
+                record = self.db.get(collection_name=DbCollections.SERVER, doc_id=name) or {}
+                if record.get('state') != wanted:
+                    raise DebugLabStageError(f'Student server {name} did not reach expected state {wanted}')
         gateway = status.get('gateway') or {}
         server_name = gateway.get('server_name')
         wanted_state = ServerStates.RUNNING.value if running else ServerStates.STOPPED.value
@@ -345,10 +366,10 @@ class LocalBackend:
             if joined['workout_id'] in workouts or joined.get('exists'):
                 raise DebugLabStageError('The student lifecycle requires two newly claimed test workouts')
             workouts.append(joined['workout_id'])
-            status = self._verify_student_stage(unit_id, workouts, running)
-            result['completed_steps'].append(f'join_student_{number}')
             result['students'] = [{'student_email': address, 'workout_id': identifier}
                                   for address, identifier in zip(args.student_emails, workouts)]
+            status = self._verify_student_stage(unit_id, workouts, running)
+            result['completed_steps'].append(f'join_student_{number}')
             print(json.dumps(status, indent=2), flush=True)
         for operation, number in (('start', 1), ('start', 2), ('stop', 1), ('stop', 2)):
             if not confirm(f'{operation.capitalize()} student {number} workout? [Y/n/q]: ', default=True):

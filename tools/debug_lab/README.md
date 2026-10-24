@@ -40,6 +40,11 @@ to start each workout, prompts to stop each workout, and finally offers lab
 deletion. A student join claims a workout; starting that workout makes the
 student active. The checks require:
 
+Both the workstation and display proxy are stopped before a newly claimed
+Workout becomes READY. A student start runs those VMs; a student stop shuts them
+down. The debug checks include these owned resource states as well as the shared
+gateway, so an idle claim cannot silently leave student VMs running.
+
 | Step | Shared gateway |
 | --- | --- |
 | Build, with no active students | Stopped |

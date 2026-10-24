@@ -394,7 +394,13 @@ flow provides instructor-visible connection details and authenticated peer
 configuration.
 
 Students claim their normal workouts and use the browser display proxy to reach
-their workstation. Routes select only approved student machines and point only
+their workstation. After an initial student build, its workstation and display
+proxy stop before the Workout becomes READY. Starting that student's session
+starts its VMs and, for the first active student, the shared gateway. Stopping
+the last active student also stops the gateway. Labs without configured packet
+mirroring do not create or start packet collectors.
+
+Routes select only approved student machines and point only
 to the assigned private LAN. Gateway/Pi guest rules restrict tunnel forwarding;
 the managed cloud rules isolate student machines and permit browser proxy access.
 Stop/start refreshes endpoint addressing without reallocating its number. The Pi

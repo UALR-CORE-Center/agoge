@@ -30,7 +30,9 @@ def flow():
     backend = cli.LocalBackend({'project': cli.TEST_PROJECT}, db, Mock(), Mock(), Mock(),
                                gateway_status_reader=lambda name: cloud.status)
     unit = {'id': unit_id, 'state': UnitStates.READY.value,
-            'servers': [{'name': 'wireguard', 'community_server': True, 'wireguard_gateway': True}]}
+            'servers': [{'name': 'wireguard', 'community_server': True, 'wireguard_gateway': True},
+                        {'name': 'student', 'community_server': False}],
+            'wireguard_lease': {'remote_peer_id': 'remote-lab-01'}}
     gateway = {'name': 'wireguard', 'parent_id': unit_id, 'state': ServerStates.STOPPED.value}
     db.collections[DbCollections.UNIT][unit_id] = unit
     db.collections[DbCollections.SERVER][gateway_name] = gateway
@@ -47,6 +49,9 @@ def flow():
         workout_id = next(students)
         db.collections[DbCollections.WORKOUT][workout_id] = {
             'id': workout_id, 'parent_id': unit_id, 'student_email': email, 'state': WorkoutStates.READY.value}
+        for name in ('student', 'display-guacamole-server'):
+            db.collections[DbCollections.SERVER][f'{workout_id}-{name}'] = {
+                'name': name, 'parent_id': workout_id, 'state': ServerStates.STOPPED.value}
         events.append(('join', workout_id))
         return {'workout_id': workout_id, 'exists': False, 'state': WorkoutStates.READY.value}
 
@@ -55,6 +60,9 @@ def flow():
         events.append((operation, identifier))
         record = db.collections[DbCollections.WORKOUT][identifier]
         record['state'] = WorkoutStates.RUNNING.value if operation == 'start' else WorkoutStates.READY.value
+        for server in db.collections[DbCollections.SERVER].values():
+            if server.get('parent_id') == identifier:
+                server['state'] = ServerStates.RUNNING.value if operation == 'start' else ServerStates.STOPPED.value
         active = any(item['state'] == WorkoutStates.RUNNING.value
                      for item in db.collections[DbCollections.WORKOUT].values())
         gateway['state'] = ServerStates.RUNNING.value if active else ServerStates.STOPPED.value
@@ -98,6 +106,25 @@ def test_running_vm_cannot_be_hidden_by_a_stopped_gateway_database_record(flow):
     assert result['outcome'] == 'failed' and result['exit_code'] == 1
     assert 'GCP reports' in result['detail']
     flow.backend.create_workout.assert_not_called()
+    flow.backend.action.assert_not_called()
+    flow.backend.delete_labs.assert_not_called()
+
+
+@pytest.mark.parametrize('resource', ['student', 'display-guacamole-server'])
+def test_join_checks_student_vms_are_stopped_and_retains_ids_on_failure(flow, resource):
+    join = flow.backend.create_workout.side_effect
+
+    def leaves_vm_running(unit_id, email):
+        result = join(unit_id, email)
+        flow.db.collections[DbCollections.SERVER][f'{result["workout_id"]}-{resource}']['state'] = ServerStates.RUNNING.value
+        return result
+
+    flow.backend.create_workout.side_effect = leaves_vm_running
+    result = flow.backend.run_lab(flow.args, read_input=lambda _: 'yes')
+
+    assert result['outcome'] == 'failed' and result['exit_code'] == 1
+    assert 'Student server' in result['detail']
+    assert result['students'][0]['workout_id'] == 'klmnopqrst'
     flow.backend.action.assert_not_called()
     flow.backend.delete_labs.assert_not_called()
 

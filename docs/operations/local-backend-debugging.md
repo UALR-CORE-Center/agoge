@@ -205,7 +205,7 @@ and actual Compute Engine instance status:
 | Stage | Expected shared gateway |
 | --- | --- |
 | Build the lab with no active students | Stopped |
-| Claim both student Workouts | Stopped; claiming alone does not start a session |
+| Claim both student Workouts | Stopped; each student's workstation and display proxy are also stopped before READY |
 | Start the first student session | Running automatically |
 | Start the second student session | Remains running |
 | Stop the first student | Remains running for the second student |
@@ -215,6 +215,8 @@ and actual Compute Engine instance status:
 This sequence uses student start/stop operations; it never starts or stops the
 parent lab to force the expected gateway result. It checks GCP lifecycle state
 without requiring the physical Pi, a WireGuard handshake, or a guest callback.
+Each claim completes only after its student VMs and display proxy have stopped;
+the debug flow also verifies their stopped/running records after each action.
 Use the printed student Workouts to inspect the student API/Cloud Function path
 in the debugger. Claiming a Workout and starting its session are separate
 application operations.

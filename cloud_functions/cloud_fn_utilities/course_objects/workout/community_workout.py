@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from google.cloud.firestore_v1.base_query import FieldFilter
 
+from common.constants.build_constants import BuildConstants
 from common.constants.database import DbCollections
 from common.constants.pub_sub import PubSub
 from common.constants.states import ServerStates, WorkoutStates
@@ -59,6 +60,7 @@ class CommunityWorkout(BaseWorkout):
             PacketMirrorFactory.create_packet_mirror_object(
                 build_id=self.unit_id,
                 build=self.unit_model.model_dump(),
+                build_type=BuildConstants.UnitType.COMMUNITY.value,
                 env_dict=self.env_dict,
                 debug=self.debug
             )
@@ -89,11 +91,68 @@ class CommunityWorkout(BaseWorkout):
             self.state_manager.state_transition(self.s.COMPLETED_SERVERS)
 
         if getattr(self.unit_model, 'wireguard_lease', None):
-            self._build_managed_display_proxy()
+            if current_state < self.s.COMPLETED_STUDENT_ENTRY.value:
+                self._build_managed_display_proxy()
+                # Keep a durable checkpoint before parking. A stop may fail
+                # after another VM is already stopped; redelivery must retry
+                # stops without trying to rebuild that existing proxy.
+                self.state_manager.state_transition(self.s.COMPLETED_STUDENT_ENTRY)
+            self._stop_initial_managed_servers()
 
         self.state_manager.state_transition(self.s.READY)
         self.logger.info(f"{self.class_name}:{self.workout_id} - Finished building {server_build_count} for "
                          f"workout ID")
+
+    def _stop_initial_managed_servers(self):
+        """Park only this newly claimed student's VMs before exposing READY."""
+        names = {f'{self.workout_id}-{server.name}' for server in self.unit_model.servers or []
+                 if not server.community_server}
+        names.add(f'{self.workout_id}-display-guacamole-server')
+        # Include dynamically created student-owned resources, never the shared
+        # Unit gateway. Check parent ownership before sending any control RPC.
+        for record in self.db_queries.get_servers(parent_id=self.workout_id):
+            short_name = record.get('name')
+            if short_name:
+                names.add(short_name if short_name.startswith(f'{self.workout_id}-')
+                          else f'{self.workout_id}-{short_name}')
+        records = {name: self.db.get(collection_name=DbCollections.SERVER, doc_id=name) or {}
+                   for name in names}
+        if any(record.get('parent_id') != self.workout_id for record in records.values()):
+            raise LookupError(f'Student server ownership is missing for Workout {self.workout_id}')
+        for name, record in records.items():
+            if self.state_manager.get_state() != self.s.COMPLETED_STUDENT_ENTRY.value:
+                raise RuntimeError(f'Workout {self.workout_id} left its initial build; refusing to stop its servers')
+            if record.get('state') == ServerStates.STOPPED.value:
+                continue
+            if record.get('state') not in (ServerStates.RUNNING.value, ServerStates.STOPPING.value,
+                                           ServerStates.BROKEN.value):
+                raise RuntimeError(f'Student server {name} has not finished building')
+            if self.debug:
+                self.compute_manager.load(server_name=name, network_prefix=self.unit_id)
+                self.compute_manager.stop()
+            else:
+                self.pubsub_manager.msg(
+                    handler=str(PubSub.Handlers.CONTROL.value),
+                    action=str(PubSub.Actions.STOP.value), build_id=name,
+                    course_object=str(PubSub.CourseObjects.LAB_SERVER.value))
+        deadline = time.monotonic() + self.MANAGED_GATEWAY_WAIT_SECONDS
+        while True:
+            current = [self.db.get(collection_name=DbCollections.SERVER, doc_id=name) or {}
+                       for name in names]
+            if all(record.get('parent_id') == self.workout_id
+                   and record.get('state') == ServerStates.STOPPED.value for record in current):
+                break
+            if (any(record.get('state') in (ServerStates.BROKEN.value, ServerStates.DELETED.value)
+                    for record in current) or time.monotonic() >= deadline):
+                raise TimeoutError(f'Could not confirm initial student servers stopped for Workout {self.workout_id}')
+            time.sleep(self.MANAGED_GATEWAY_POLL_SECONDS)
+        # The normal stop path persists STOPPED after its GCP operation. Verify
+        # the provider too before declaring the initial student build ready.
+        for name in sorted(names):
+            self.compute_manager.load(server_name=name, network_prefix=self.unit_id)
+            if self.compute_manager._get_instance_status() != 'TERMINATED':
+                raise TimeoutError(f'GCP has not confirmed student server {name} stopped')
+        self.logger.info(f'Parked initial student servers for Workout {self.workout_id}')
 
     def _build_managed_display_proxy(self) -> None:
         """Give each student a proxy to only that Workout's assigned machines."""
