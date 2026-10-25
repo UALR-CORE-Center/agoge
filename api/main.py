@@ -3,7 +3,6 @@ import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Response, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from dotenv import load_dotenv
@@ -16,6 +15,7 @@ from common.exceptions import BadRequest, Unauthorized, Forbidden
 
 from app_config import AppConfig
 from dependencies import verify_token
+from health import HealthCheckTrustedHostMiddleware, health_router
 from routers.puzzle_control import puzzle_control_router
 from routers.rubric import rubric_router
 from routers.webgl import webgl_router
@@ -42,8 +42,13 @@ app_config = AppConfig()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.cloud_env = CloudEnv(log_name=LoggerNames.API)
-    yield
+    app.state.api_ready = False
+    try:
+        app.state.cloud_env = CloudEnv(log_name=LoggerNames.API)
+        app.state.api_ready = True
+        yield
+    finally:
+        app.state.api_ready = False
 
 app = FastAPI(
     lifespan=lifespan,
@@ -65,13 +70,14 @@ app.add_middleware(
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 hosts = app_config.hosts()
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
+app.add_middleware(HealthCheckTrustedHostMiddleware, allowed_hosts=hosts)
 
 # Initialize Firebase
 firebase_admin.initialize_app()
 cloud_env = None
 
 # Add APIRouters
+app.include_router(health_router)
 app.include_router(compute_image_router)
 app.include_router(compute_snapshot_router)
 app.include_router(docs_router)

@@ -7,6 +7,10 @@ import sys
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+COMMON_SCENARIOS = (
+    'common/tests/test_api_readiness.py',
+    'build_files/cloud_deployment/tests/test_deployment_command_output.py',
+)
 SUITES = {
     'community': (
         'cloud_functions/tests/test_community_shared_proxy.py',
@@ -41,7 +45,10 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     names = tuple(SUITES) if args.suite == 'all' else (args.suite,)
-    scenarios = tuple(dict.fromkeys(path for name in names for path in SUITES[name]))
+    scenarios = tuple(dict.fromkeys([
+        *COMMON_SCENARIOS,
+        *(path for name in names for path in SUITES[name]),
+    ]))
     print('Offline functional tests: ' + ', '.join(names), flush=True)
     print('Real lab lifecycle and Guacamole configuration; fake cloud and HTTP transport.', flush=True)
     print('No GCP credentials, resources, deployment, or remote WireGuard peer are required.', flush=True)

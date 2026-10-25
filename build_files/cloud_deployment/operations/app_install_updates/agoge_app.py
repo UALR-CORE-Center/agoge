@@ -347,14 +347,14 @@ class AgogeApp:
 
     @staticmethod
     def _stream_command_output(command: str) -> bool:
-        """Helper method to stream the output of a subprocess command"""
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, text=True)
+        """Stream progress and errors together without blocking on separate pipes."""
+        process = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            shell=True, text=True,
+        )
 
         for line in process.stdout:
-            print(line, end="")
-
-        for line in process.stderr:
-            print(line, end="")
+            print(line, end="", flush=True)
 
         process.wait()
         return process.returncode == 0

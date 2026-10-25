@@ -11,6 +11,10 @@ The default runs both community and solo scenarios. Use `--suite community` or
 `--suite solo` to focus on one, `--verbose` to show scenario names, or `--list`
 to show the selected files.
 
+Every suite also checks API readiness with Cloud Run's internal Host header,
+host validation on application routes, and deployment output streaming. These
+checks catch startup-probe regressions and hidden subprocess errors locally.
+
 These scenarios execute the application lifecycle and Guacamole configuration
 code with in-memory database/cloud services and a local Guacamole transport
 fake. They require no account, GCP credentials, remote peer, running VM, or
