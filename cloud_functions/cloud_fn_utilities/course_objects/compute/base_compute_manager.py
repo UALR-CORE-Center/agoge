@@ -1,5 +1,7 @@
 import requests
 import time
+import re
+from urllib.parse import urlsplit
 from abc import abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, Union, List, Any, Type, TypeVar
@@ -90,6 +92,7 @@ class BaseComputeManager:
         self_link: Optional[str] = None
         routes: Optional[list] = None
         wireguard_endpoint_id: Optional[str] = None
+        wireguard_managed: bool = False
 
     def __init__(
         self,
@@ -133,7 +136,14 @@ class BaseComputeManager:
         self.s = ServerStates
         self.logger = Logger(self.log_name, class_name=self.class_name)
         self.validate = ModelValidator
-        self.server_spec = self.Server
+        # Each operation owns its server configuration. Storing the dataclass
+        # type here used to share metadata and identities across all managers
+        # in one warm process, which is unsafe for per-lease gateway secrets.
+        self.server_spec = self.Server(
+            add_disk=0, can_ip_forward=False, delayed_start=False, disk_size=10,
+            image='', metadata=[], machine_type='e2-medium', min_cpu_platform='',
+            nics=[], parent_build_type='', name='', tags=[],
+        )
         self.source_image_project = None
         self.server_name = None
         self.image_name = None
@@ -230,10 +240,15 @@ class BaseComputeManager:
         self.server_spec.os = (server_spec.get('details') or {}).get('os') or server_spec.get('os')
         self.server_spec.parent_build_type = server_spec.get('parent_build_type', None)
         self.server_spec.parent_id = server_spec.get('parent_id', None)
-        self.server_spec.service_accounts = server_spec.get('serviceAccounts', None)
+        self.server_spec.service_accounts = (
+            [] if server_spec.get('no_service_account') is True
+            else server_spec.get('serviceAccounts', None)
+        )
+        self.server_spec.disk_size = server_spec.get('disk_size', 10)
         self.server_spec.tags = server_spec.get('tags', [])
         self.server_spec.routes = server_spec.get('routes') or []
         self.server_spec.wireguard_endpoint_id = server_spec.get('wireguard_endpoint_id')
+        self.server_spec.wireguard_managed = server_spec.get('wireguard_managed', False)
 
         # Set additional class attributes
         self.parent_build_id = server_spec.get('parent_id', None)
@@ -283,6 +298,8 @@ class BaseComputeManager:
         self.server_spec.routes = server_spec.get('routes') or []
         self.server_spec.wireguard_endpoint_id = server_spec.get('wireguard_endpoint_id')
 
+        self.server_spec.wireguard_managed = False
+
     def _build_server(self, finalize_state: bool = True) -> None:
         """Build a server, optionally deferring RUNNING until caller dependencies finish."""
         # Reject before any disk or address is created for the server
@@ -299,7 +316,10 @@ class BaseComputeManager:
 
         advanced_machine_features = None
         min_cpu_platform = None
-        service_account = self.server_spec.service_accounts or self.compute_instance.SERVICE_ACCOUNT_CONFIG
+        service_account = (
+            self.server_spec.service_accounts if self.server_spec.service_accounts is not None
+            else self.compute_instance.SERVICE_ACCOUNT_CONFIG
+        )
         tags = {'items': self.server_spec.tags} if self.server_spec.tags else {'items': []}
 
         if self.ip_aliases or nested_host:
@@ -464,17 +484,17 @@ class BaseComputeManager:
     def _resource_tail(value) -> str:
         return str(value or '').rstrip('/').rsplit('/', 1)[-1]
 
-    def _start_server(self) -> None:
+    def _start_server(self, finalize_state: bool = True) -> bool:
         """
         Starts a server based on the specification in the database document with name server_name.
         A guacamole server is also registered with DNS.
         """
         if not self.compute_instance:
-            return
+            return False
 
         existing_state = self.state_manager.get_state()
         if existing_state == self.s.RUNNING.value:
-            return
+            return True
 
         self.state_manager.state_transition(self.s.STARTING)
         i = 0
@@ -548,8 +568,10 @@ class BaseComputeManager:
                 if self.server_spec.guacamole_startup_script:
                     self._wait_for_guacamole(dns_record[:-1])
 
-            self.state_manager.state_transition(self.s.RUNNING)
+            if finalize_state:
+                self.state_manager.state_transition(self.s.RUNNING)
             self.logger.info(f"{self.class_name}:{self.server_name} - Finished starting server")
+            return True
         else:
             if start_in_progress:
                 # Keep the operation retryable. Another delivery owns the
@@ -559,6 +581,7 @@ class BaseComputeManager:
                 )
             self.state_manager.state_transition(self.s.BROKEN)
             self.logger.error(f"{self.class_name}:{self.server_name} - Timeout or other error trying to start server")
+            return False
 
     def _get_instance_status(self) -> str:
         try:
@@ -630,13 +653,15 @@ class BaseComputeManager:
 
         """
         if not image_source:
-            try:
-                image_response = self.compute_image.get(resource=self.server_spec.image, project=self.project)
-            except NotFound:
-                self.logger.error(f'{self.class_name}:{self.server_name} - Error when trying to build server. '
-                                  f'Cannot obtain the cloud disk for {self.server_spec.image}')
-                raise
-            image = image_response.self_link
+            image = self._explicit_boot_image_reference(self.server_spec.image)
+            if image is None:
+                try:
+                    image_response = self.compute_image.get(resource=self.server_spec.image, project=self.project)
+                except NotFound:
+                    self.logger.error(f'{self.class_name}:{self.server_name} - Error when trying to build server. '
+                                      f'Cannot obtain the cloud disk for {self.server_spec.image}')
+                    raise
+                image = image_response.self_link
         else:
             image = image_source
 
@@ -654,6 +679,32 @@ class BaseComputeManager:
             initialize_params=disk_init_params
         )
         return boot_disk
+
+    @staticmethod
+    def _explicit_boot_image_reference(value: str) -> str | None:
+        """Accept a pinned Compute image without treating its URL as a name.
+
+        Managed lab creation resolves registered images to concrete resources.
+        Family URLs are intentionally excluded here; only the managed gateway's
+        trusted Ubuntu default uses an explicit family source override.
+        """
+        if not isinstance(value, str):
+            raise BadRequest('The boot image must have a name or a pinned Compute image reference')
+        if '/' not in value and ':' not in value:
+            return None
+        source = value
+        if value.startswith('https://'):
+            url = urlsplit(value)
+            if (url.netloc not in {'www.googleapis.com', 'compute.googleapis.com'}
+                    or url.query or url.fragment or not url.path.startswith('/compute/v1/')):
+                raise BadRequest('The boot image URL must be an official Compute image resource')
+            source = url.path.removeprefix('/compute/v1/')
+        if not re.fullmatch(
+            r'projects/[a-z0-9][a-z0-9-]{0,62}/global/images/[a-z](?:[-a-z0-9]{0,61}[a-z0-9])?',
+            source,
+        ):
+            raise BadRequest('The boot image must reference one concrete Compute image')
+        return source
 
     def _add_disks(self) -> None:
         pass

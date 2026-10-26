@@ -17,6 +17,7 @@ from cloud_deployment.operations.app_install_updates.classified_app import Class
 from cloud_deployment._archive.build_specification import BuildSpecification
 from cloud_deployment.operations.images_and_specs.default_server_image import DefaultServerImage
 from cloud_deployment.operations.images_and_specs.public_image_catalog import PublicImageCatalog
+from cloud_deployment.operations.images_and_specs.wireguard_lab_template import WireGuardLabTemplate
 from cloud_deployment.operations.images_and_specs.nested_media_bucket import NestedMediaBucket
 from cloud_deployment.operations.images_and_specs.nested_os_catalog_sync import NestedOsCatalogSync
 from cloud_deployment.operations.images_and_specs.local_to_cloud import LocalToCloud
@@ -72,6 +73,7 @@ class SetupManager:
             SetupOptions.SHARED_LOAD_BALANCER: lambda: SharedLoadBalancer(project=self.project).run(),
             SetupOptions.DEFAULT_SERVER_IMAGES: lambda: DefaultServerImage().run(),
             SetupOptions.SYNC_PUBLIC_IMAGES: lambda: PublicImageCatalog(project=self.project).run(),
+            SetupOptions.WIREGUARD_LAB_TEMPLATE: lambda: WireGuardLabTemplate(project=self.project).run(),
             SetupOptions.NESTED_MEDIA_BUCKET: lambda: NestedMediaBucket(project=self.project).run(),
             SetupOptions.NESTED_OS_CATALOG: lambda: NestedOsCatalogSync(project=self.project).run(),
             SetupOptions.CLASSIFIED_APP: lambda: ClassifiedApp().deploy(),

@@ -1,0 +1,21 @@
+[Unit]
+Description=Agoge authenticated WireGuard kit configuration
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/agoge-wireguard/pi.py run --settings /etc/agoge-wireguard/config.json
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=90
+User=root
+UMask=0077
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/etc/wireguard /run /var/run
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

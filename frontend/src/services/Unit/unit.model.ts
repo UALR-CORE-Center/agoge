@@ -20,6 +20,27 @@ export interface Unit {
     // True when the unit carries a `ctf` block; the block itself stays server-side.
     ctf_capable?: boolean;
     wireguard_endpoint?: WireGuardEndpoint | null;
+    wireguard_lease?: WireGuardLease | null;
+}
+
+export interface WireGuardLease {
+    unit_id: string;
+    kit_id: string;
+    device_id: string;
+    endpoint_id: string;
+    equipment_subnet: string;
+    student_subnets: string[];
+    gateway_public_key: string;
+    peer_public_key: string;
+    gateway_address: string;
+    peer_address: string;
+    expires: number;
+    status: "reserved" | "released";
+    service_ready: boolean;
+    tunnel_ready: boolean;
+    health_timestamp?: number | null;
+    latest_handshake?: number;
+    health_error?: string | null;
 }
 
 export interface WireGuardEndpoint {

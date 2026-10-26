@@ -42,8 +42,9 @@ class SetupOptions(bytes, Enum):
     STARTUP_SCRIPTS_AND_INSTRUCTIONS = (11, "Synchronize Startup Scripts and Instructions")
     REFRESH_GUACAMOLE_IMAGE_AND_CERT = (12, "Refresh/Create guacamole image and certificate.")
     SYNC_PUBLIC_IMAGES = (23, "Synchronize Public OS Images")
-    NESTED_MEDIA_BUCKET = (24, "Configure Nested Image Media Bucket")
-    NESTED_OS_CATALOG = (25, "Synchronize Nested Guest OS Catalog")
+    WIREGUARD_LAB_TEMPLATE = (24, "Upload WireGuard Community Lab Template")
+    NESTED_MEDIA_BUCKET = (25, "Configure Nested Image Media Bucket")
+    NESTED_OS_CATALOG = (26, "Synchronize Nested Guest OS Catalog")
 
     # Environment & Quotas
     ENV = (10, "Synchronize Environment Variables")
@@ -111,6 +112,7 @@ category_menu = {
                 SetupOptions.REFRESH_GUACAMOLE_IMAGE_AND_CERT.description,
             ),
             (SetupOptions.SYNC_PUBLIC_IMAGES, SetupOptions.SYNC_PUBLIC_IMAGES.description),
+            (SetupOptions.WIREGUARD_LAB_TEMPLATE, SetupOptions.WIREGUARD_LAB_TEMPLATE.description),
             (SetupOptions.NESTED_MEDIA_BUCKET, SetupOptions.NESTED_MEDIA_BUCKET.description),
             (SetupOptions.NESTED_OS_CATALOG, SetupOptions.NESTED_OS_CATALOG.description),
             (SetupOptions.BACK, SetupOptions.BACK.description),

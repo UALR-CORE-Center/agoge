@@ -1,5 +1,12 @@
 # Community WireGuard example
 
+For automatic Ubuntu gateway configuration, enrolled kit assignment, and
+authenticated Pi setup, use the built-in **Build WireGuard Lab** action described
+in [Managed WireGuard factory labs](../operations/wireguard-provisioning.md).
+The image-baking instructions below describe the legacy unmanaged topology.
+New builds of this template select a registered kit and derive its managed
+network configuration automatically.
+
 [`community-wireguard.json`](community-wireguard.json) is an uploadable starting point for a Community Lab with one shared WireGuard router and one Kali workstation per student.
 
 ## Prerequisites

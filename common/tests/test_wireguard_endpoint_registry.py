@@ -1,4 +1,7 @@
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
+from threading import RLock
 
 from common.constants.database import DbOperators
 from common.exceptions import BadRequest, NotFound
@@ -17,6 +20,8 @@ class _FakeDocument:
         self.records[self.document_id] = dict(data)
 
     def get(self, transaction=None):
+        if transaction is not None and transaction.written:
+            raise AssertionError("Firestore transactions cannot read after writing")
         return _FakeSnapshot(self.records.get(self.document_id))
 
 
@@ -46,13 +51,18 @@ class _FakeFirestoreClient:
 
 
 class _FakeTransaction:
+    def __init__(self):
+        self.written = False
+
     def set(self, document: _FakeDocument, data: dict, merge: bool = False):
+        self.written = True
         if merge:
             document.records[document.document_id].update(data)
         else:
             document.records[document.document_id] = dict(data)
 
     def delete(self, document: _FakeDocument):
+        self.written = True
         document.records.pop(document.document_id, None)
 
 
@@ -64,6 +74,7 @@ class _FakeDatabase:
         }
         self.db = _FakeFirestoreClient(self.collections)
         self.hide_query_results = False
+        self.transaction_lock = RLock()
 
     @property
     def records(self):
@@ -100,7 +111,8 @@ class _FakeDatabase:
         self.collections[collection_name.value].pop(doc_id, None)
 
     def transaction(self, operation_func, *args, **kwargs):
-        return operation_func(_FakeTransaction(), *args, **kwargs)
+        with self.transaction_lock:
+            return operation_func(_FakeTransaction(), *args, **kwargs)
 
 
 class WireGuardEndpointRegistryTest(unittest.TestCase):
@@ -134,7 +146,7 @@ class WireGuardEndpointRegistryTest(unittest.TestCase):
         self.assertEqual(endpoint.id, "12345")
         self.assertEqual(
             endpoint.hostname,
-            "wg-12345.agoge-class-a.gateways.example.edu.",
+            "wg12345.agoge-class-a.gateways.example.edu.",
         )
         self.assertEqual(self.db.records["12345"]["unit_id"], "abcdefghij")
         self.assertEqual(self.db.records["12345"]["status"], "reserved")
@@ -382,7 +394,7 @@ class WireGuardEndpointRegistryTest(unittest.TestCase):
     def test_dns_prefix_keeps_generated_label_within_63_characters(self) -> None:
         self.env["wireguard_dns_prefix"] = "a" * 57
         endpoint = self.registry(["83456"]).allocate("abcdefghij", "abcdefghij-wireguard")
-        self.assertEqual(len(endpoint.hostname.split(".")[0]), 63)
+        self.assertEqual(len(endpoint.hostname.split(".")[0]), 62)
 
         self.db = _FakeDatabase()
         self.env["wireguard_dns_prefix"] = "a" * 58
@@ -394,7 +406,7 @@ class WireGuardEndpointRegistryTest(unittest.TestCase):
         endpoint = self.registry(["85678"]).allocate("abcdefghij", "abcdefghij-wireguard")
         self.assertEqual(
             endpoint.hostname,
-            "wg-85678.agoge-class-a.nested.gateways.example.edu.",
+            "wg85678.agoge-class-a.nested.gateways.example.edu.",
         )
 
         for outside_suffix in ("example.com", "malicious-example.edu"):
@@ -419,7 +431,7 @@ class WireGuardEndpointRegistryTest(unittest.TestCase):
         self.assertNotEqual(first.hostname, second.hostname)
         self.assertEqual(
             second.hostname,
-            "wg-91234.agoge-class-b.gateways.example.edu.",
+            "wg91234.agoge-class-b.gateways.example.edu.",
         )
 
     def test_complete_project_qualified_hostname_must_fit_dns_limit(self) -> None:
@@ -443,6 +455,141 @@ class WireGuardEndpointRegistryTest(unittest.TestCase):
                     self.registry(["92345"]).allocate(
                         "abcdefghij",
                         "abcdefghij-wireguard",
+                    )
+
+    def circular_registry(self, number_max=10004):
+        return WireGuardEndpointRegistry(
+            env_dict=self.env,
+            db=self.db,
+            timestamp_factory=lambda: self.now,
+            number_min=10000,
+            number_max=number_max,
+        )
+
+    def test_default_allocator_uses_first_number_and_advances_cursor(self):
+        registry = self.circular_registry()
+        first = registry.allocate("firstunitx", "firstunitx-wireguard")
+        second = registry.allocate("secondunit", "secondunit-wireguard")
+
+        self.assertEqual((first.id, second.id), ("10000", "10001"))
+        self.assertEqual(
+            self.db.collections["wireguard-endpoint-cursor"]["allocation"],
+            {"next_number": 10002},
+        )
+
+    def test_circular_allocator_skips_occupied_numbers_and_wraps(self):
+        self.registry(["10002", "10000"]).allocate("firstunitx", "firstunitx-wireguard")
+        self.registry(["10000"]).allocate("secondunit", "secondunit-wireguard")
+        self.db.collections["wireguard-endpoint-cursor"] = {
+            "allocation": {"next_number": 10002},
+        }
+        endpoint = self.circular_registry(number_max=10002).allocate(
+            "thirdunitx", "thirdunitx-wireguard",
+        )
+
+        self.assertEqual(endpoint.id, "10001")
+        self.assertEqual(
+            self.db.collections["wireguard-endpoint-cursor"]["allocation"]["next_number"],
+            10002,
+        )
+
+    def test_circular_allocator_scans_more_than_one_bounded_transaction(self):
+        for number in range(10000, 10004):
+            self.registry([str(number)]).allocate(f"unit{number}", f"unit{number}-wireguard")
+        registry = self.circular_registry()
+        registry.CIRCULAR_SCAN_SIZE = 2
+
+        endpoint = registry.allocate("lastunitxx", "lastunitxx-wireguard")
+
+        self.assertEqual(endpoint.id, "10004")
+        self.assertEqual(
+            self.db.collections["wireguard-endpoint-cursor"]["allocation"]["next_number"],
+            10000,
+        )
+
+    def test_circular_allocator_does_not_reuse_released_tombstones(self):
+        registry = self.circular_registry(number_max=10000)
+        endpoint = registry.allocate("firstunitx", "firstunitx-wireguard")
+        registry.release(endpoint.id, unit_id="firstunitx")
+
+        with self.assertRaisesRegex(BadRequest, "exhausted"):
+            registry.allocate("secondunit", "secondunit-wireguard")
+        self.assertEqual(self.db.records["10000"]["unit_id"], "firstunitx")
+        self.assertNotIn("secondunit", self.db.claims)
+
+        registry.purge("10000", now=self.now + registry.TOMBSTONE_RETENTION_SECONDS)
+        self.assertEqual(
+            registry.allocate("secondunit", "secondunit-wireguard").id,
+            "10000",
+        )
+
+    def test_circular_same_unit_stale_queries_reuse_claim_without_advancing(self):
+        self.db.hide_query_results = True
+        registry = self.circular_registry()
+        first = registry.allocate("firstunitx", "firstunitx-wireguard")
+        registry.mark_reserved(first.id, unit_id="firstunitx")
+        second = registry.allocate("firstunitx", "ignored")
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(self.db.records), 1)
+        self.assertEqual(
+            self.db.collections["wireguard-endpoint-cursor"]["allocation"]["next_number"],
+            10001,
+        )
+
+    def test_circular_concurrent_requests_allocate_distinct_consecutive_ids(self):
+        self.db.hide_query_results = True
+        registry = self.circular_registry(number_max=10039)
+
+        def allocate(number):
+            return registry.allocate(f"unit{number:06}", f"unit{number:06}-wireguard").id
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            ids = list(executor.map(allocate, range(40)))
+
+        self.assertEqual(sorted(ids), [str(number) for number in range(10000, 10040)])
+        self.assertEqual(len(self.db.claims), 40)
+
+    def test_circular_transaction_retry_reloads_changed_cursor(self):
+        # Firestore may execute the callback more than once. Discard the first
+        # attempt, simulate another caller winning its number, then retry it.
+        registry = self.circular_registry()
+        real_transaction = self.db.transaction
+
+        def retry_transaction(operation, *args, **kwargs):
+            original = deepcopy(self.db.collections)
+            discarded = real_transaction(operation, *args, **kwargs)
+            for collection, records in self.db.collections.items():
+                records.clear()
+                records.update(original.get(collection, {}))
+            winner = discarded.model_dump()
+            winner.update(unit_id="otherunitx", server_name="otherunitx-wireguard")
+            self.db.records["10000"] = winner
+            self.db.collections["wireguard-endpoint-cursor"]["allocation"] = {"next_number": 10001}
+            return real_transaction(operation, *args, **kwargs)
+
+        self.db.transaction = retry_transaction
+        endpoint = registry.allocate("firstunitx", "firstunitx-wireguard")
+
+        self.assertEqual(endpoint.id, "10001")
+        self.assertEqual(self.db.claims["firstunitx"]["endpoint_id"], "10001")
+        self.assertEqual(self.db.records["10000"]["unit_id"], "otherunitx")
+
+    def test_existing_allocation_retains_legacy_hostname(self):
+        endpoint = self.registry(["12345"]).allocate("firstunitx", "firstunitx-wireguard")
+        self.db.records[endpoint.id]["hostname"] = "wg-12345.agoge-class-a.gateways.example.edu."
+
+        reused = self.circular_registry().allocate("firstunitx", "firstunitx-wireguard")
+
+        self.assertEqual(reused.hostname, "wg-12345.agoge-class-a.gateways.example.edu.")
+
+    def test_circular_allocator_rejects_invalid_bounds(self):
+        for bounds in ((9999, 10000), (10000, 100000), (10001, 10000), (True, 99999)):
+            with self.subTest(bounds=bounds):
+                with self.assertRaisesRegex(BadRequest, "bounds"):
+                    WireGuardEndpointRegistry(
+                        env_dict=self.env, db=self.db,
+                        number_min=bounds[0], number_max=bounds[1],
                     )
 
 

@@ -318,6 +318,12 @@ class CommunityUnit(BaseUnit):
                 f'Refusing to activate WireGuard endpoint {endpoint.id}: the Unit '
                 f'does not allow public UDP/{endpoint.port} ingress to its gateway.'
             )
+        if any(getattr(server, 'wireguard_managed', False) for server in self.unit_model.servers or []):
+            from common.services.wireguard_provisioning import WireGuardProvisioningService
+
+            lease = WireGuardProvisioningService(self.env_dict, db=self.db).get_lease(self.unit_id)
+            if not lease.is_ready(time.time()):
+                raise ValueError('WireGuard gateway service has not reported a healthy current boot')
         WireGuardEndpointRegistry(
             env_dict=self.env_dict,
             db=self.db,

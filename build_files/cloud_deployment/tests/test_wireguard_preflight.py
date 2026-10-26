@@ -82,6 +82,8 @@ def test_wireguard_preflight_grants_zone_scoped_dns_access():
     build._enable_apis.assert_called_once_with((
         ShellCommands.EnableAPIs.COMPUTE,
         ShellCommands.EnableAPIs.DNS,
+        ShellCommands.EnableAPIs.SECRET_MANAGER,
+        ShellCommands.EnableAPIs.IAM,
     ))
     environment.ensure_wireguard_defaults.assert_called_once_with()
     managed_zones.get.assert_called_once_with(

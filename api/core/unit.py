@@ -28,6 +28,8 @@ from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.utilities.id_generator import IdGenerator
 from common.services.wireguard_endpoint import WireGuardEndpointRegistry
+from common.services.wireguard_lab_spec import configure_kit_topology
+from common.services.wireguard_provisioning import WireGuardProvisioningService
 from common.utilities.timestamps import Timestamps
 
 from utilities.lms.lms_canvas import LMSSpecCanvas
@@ -70,6 +72,14 @@ class Unit:
     ) -> Union[UnitModel, dict]:
         if unit := self.db.get(collection_name=self.collection, doc_id=build_id):
             unit = self._hydrate_wireguard_endpoint(unit)
+            if unit.get('wireguard_lease'):
+                unit = dict(unit)
+                try:
+                    unit['wireguard_lease'] = WireGuardProvisioningService(
+                        self.env_dict, db=self.db
+                    ).get_lease(build_id).model_dump()
+                except NotFound:
+                    unit['wireguard_lease'] = None
             if as_dict:
                 return unit
             else:
@@ -203,7 +213,9 @@ class Unit:
     def build(
         self,
         requester: AgogeUser,
-        data: dict
+        data: dict,
+        *,
+        catalog_override: dict | None = None,
     ) -> str:
         """
         Processes build request for a single Unit
@@ -230,7 +242,8 @@ class Unit:
             )
             # Sends build request for unit; Records are created, but no resources are used
             # until requested by student
-            build_spec = self.db.get(collection_name=DbCollections.CATALOG, doc_id=build_type)
+            build_spec = (dict(catalog_override) if catalog_override is not None else
+                          self.db.get(collection_name=DbCollections.CATALOG, doc_id=build_type))
             if not build_spec:
                 raise NotFound(f'Specification not found. Invalid build type {build_type}')
 
@@ -244,10 +257,22 @@ class Unit:
                 test=test_unit,
             )
             unit_id = unit.id
-            endpoint_registry = self._allocate_wireguard_endpoint(unit)
-
+            endpoint_registry = None
             lms_integration = data.get('lms_integration', None)
             try:
+                gateways = [server for server in unit.servers or [] if server.wireguard_gateway]
+                if gateways:
+                    kit_id = data.get('kit_id')
+                    if not isinstance(kit_id, str) or not kit_id:
+                        raise BadRequest('Select a registered factory kit for this WireGuard Lab')
+                    provisioning = WireGuardProvisioningService(self.env_dict, db=self.db)
+                    kit = provisioning.get_authorized_kit(kit_id, requester)
+                    equipment_subnet = (kit.get('equipment_subnet') if isinstance(kit, dict)
+                                        else kit.equipment_subnet)
+                    configure_kit_topology(unit, equipment_subnet, int(self.env_dict.get('wireguard_port') or 51820))
+                    endpoint_registry = self._allocate_wireguard_endpoint(unit)
+                    provisioning.reserve(unit, kit_id, requester)
+                    gateways[0].wireguard_managed = True
                 if lms_integration:
                     build_spec = self._lms_integrate(requester=requester, build_spec=unit, data=data)
                     self.commit(build_spec)
@@ -304,6 +329,7 @@ class Unit:
         # Clean out any unneeded keys
         for key in ['discriminator', 'id', 'creation_timestamp']:
             build_spec.pop(key, None)
+        build_spec['instructor_id'] = [requester.email]
 
         workspace_settings = WorkspaceSettingsModel(
             count=build_count,
@@ -716,14 +742,12 @@ class Unit:
         if public_nic is None:
             raise BadRequest("The WireGuard gateway requires an external NAT interface")
 
-        # A logical name is portable in Catalog specifications. Compute managers
-        # prefix it with the Unit ID to obtain the actual reserved address name.
-        if not public_nic.external_ip_name:
-            public_nic.external_ip_name = "wireguard-ip"
+        # Managed leases use ephemeral public addresses, refreshed in DNS on
+        # each start. Existing static-address labs retain their old lifecycle.
         external_ip_name = public_nic.external_ip_name
-        if not external_ip_name.startswith(f"{unit.id}-"):
+        if external_ip_name and not external_ip_name.startswith(f"{unit.id}-"):
             external_ip_name = f"{unit.id}-{external_ip_name}"
-        if not re.fullmatch(
+        if external_ip_name and not re.fullmatch(
             r"[a-z](?:[-a-z0-9]{0,61}[a-z0-9])?",
             external_ip_name,
         ):
@@ -755,15 +779,16 @@ class Unit:
     ) -> None:
         """Compensate for validation failures before a Unit document is saved."""
         endpoint = unit.wireguard_endpoint
-        if not registry or not endpoint:
-            return
         try:
             if self.db.get(collection_name=self.collection, doc_id=unit.id):
                 return
-            registry.cancel_reservation(endpoint.id, unit_id=unit.id)
+            if any(server.wireguard_gateway for server in unit.servers or []):
+                WireGuardProvisioningService(self.env_dict, db=self.db).cancel_if_uncommitted(unit)
+            if registry and endpoint:
+                registry.cancel_reservation(endpoint.id, unit_id=unit.id)
         except Exception as error:
             self.logger.warning(
-                f"Could not cancel WireGuard endpoint {endpoint.id}: {error}",
+                f"Could not cancel WireGuard allocation for Unit {unit.id}: {type(error).__name__}",
                 unit_id=unit.id,
             )
 

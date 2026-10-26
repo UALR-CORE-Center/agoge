@@ -52,6 +52,8 @@ class BaseBuild:
         self._enable_apis((
             ShellCommands.EnableAPIs.COMPUTE,
             ShellCommands.EnableAPIs.DNS,
+            ShellCommands.EnableAPIs.SECRET_MANAGER,
+            ShellCommands.EnableAPIs.IAM,
         ))
         settings = EnvironmentVariables(project=self.project)
         settings.ensure_wireguard_defaults()

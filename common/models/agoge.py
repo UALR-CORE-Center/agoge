@@ -19,6 +19,7 @@ from common.constants.buckets import Buckets
 from common.constants.enumerators import SnapshotTypes
 from common.constants.states import ImageStatus, ServerStates
 from common.models.wireguard import WireGuardEndpointModel
+from common.models.wireguard_provisioning import WireGuardLeaseModel
 from common.utilities.gcp.shared_secrets import shared_api_secret_names
 
 
@@ -236,6 +237,7 @@ class FirewallRuleModel(BaseModel):
     network: str = Field(..., description="Network of the firewall rule")
     action: Optional[str] = Field(default=None, description="Action of the firewall rule")
     target_tags: Optional[List[str]] = Field(default_factory=list)
+    source_tags: List[str] = Field(default_factory=list)
     protocol: Optional[str] = Field(default=None, description="Protocol of the firewall rule")
     ports: Optional[List[str]] = Field(default=None, description="List of ports to apply rule to.")
     ip_ranges: Optional[List[str]] = Field(default=["0.0.0.0/0"], description="Range of source or destination IPs to attach rule to.")
@@ -294,6 +296,8 @@ class ServerModel(BaseModel):
         default=False,
         description="Whether this shared server is the WireGuard gateway for a community unit"
     )
+    wireguard_managed: bool = Field(default=False, description="Use repository-bundled WireGuard bootstrap")
+    no_service_account: bool = Field(default=False, description="Do not attach a GCP identity to this lab VM")
     wireguard_endpoint_id: Optional[str] = Field(
         default=None,
         pattern=r'^[1-9][0-9]{4}$',
@@ -565,6 +569,7 @@ class UnitModel(BaseModel):
         default=None,
         description="Runtime public endpoint allocated for this community Unit's WireGuard gateway"
     )
+    wireguard_lease: Optional[WireGuardLeaseModel] = None
     routes: Optional[List[RouteModel]] = Field(default=None, description="Custom static routes for the unit")
     servers: Optional[List[ServerModel]] = Field(default=None)
     web_applications: Optional[List[WebApplicationModel]] = Field(default=None, description="Used for cloud container labs")

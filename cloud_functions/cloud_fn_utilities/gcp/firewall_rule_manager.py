@@ -52,6 +52,7 @@ class FirewallManager:
                 rules=rules,
                 priority=rule.priority,
                 target_tags=target_tags,
+                source_tags=rule.source_tags,
             )
 
             try:
