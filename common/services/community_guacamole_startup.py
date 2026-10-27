@@ -74,6 +74,8 @@ def signing_key():
 
 
 def compose(key, host, domain):
+    # Restart on 'any' exit: a VM stop sends SIGTERM, nginx exits 0, and an
+    # 'on-failure' policy leaves that Complete task down after the next boot.
     return {
         'version': '3.7',
         'services': {
@@ -87,7 +89,7 @@ def compose(key, host, domain):
                 },
                 'networks': ['guacnet'],
                 'volumes': ['guac_recordings:/record'],
-                'deploy': {'replicas': 1, 'restart_policy': {'condition': 'on-failure'}},
+                'deploy': {'replicas': 1, 'restart_policy': {'condition': 'any'}},
             },
             'guacamole': {
                 'image': 'guacamole/guacamole:1.6.0',
@@ -97,7 +99,7 @@ def compose(key, host, domain):
                 },
                 'networks': ['guacnet'],
                 'volumes': ['guac_recordings:/record'],
-                'deploy': {'replicas': 1, 'restart_policy': {'condition': 'on-failure'}},
+                'deploy': {'replicas': 1, 'restart_policy': {'condition': 'any'}},
             },
             'nginx': {
                 'image': 'nginx:alpine',
@@ -108,7 +110,7 @@ def compose(key, host, domain):
                     '/etc/letsencrypt:/etc/letsencrypt:ro',
                 ],
                 'networks': ['guacnet'],
-                'deploy': {'replicas': 1, 'restart_policy': {'condition': 'on-failure'}},
+                'deploy': {'replicas': 1, 'restart_policy': {'condition': 'any'}},
             },
         },
         'networks': {'guacnet': {'driver': 'overlay', 'attachable': True}},

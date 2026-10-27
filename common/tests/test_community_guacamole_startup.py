@@ -55,6 +55,13 @@ def test_shared_compose_pins_json_auth_for_one_service_and_preserves_tls_websock
     assert 'proxy_set_header Connection "upgrade";' in nginx
 
 
+def test_every_service_restarts_after_a_clean_exit_so_a_lab_restart_brings_it_back():
+    # A VM stop ends nginx with exit 0; 'on-failure' left it Complete (0/1) after boot.
+    value = agent()['compose'](KEY, HOST, DOMAIN)
+    for service in value['services'].values():
+        assert service['deploy']['restart_policy']['condition'] == 'any'
+
+
 def test_runtime_fetches_key_via_metadata_identity_and_secret_manager_only(tmp_path):
     namespace = agent()
     namespace['ROOT'] = tmp_path
