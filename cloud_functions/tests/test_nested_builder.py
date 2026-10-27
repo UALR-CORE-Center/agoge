@@ -38,9 +38,11 @@ FW_ISO = b'firewall appliance iso bytes'
 FW_NANO = bz2.compress(b'preinstalled firewall disk bytes')
 POST_INSTALL = 'apt-get install -y nginx\necho done\n'
 
+# Every fake appends to $FAKE_LOG under a mkdir lock: the builder runs its guest queues in
+# parallel, and bash may split a long echo into several writes, interleaving concurrent lines.
 FAKE_CURL = textwrap.dedent("""\
     #!/bin/bash
-    echo "curl $*" >> "$FAKE_LOG"
+    until mkdir "$FAKE_LOG.lock" 2>/dev/null; do :; done; echo "curl $*" >> "$FAKE_LOG"; rmdir "$FAKE_LOG.lock"
     out= data= url=
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -70,7 +72,7 @@ FAKE_CURL = textwrap.dedent("""\
 # gcloud storage cp gs://bucket/object dest, served from $FAKE_DIR/gcs.
 FAKE_GCLOUD = textwrap.dedent("""\
     #!/bin/bash
-    echo "gcloud $*" >> "$FAKE_LOG"
+    until mkdir "$FAKE_LOG.lock" 2>/dev/null; do :; done; echo "gcloud $*" >> "$FAKE_LOG"; rmdir "$FAKE_LOG.lock"
     [ "$1 $2" = "storage cp" ] || exit 2
     shift 2
     [ "$1" = "--no-user-output-enabled" ] && shift
@@ -82,7 +84,7 @@ FAKE_GCLOUD = textwrap.dedent("""\
 # Names in $FAKE_SELF_POWEROFF power themselves off after their first start (Windows Setup).
 FAKE_VIRSH = textwrap.dedent("""\
     #!/bin/bash
-    echo "virsh $*" >> "$FAKE_LOG"
+    until mkdir "$FAKE_LOG.lock" 2>/dev/null; do :; done; echo "virsh $*" >> "$FAKE_LOG"; rmdir "$FAKE_LOG.lock"
     D="$FAKE_DIR/domains"
     mkdir -p "$D"
     case "$1" in
@@ -122,7 +124,7 @@ FAKE_VIRSH = textwrap.dedent("""\
 """)
 FAKE_VIRT_INSTALL = textwrap.dedent("""\
     #!/bin/bash
-    echo "virt-install $*" >> "$FAKE_LOG"
+    until mkdir "$FAKE_LOG.lock" 2>/dev/null; do :; done; echo "virt-install $*" >> "$FAKE_LOG"; rmdir "$FAKE_LOG.lock"
     name= graphics= boot=
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -141,7 +143,7 @@ FAKE_VIRT_INSTALL = textwrap.dedent("""\
 """)
 FAKE_QEMU_IMG = textwrap.dedent("""\
     #!/bin/bash
-    echo "qemu-img $*" >> "$FAKE_LOG"
+    until mkdir "$FAKE_LOG.lock" 2>/dev/null; do :; done; echo "qemu-img $*" >> "$FAKE_LOG"; rmdir "$FAKE_LOG.lock"
     case "$1" in
       create) touch "${@: -2:1}" ;;
       convert) touch "${@: -1}" ;;
@@ -150,17 +152,18 @@ FAKE_QEMU_IMG = textwrap.dedent("""\
 """)
 FAKE_GENISOIMAGE = textwrap.dedent("""\
     #!/bin/bash
-    echo "genisoimage $*" >> "$FAKE_LOG"
+    until mkdir "$FAKE_LOG.lock" 2>/dev/null; do :; done; echo "genisoimage $*" >> "$FAKE_LOG"; rmdir "$FAKE_LOG.lock"
     while [ $# -gt 0 ]; do [ "$1" = "-o" ] && { out=$2; shift; }; last=$1; shift; done
     cp "$last/autounattend.xml" "$out"
 """)
-FAKE_LOGGER = '#!/bin/bash\necho "$(basename "$0") $*" >> "$FAKE_LOG"\n'
-FAKE_SLEEP = '#!/bin/bash\necho "sleep $*" >> "$FAKE_LOG"\n/bin/sleep 0.01\n'
-FAKE_SHA256SUM = '#!/bin/bash\necho "sha256sum $*" >> "$FAKE_LOG"\nexec shasum -a 256 "$@"\n'
+FAKE_LOGGER = ('#!/bin/bash\nuntil mkdir "$FAKE_LOG.lock" 2>/dev/null; do :; done; '
+               'echo "$(basename "$0") $*" >> "$FAKE_LOG"; rmdir "$FAKE_LOG.lock"\n')
+FAKE_SLEEP = '#!/bin/bash\nuntil mkdir "$FAKE_LOG.lock" 2>/dev/null; do :; done; echo "sleep $*" >> "$FAKE_LOG"; rmdir "$FAKE_LOG.lock"\n/bin/sleep 0.01\n'
+FAKE_SHA256SUM = '#!/bin/bash\nuntil mkdir "$FAKE_LOG.lock" 2>/dev/null; do :; done; echo "sha256sum $*" >> "$FAKE_LOG"; rmdir "$FAKE_LOG.lock"\nexec shasum -a 256 "$@"\n'
 # p7zip is rarely installed on a dev machine; zipfile extracts `7z x -y -o<dir> <archive>` the same way, paths kept.
 FAKE_7Z = textwrap.dedent(f"""\
     #!/bin/bash
-    echo "7z $*" >> "$FAKE_LOG"
+    until mkdir "$FAKE_LOG.lock" 2>/dev/null; do :; done; echo "7z $*" >> "$FAKE_LOG"; rmdir "$FAKE_LOG.lock"
     for arg in "$@"; do case "$arg" in -o*) out=${{arg#-o}} ;; esac; done
     exec {sys.executable} -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[2]).extractall(sys.argv[1])' "$out" "${{@: -1}}"
 """)
@@ -242,7 +245,7 @@ def builder(tmp_path):
     bin_dir.mkdir()
     fakes = {'curl': FAKE_CURL, 'gcloud': FAKE_GCLOUD, 'virsh': FAKE_VIRSH, 'virt-install': FAKE_VIRT_INSTALL, 'qemu-img': FAKE_QEMU_IMG,
              'genisoimage': FAKE_GENISOIMAGE, 'sleep': FAKE_SLEEP, 'sha256sum': FAKE_SHA256SUM, '7z': FAKE_7Z,
-             'jq': f'#!/bin/bash\necho "jq $*" >> "$FAKE_LOG"\nexec {REAL_JQ} "$@"\n'}
+             'jq': f'#!/bin/bash\nuntil mkdir "$FAKE_LOG.lock" 2>/dev/null; do :; done; echo "jq $*" >> "$FAKE_LOG"; rmdir "$FAKE_LOG.lock"\nexec {REAL_JQ} "$@"\n'}
     for name in ('virt-customize', 'apt-get', 'systemctl', 'chgrp'):
         fakes[name] = FAKE_LOGGER
     for name, body in fakes.items():
