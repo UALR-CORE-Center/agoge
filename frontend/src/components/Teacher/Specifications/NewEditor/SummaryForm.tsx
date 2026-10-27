@@ -15,14 +15,15 @@ import {IUseFormHook} from "../../../../hooks/useForm";
 import {DocSummary} from "../../../../services/Documents/docs.model";
 import {docsService} from "../../../../services/Documents/docs.service";
 import {TeachingConcept} from "../../../../services/Specification/specificationEdit.model";
-import {mapTeachingConcepts, TeachingConcepts, UnitType} from "../../../../types/BuildConstants";
+import {mapTeachingConcepts, TeachingConcepts} from "../../../../types/BuildConstants";
 import ChipListView from "../../../Common/ChipListView";
-import {CommonEditorChildrenProps, SummaryFormKeys} from "./utils/EditorTypes";
+import {CommonEditorChildrenProps, EDITOR_UNIT_TYPES, SummaryFormKeys} from "./utils/EditorTypes";
 import {
     FormAutocompleteField,
     FormFields,
     FormGroup, FormGroupOutline, FormMultiSelect,
     FormTextField,
+    RequiredMark,
     StyledFormFieldLabel,
 } from "./utils/FormFields";
 import EditIcon from "@mui/icons-material/Edit";
@@ -107,8 +108,9 @@ const SummaryForm: React.FC<Props> = (props: Props) => {
         <FormFields>
             <FormGroupOutline showOverlay={props.disableForm}>
                 <FormGroup>
-                    <StyledFormFieldLabel>Name</StyledFormFieldLabel>
+                    <StyledFormFieldLabel>Name<RequiredMark/></StyledFormFieldLabel>
                     <FormTextField
+                        required
                         formKey={SummaryFormKeys.summaryName}
                         fieldFn={(key) => props.formHook.getFormField(key)}
                         disabled={props.disableForm}
@@ -137,7 +139,7 @@ const SummaryForm: React.FC<Props> = (props: Props) => {
             <FormGroupOutline showOverlay={props.disableForm}>
 
                 <FormGroup>
-                    <StyledFormFieldLabel>Unit Type</StyledFormFieldLabel>
+                    <StyledFormFieldLabel>Unit Type<RequiredMark/></StyledFormFieldLabel>
                     <Stack>
                         <Typography variant={'subtitle2'}>Defines the type of unit setup.</Typography>
                         <ul style={{margin: theme.spacing(.5)}}>
@@ -153,11 +155,18 @@ const SummaryForm: React.FC<Props> = (props: Props) => {
                                     resources might be shared among students.
                                 </Typography>
                             </li>
+                            <li>
+                                <Typography variant={'subtitle2'}>
+                                    'CTF' is a solo lab run as a capture-the-flag event. A CTF step is added after
+                                    Servers to set the event name, scoring, and flags.
+                                </Typography>
+                            </li>
                         </ul>
                     </Stack>
 
                     <FormAutocompleteField
-                        options={Object.values(UnitType)}
+                        required
+                        options={EDITOR_UNIT_TYPES}
                         formKey={SummaryFormKeys.summaryUnitType}
                         disabled={props.disableForm}
                         fieldFn={(key) => props.formHook.getFormField(key)}
@@ -256,8 +265,9 @@ const SummaryForm: React.FC<Props> = (props: Props) => {
             <FormGroupOutline showOverlay={props.disableForm}>
 
                 <FormGroup>
-                    <StyledFormFieldLabel>Description</StyledFormFieldLabel>
+                    <StyledFormFieldLabel>Description<RequiredMark/></StyledFormFieldLabel>
                     <FormTextField
+                        required
                         placeholder={'Brief lab description up to 200 characters'}
                         formKey={SummaryFormKeys.summaryDescription}
                         disabled={props.disableForm}

@@ -34,6 +34,7 @@ class DbOperators(Enum):
     NOT_EQUAL = '!='
     EQUAL = '=='
     ARRAY_CONTAINS = 'array_contains'
+    ARRAY_CONTAINS_ANY = 'array_contains_any'
 
 
 class DbCollections(str, Enum):
@@ -68,3 +69,11 @@ class DbCollections(str, Enum):
     WIREGUARD_ENDPOINT_CURSOR = 'wireguard-endpoint-cursor'
     WIREGUARD_KIT = 'wireguard-kit'
     WIREGUARD_LEASE = 'wireguard-lease'
+    CTF = 'agoge-ctf'
+    CTF_BOARD = 'agoge-ctf-board'
+    CTF_DIGEST = 'agoge-ctf-digest'
+    CTF_RATE_LIMIT = 'agoge-ctf-rate-limit'
+    CTF_SUBMISSION = 'agoge-ctf-submission'
+    CTF_LOG = 'agoge-ctf-log'
+    NESTED_OS_CATALOG = 'nested-os-catalog'
+    NESTED_MEDIA = 'nested-media'

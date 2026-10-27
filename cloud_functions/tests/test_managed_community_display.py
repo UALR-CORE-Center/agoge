@@ -133,7 +133,7 @@ def test_managed_proxy_record_and_browser_connections_use_provisioned_addresses(
     proxy.db_mask = Mock()
     proxy.guac = Mock()
     proxy.guac.prepare_guac_connection.return_value = {
-        'workspace_username': 'agoge1', 'workspace_password': 'browser-password'}
+        'ip': '10.20.0.2', 'workspace_username': 'agoge1', 'workspace_password': 'browser-password'}
     proxy.guac.get_guac_startup_script.return_value = 'bundled-guacamole-script'
     proxy._create_network_settings()
 

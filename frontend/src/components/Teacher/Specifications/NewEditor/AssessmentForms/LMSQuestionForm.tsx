@@ -9,6 +9,7 @@ import {
     FormRadioBtns,
     FormRow,
     FormTextField,
+    RequiredMark,
     StyledFormFieldLabel
 } from "../utils/FormFields";
 import {LMSAssessmentQuestionType} from "../../../../../services/Specification/specificationEdit.model";
@@ -34,6 +35,8 @@ const LMSQuestionForm: React.FC<Props> = ({assessmentFormHook, disableForm, qInd
 
     const theme = useTheme()
     const questionAnswers = assessmentFormHook.getLMSQuestionAnswers(qIndex);
+    const isShortAnswer =
+        assessmentFormHook.getFormField(AssessmentFormKeys.assessmentQuestionType, qIndex)!.value === LMSAssessmentQuestionType.shortAnswer;
     return (
         <React.Fragment>
             <FormGroupOutline showOverlay={disableForm}> <FormGroup gap={2}>
@@ -71,8 +74,9 @@ const LMSQuestionForm: React.FC<Props> = ({assessmentFormHook, disableForm, qInd
 
 
             <FormGroupOutline showOverlay={disableForm}> <FormGroup>
-                <StyledFormFieldLabel>Question Text</StyledFormFieldLabel>
+                <StyledFormFieldLabel>Question Text<RequiredMark/></StyledFormFieldLabel>
                 <FormMuliTextField
+                    required
                     placeholder={"Question Text"}
                     rows={3}
                     disabled={disableForm}
@@ -107,8 +111,11 @@ const LMSQuestionForm: React.FC<Props> = ({assessmentFormHook, disableForm, qInd
                                     return (
                                         <FormRow key={aIdx} gap={2}>
                                             <FormGroup width={{xs: '100%', md: '75%'}}>
-                                                <StyledFormFieldLabel>Answer #{aIdx + 1}</StyledFormFieldLabel>
+                                                <StyledFormFieldLabel>
+                                                    Answer #{aIdx + 1}{isShortAnswer && <RequiredMark/>}
+                                                </StyledFormFieldLabel>
                                                 <FormTextField
+                                                    required={isShortAnswer}
                                                     disabled={disableForm}
                                                     placeholder={"Question Answer"}
                                                     onInputChange={(field: AssessmentFormKeys, value) => assessmentFormHook.updateQuestionAnswer(qIndex, aIdx, field, value)}

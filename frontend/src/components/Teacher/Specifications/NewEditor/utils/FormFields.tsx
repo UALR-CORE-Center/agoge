@@ -28,6 +28,8 @@ import {IFormFieldMeta, FormType} from "../../../../../types/Form";
 import {SelectImageTable} from "../ServerForm/SelectImageTable";
 import {SelectMachineTypeTable} from "../ServerForm/SelectMachineTypeTable";
 
+export {RequiredMark} from "./RequiredMark";
+
 interface FormRowProps {
     gap?: number;
     theme?: any;
@@ -146,6 +148,7 @@ export const FormTextField = (props: IFormTextFieldProps) => {
                              helperText={field?.error || props.helpText}
                              disabled={props.disabled}
                              InputProps={{readOnly: props.readOnly, endAdornment: props.endAdornment}}
+                             inputProps={{'aria-required': props.required || undefined}}
                              onChange={(e) => {
                                  onInputChange(formKey, e.target.value);
                              }}
@@ -230,6 +233,7 @@ export const FormMuliTextField = (props: IMultiTextField) => {
                              helperText={formField.error || props.helpText}
                              disabled={props.disabled}
                              InputProps={{readOnly: props.readOnly}}
+                             inputProps={{'aria-required': props.required || undefined}}
                              onChange={(e) => {
                                  props.onInputChange(formKey, e.target.value);
                              }}
@@ -375,6 +379,7 @@ export const FormAutocompleteField: React.FC<IFormAutocompleteProps> = (props: I
                             inputProps: {
                                 ...params.inputProps,
                                 readOnly: props.readOnly,
+                                'aria-required': props.required || undefined,
                             },
                             endAdornment: (
                                 <React.Fragment>

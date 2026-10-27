@@ -1,4 +1,5 @@
 import uuid
+import secrets
 import string
 import random
 from enum import Enum
@@ -50,6 +51,7 @@ class EnvironmentVariables:
             print('Use shared_api_secrets to configure SendGrid, OpenAI, and Shodan key sources.\n'
                   f'Use api_key to replace the Firebase Web API key for {self.project}; it must belong to this child.\n'
                   'Firebase checklist: docs/operations/firebase-authentication.md\n'
+                  'Use ctf_enabled to turn the CTF game master on or off; enabling creates ctf_flag_seed once.\n'
                   'Legacy domain overrides remain editable here for existing deployments.')
             while True:
                 var = str(input(f"Which variable do you want to update? "))
@@ -120,6 +122,9 @@ class EnvironmentVariables:
         return updates
 
     def set_variable(self, var, new_value=None):
+        if var == 'ctf_enabled':
+            self._set_ctf_enabled(new_value)
+            return
         if var == 'shared_api_secrets':
             for secret_name in SHARED_API_SECRET_NAMES:
                 self._set_api_secret(secret_name)
@@ -200,6 +205,45 @@ class EnvironmentVariables:
                 self.db.update(collection_name=DbCollections.ADMIN_INFO, doc_id=ADMIN_INFO_DOCUMENT, data=self.env)
             return True
         return False
+
+    def _set_ctf_enabled(self, new_value=None):
+        current = bool(self.env.get('ctf_enabled', False))
+        if new_value is None:
+            reply = str(input(f'ctf_enabled is {str(current).lower()}. Enable the CTF game master? (y/n) ')).strip().upper()
+            if reply not in ('Y', 'YES', 'N', 'NO'):
+                print('No change made to ctf_enabled.')
+                return
+            new_value = reply in ('Y', 'YES')
+        if isinstance(new_value, str):
+            # bool('false') is True, so strings are parsed explicitly.
+            if new_value.strip().lower() not in ('true', 'false'):
+                raise ValueError('ctf_enabled must be true or false')
+            new_value = new_value.strip().lower() == 'true'
+        enabled = bool(new_value)
+        if enabled:
+            # Seed first so the API can never observe ctf_enabled=true without a seed.
+            self._ensure_ctf_flag_seed()
+        self.env['ctf_enabled'] = enabled
+        self.db.update(
+            collection_name=DbCollections.ADMIN_INFO, doc_id=ADMIN_INFO_DOCUMENT,
+            data={'ctf_enabled': enabled},
+        )
+        print(f'ctf_enabled is now {str(enabled).lower()}.')
+
+    def _ensure_ctf_flag_seed(self):
+        """Create the CTF flag root secret once; never replace an existing one.
+
+        Every flag is derived from this seed, so overwriting it would silently
+        invalidate every planted flag. Disabling CTF leaves the seed in place.
+        """
+        # get_secret is None both when the secret is missing and when it has no
+        # accessible version (e.g. a create that failed before add_secret_version).
+        if self.get_secret('ctf_flag_seed') is not None:
+            print('ctf_flag_seed already exists; keeping it.')
+            return False
+        self.store_secret('ctf_flag_seed', secrets.token_hex(32))
+        print('Created ctf_flag_seed in Secret Manager.')
+        return True
 
     def _set_api_secret(self, secret_name, new_value=None):
         shared = list(shared_api_secret_names(self.env))

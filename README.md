@@ -21,14 +21,19 @@ cybersecurity training infrastructure, including:
 
 ## Quick Start
 
-1. Install the Google Cloud SDK
-2. Clone the repository
+1. Install the Google Cloud SDK and Python 3.12
+2. Clone the repository, create a virtualenv, install the deployment dependencies, and run the setup script
 
 ```bash
 git clone https://github.com/UALR-CORE-Center/agoge.git
 cd agoge
-python setup.py
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
+./venv/bin/python setup.py
 ```
+
+On Windows, use `py -3.12 -m venv venv` and `.\venv\Scripts\pip install -r requirements.txt`, then see
+[Run the setup script](#2--run-the-setup-script) for the PowerShell command.
 
 ## Key Features
 - Cloud-native cybersecurity training environments
@@ -75,7 +80,7 @@ Most deployments use the script to 1) create a fresh customer-specific project, 
 | Tool / File                              | Why you need it                                                                      | Quick install / notes                                                                                               |
 | ---------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
 | **Google Cloud SDK**                     | CLI used by the setup script                                                         | `https://cloud.google.com/sdk/install`                                                                              |
-| **PyCharm** (or another IDE)             | Easiest way to run and debug `setup.py`                                              | `https://www.jetbrains.com/pycharm/`<br>Mark `build_files/`, `cloud_functions/`, and `main_app/` as *Sources Root*. |
+| **PyCharm** (or another IDE)             | Easiest way to run and debug `setup.py`                                              | `https://www.jetbrains.com/pycharm/`<br>Mark `api/`, `build_files/`, and `cloud_functions/` as *Sources Root*. |
 | **`environments.json`** <br>*(optional)* | Lets you deploy **into an existing project** instead of having the script create one | Copy `build_files/install_update/environments.sample.json` → `environments.json`, then add an entry:  \`\`\`json    |
 | {                                        |                                                                                      |                                                                                                                     |
 | "my-agoge-test": {                       |                                                                                      |                                                                                                                     |
@@ -96,16 +101,28 @@ Most deployments use the script to 1) create a fresh customer-specific project, 
 
 ### 2  Run the setup script
 
+Run from the repository root:
+
 ```bash
-python setup.py
-````
+./venv/bin/python setup.py
+```
+
+No `PYTHONPATH` is needed: `setup.py` adds the repository root, `build_files/` and
+`cloud_functions/` to `sys.path` itself. Use the project virtualenv's interpreter;
+the system Python lacks the dependencies. On Windows PowerShell:
+
+```powershell
+.\venv\Scripts\python setup.py
+```
+
+Run with `--help` to list the command-line flags.
 
 If setup reports missing/expired credentials, appears to wait for an invisible
 authentication prompt, or you changed Google accounts, run a complete local
 credential refresh first:
 
 ```bash
-python setup.py --reauthenticate
+PYTHONPATH=.:build_files:cloud_functions ./venv/bin/python setup.py --reauthenticate
 ```
 
 This opens the normal browser sign-in and synchronizes both credential stores
@@ -121,7 +138,7 @@ forces a fresh browser login when a stored login needs renewal.
 
 If an older checkout stops with `Authentication completed, but credential
 validation failed: Application Default Credentials are missing or expired`,
-pull the updated setup script and run `python setup.py --reauthenticate`.
+pull the updated setup script and run `setup.py --reauthenticate` (see [Run the setup script](#2--run-the-setup-script)).
 There is no application redeployment required for this setup correction. The
 old message also covered network, TLS, and credential-file errors, so it does
 not establish that the credentials actually expired.
@@ -141,7 +158,7 @@ gcloud auth application-default print-access-token > $null
 The last command discards the access token while leaving errors visible. A zero
 exit code (`$LASTEXITCODE`) means ADC can obtain a token. The quota-project step
 requires `serviceusage.services.use` on the shared project. After successful
-validation, rerun `python setup.py`.
+validation, rerun `setup.py`.
 
 If credentials work in PowerShell but fail in PyCharm, compare the IDE run
 configuration's `GOOGLE_APPLICATION_CREDENTIALS` and `CLOUDSDK_CONFIG` settings

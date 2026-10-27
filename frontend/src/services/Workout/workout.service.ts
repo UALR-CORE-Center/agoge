@@ -17,7 +17,6 @@ import {
     WorkoutState, WorkoutAssessment
 } from "./workout.model";
 
-
 const get = async (buildId: string) => {
     const endpoint = formatString(URL_WORKOUT_API_ITEM, {"ITEM_ID": buildId});
     return await apiService.get<Workout>(endpoint, null, false, transformToWorkout);
@@ -45,13 +44,9 @@ export const post = async (data: { [k: string]: FormDataEntryValue }) => {
         URL_WORKOUT_API_BASE,
         postData,
         false,
+        null,
         transformToWorkoutId
     );
-}
-
-const post_action = async (buildId: string, action:string) => {
-    const endpoint = formatString(URL_WORKOUT_API_ITEM, {"ITEM_ID": buildId});
-    return await apiService.post<Workout>(endpoint, action, true, transformToWorkout);
 }
 
 export const put_action = async (buildId: string, action: string, duration?: number, extIp?: string) => {
@@ -87,7 +82,6 @@ export const workoutService = {
     get_full,
     list,
     post,
-    post_action,
     put_action,
     configure,
     answer_question

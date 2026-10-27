@@ -1,3 +1,5 @@
+import json
+
 from cloud_fn_utilities.course_objects.compute.snapshot_manager import SnapshotManager
 from cloud_fn_utilities.course_objects.vulnerabilities import Vulnerabilities
 from cloud_fn_utilities.lms.lms_synchronizer_factory import LMSSynchronizerFactory
@@ -76,6 +78,7 @@ class ControlHandler:
             str(PubSub.Actions.CHECK_IN.value): self._check_in,
             str(PubSub.Actions.CHECK_OUT.value): self._check_out,
             str(PubSub.Actions.CANCEL.value): self._cancel_image_changes,
+            str(PubSub.Actions.NESTED_FINALIZE.value): self._nested_finalize,
         }
 
     def route(self) -> None:
@@ -277,6 +280,16 @@ class ControlHandler:
         image_manager.load(server_name=self.image_name)
         image_manager.check_in()
 
+    def _nested_finalize(self) -> None:
+        image_manager = ComputeManagerFactory.create_manager_object(
+            manager_type=PubSub.CourseObjects.TEMPLATE_SERVER,
+            shared_edit_authorized=self.shared_edit_authorized,
+            env_dict=self.env_dict,
+            user=self.user
+        )
+        image_manager.load(server_name=self.image_name)
+        image_manager.finalize_nested()
+
     def _check_out(self) -> None:
         image_manager = ComputeManagerFactory.create_manager_object(
             manager_type=PubSub.CourseObjects.TEMPLATE_SERVER,
@@ -285,7 +298,23 @@ class ControlHandler:
             user=self.user
         )
         image_manager.load(server_name=self.image_name)
-        image_manager.check_out()
+        image_manager.check_out(product_keys=self._product_keys())
+
+    def _product_keys(self) -> dict:
+        """Guest -> Windows product key from a nested create's CHECK_OUT; the keys are never persisted."""
+        raw = self.event_attributes.get(self.event_attr_keys.PRODUCT_KEYS)
+        if not raw:
+            return {}
+        try:
+            keys = json.loads(raw)
+        except ValueError:
+            keys = None
+        if not isinstance(keys, dict):
+            # Never log the raw value: it holds the keys.
+            self.logger.error(f"{self.class_name}:{self.image_name} - Ignoring malformed product_keys attribute",
+                              image_name=self.image_name)
+            return {}
+        return {str(guest): str(key) for guest, key in keys.items()}
 
     def _snapshot(self) -> None:
         if self.course_object == str(PubSub.CourseObjects.TEMPLATE_SERVER.value):

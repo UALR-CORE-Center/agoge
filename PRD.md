@@ -2,6 +2,7 @@
 
 > **Created:** 2026-10-02
 > **Revised:** 2026-10-16 — audit fixes: metadata-safe planting, arm aggregation, NPCs and rotation moved to Phase 2, gates re-verified
+> **Revised:** 2026-10-17 — Group V: nested image builder (create nested lab hosts from the Create Image page)
 > **Author:** liquidswrds
 > **Status:** Draft
 > **Target branch:** `release/2027-spring` (the quality gates below were run there; it does not contain `main`'s `7d0a5a8`)
@@ -67,6 +68,10 @@ topic for the Cloud Function to execute.
   `cross_submission` on the game master's dashboard within the same request.
 - **Preserve the student experience.** The student workout page keeps its
   existing layout, route, and auth model, gaining exactly three sections.
+- **Build nested lab hosts** (Group V). An instructor creates, from the Create
+  Image page, one image holding a libvirt parent and up to eight guests (Kali,
+  Linux, Windows XP through Windows 11 / Server 2025, appliances) on networks they
+  define, and selects it as a server in any lab or CTF template.
 
 ## Non-Goals
 
@@ -88,7 +93,8 @@ do not add configuration hooks for them.
 - **No attack/defense format.** No SLA checks, no round ticks, no flag rotation
   on a timer, no stealing flags from another team's hosts, no per-round scoring.
 - **No new `BuildConstants.BuildType` member and no new build pipeline.** A CTF
-  rides on an existing `UnitModel`. Do not modify `BuildHandler`, `SoloWorkout`,
+  rides on an existing solo `UnitModel`, which the event creates from a catalog
+  template (Group L). Do not modify `BuildHandler`, `SoloWorkout`,
   `CommunityWorkout`, `UnitStates`, `WorkoutStates`, or `ServerStates`.
 - **No per-challenge containers.** Challenges live on the VMs the unit already
   builds. No Docker, no Kubernetes, no Cloud Run challenge instances.
@@ -97,8 +103,9 @@ do not add configuration hooks for them.
 - **No writeup submission, no report grading, no rubric generation for CTF.**
   `RubricModel` and the LLM rubric generator are untouched.
 - **No team self-registration, no new identity provider, and no change to
-  `verify_token` or `ProtectedRoute`.** Teams are the workouts the unit already
-  created; membership is the existing join code.
+  `verify_token` or `ProtectedRoute`.** The game master defines teams and their
+  member emails before the event (Group L); a participant joins with the existing
+  join code plus a rostered email, and teammates share one workout.
 - **No WebSocket or server-sent-event push in Phase 1.** Every panel polls
   through the existing `usePolling` hook.
 - **No cost or budget UI.** `BudgetManager` and `budget_exceeded` already own
@@ -109,6 +116,26 @@ do not add configuration hooks for them.
 - **No refactor of existing routers' error handling.** The shared error helper
   is used by the CTF routers only.
 - **No modification of `api/tests/`** (the live, billable integration suite).
+- **No network delivery to nested guests.** No SSH, WinRM, or HTTP endpoint on
+  the parent that guests pull from. Guest networks are instructor-defined and
+  student-modifiable; only the hypervisor channel is relied on.
+- **No nested hypervisor other than libvirt/QEMU-KVM on a Linux parent** (Group N).
+  Hyper-V, VirtualBox, VMware, GNS3, and EVE-NG are Phase 2.
+- **No automatic guest snapshots in the relay.** The relay never creates
+  `agoge-pristine`; it is made during image prep, by the instructor or by Group V's
+  finalize step.
+- **No Windows media redistribution** (Group V). Agoge downloads Windows only
+  from Microsoft-hosted evaluation URLs; everything else is uploaded by the
+  instructor, who supplies the license. No bundled ISOs, no key generation, no
+  activation bypass beyond Microsoft's documented `slmgr /rearm`.
+- **No unattended install of Windows XP, Server 2003, or older** (Group V). They
+  build as `manual_iso` or from an uploaded disk image; `winnt.sif` automation is Phase 2.
+- **No guests spanning several parents.** One nested host is one VM; multi-VM
+  labs keep using ordinary spec servers and networks.
+- **No Guacamole for image servers.** Instructors reach guests during the build
+  through SSH tunnels shown in the Connect dialog; Guacamole stays a lab feature.
+- **No automatic rebuild from a saved nested spec.** Editing a finalized host is
+  check-out, customize, check-in; regenerating from the spec is Phase 2.
 
 ---
 
@@ -116,10 +143,10 @@ do not add configuration hooks for them.
 
 | ID | Criterion | Measurement | Target |
 |----|-----------|-------------|--------|
-| SC-1 | Creates a CTF event from a unit id | `POST /ctf/` with a valid `unit_id` returns 200 and an `AgogeResponse[AgogeIDResponse]` whose `build_id` matches `^[a-z]{10}$` | 100% of valid requests |
-| SC-2 | Rejects a CTF event on a unit with no `ctf` spec block | `POST /ctf/` on a unit whose `ctf` is null returns 400 with `{"detail": "..."}` | 100% of such requests |
+| SC-1 | Creates a CTF event from a catalog template | `POST /ctf/` with a valid `spec_id` and future `expires` returns 200 and an `AgogeResponse[AgogeIDResponse]` whose `build_id` matches `^[a-z]{10}$`; the event is DRAFT with no boards and its own solo unit | 100% of valid requests |
+| SC-2 | Rejects a CTF event from a template with no `ctf` spec block | `POST /ctf/` on a template whose `ctf` is null returns 400 with `{"detail": "..."}` | 100% of such requests |
 | SC-3 | Derives a distinct flag value per workout | For two workout ids in one event, `derive_flag_value(seed, wid, fid, 1)` returns different strings for every flag id | 0 collisions across 1000 generated pairs in the unit suite |
-| SC-4 | Never stores a flag value in Firestore | Unit tests capture every document written by `CtfEvent.create`, `FlagPlanter`, and `CtfScoring`; none contains a string matching `^agoge\{` | 0 occurrences |
+| SC-4 | Never stores a flag value in Firestore | Unit tests capture every document written by `CtfSetup` (create, add_team, update_spec), `FlagPlanter`, and `CtfScoring`; none contains a string matching `^agoge\{` | 0 occurrences |
 | SC-5 | Plants every flag on arm | After the arm worker finishes a board whose hosts confirm, every `CtfFlagStateModel` on that board has `plant_status == "planted"` and `planted_at` set (mocked compute API in `test_flag_planter.py`) | 100% of flags on confirming hosts |
 | SC-6 | Clears the plant payload after every attempt | `FlagPlanter` calls `set_metadata` removing `agoge-ctf-plant` after success, after an error result, and after a confirmation timeout (three unit tests) | 3 of 3 paths |
 | SC-7 | Re-plants one server without deleting the instance | `CTF_PLANT` for one server calls `set_metadata` and `reset`, and never calls `delete` or `nuke` (mocked) | 100% of replant calls |
@@ -139,6 +166,23 @@ do not add configuration hooks for them.
 | SC-21 | Leaves the student workout route unchanged | The `URL_STUDENT_WORKOUT` line in `frontend/src/router/urls.ts` and the `StudentWorkout` `<Route>` in `AppRouter.tsx` are unchanged by the CTF work | 0 diff on those lines |
 | SC-22 | Passes every quality gate | The commands in **Quality Gates** all exit 0 | 0 failures |
 | SC-23 | Covers new Python modules with tests | The coverage commands in **Quality Gates** | ≥ 85% line coverage |
+| SC-24 | Blocks nested guests from the parent's metadata server | Every Linux payload and `LINUX_LOADER` contain the FORWARD reject for `169.254.169.254` (unit tests); manual: from a NAT'd guest on a live nested host, `curl -m 5 -H 'Metadata-Flavor: Google' http://169.254.169.254/` fails after the parent boots | 100% of payloads; 0 successful guest requests |
+| SC-25 | Never puts a guest flag value in a process argument list | Unit tests: in every nested payload, no `virsh` invocation has arguments and no command line outside a heredoc or `printf` builtin contains a derived value | 0 occurrences |
+| SC-26 | Replants one guest without resetting the parent | A guest-scoped plant or host reset calls compute `reset`, `stop`, `start`, and `nuke` 0 times (mocked), whether or not the watcher acks | 0 calls |
+| SC-27 | Reports guest results per guest | With mocked guest attributes where `plant-result-a` is `ok` and `plant-result-b` is `error`, guest a's flags end `planted` and guest b's `failed` with b's message | 100% |
+| SC-28 | Completes a guest replant inside the deadline | Manual: wall-clock from the Hosts-panel guest replant to `planted` on a live nested host with a running Linux guest | ≤ 90 seconds |
+| SC-29 | Creates a nested image server from the wizard | `POST /compute/images/nested/` with a valid body returns 200; `image/<name>` holds `nested` with derived `exposures`/`console_ports`, `nested_build.phase == "queued"`, no product key; exactly one CONTROL / CHECK_OUT / TEMPLATE_SERVER message is published (mocked) | 100% of valid requests |
+| SC-30 | Rejects invalid nested specs | One test per row of the Nested Image Builder validation table returns 400 naming the network, guest, or field | 100% of rows |
+| SC-31 | Gives nested template and lab servers nested virtualization | Mocked `InstanceResource.new` receives `enable_nested_virtualization` and an Intel `min_cpu_platform` for nested template servers, nested-image lab servers, and `ip_aliases` lab servers | 100% |
+| SC-32 | Licenses every nested image for VMX | Mocked `ImagesClient.insert` carries `ENABLE_VMX_LICENSE` on every nested check-in | 100% of nested check-ins |
+| SC-33 | Keeps guest secrets out of the manifest, the disk, and argument lists | Unit tests: no admin password, VNC password, or product key in `agoge-nested-manifest` or in any rendered command line; secrets are read only from `/run/agoge-nested/secrets.json` | 0 occurrences |
+| SC-34 | Removes the secrets item once a build ends | `NestedBuildMonitor` removes `agoge-nested-secrets` exactly once when the phase becomes `ready` or `failed` (mocked) | 100% of terminal builds |
+| SC-35 | Builds a three-guest host unattended | Manual: Kali (cloud image) + Ubuntu 24.04 + Windows Server 2022 Evaluation on two networks, `build_machine_type` `n2-standard-8`, from Submit to `ready` with no console interaction | ≤ 60 minutes |
+| SC-36 | Finalizes inside the function budget | Manual: Check In on a ready host reaches `finalized` and CHECKED_IN with `agoge-pristine` on every guest; the `NESTED_FINALIZE` invocation ends before 540 s | ≤ 360 s finalize |
+| SC-37 | Reaches every guest from a lab | Manual: a lab built from the finalized image opens a Guacamole session to each exposed guest (RDP/SSH) and to one console (VNC) | 100% of guests |
+| SC-38 | Isolates guests from the parent | Manual, from a guest on a NAT network of a lab server: the SC-24 metadata `curl` fails, and TCP 22 and 5901 on the parent's bridge address are refused or time out | 0 successful connections |
+| SC-39 | Keeps overnight maintenance from killing builds | `DailyMaintenance` publishes no STOP for a template server whose `nested_build.phase` is `provisioning` or `building` (mocked) | 0 such stops |
+| SC-40 | Never fetches Windows media from a non-Microsoft host | Catalog test: every Windows entry with a `media_url` has a Microsoft host; every Windows entry older than Windows 10 / Server 2016 has `requires_upload` | 100% of entries |
 
 ---
 
@@ -210,7 +254,9 @@ Three properties of this shape are contracts, not style:
 - **Nothing in Cloud Run or the Cloud Function opens a session to a range host,
   and no range host calls the API.** There is no SSH key, no WinRM password, no
   exec service, and no credential on the VM. Every write to a VM is a metadata
-  write followed by a boot; every answer from a VM is a guest attribute.
+  write followed by a boot (or, on a nested host, picked up by the plant
+  watcher); every answer from a VM is a guest attribute. A nested guest is
+  reached only by its parent, over the hypervisor (Nested Guest Contract).
 - **Every flag value is derived per workout and never stored.** Firestore holds
   the SHA-256 digest; the value is re-derived from the Secret Manager seed at
   plant time and by the admin reveal route only.
@@ -329,6 +375,50 @@ frontend/src/
 
 docs/guides/
   game-master-guide.md         NEW
+  nested-lab-hosts.md          NEW (V24)
+
+# Group V — nested image builder
+common/
+  constants/nested.py          NEW — contract constants
+  data/nested_os_catalog.json  NEW — seeded guest OS catalog
+  models/agoge.py              (+ Nested* models; AgogeImageModel.nested/nested_build; HumanInteractionModel targets)
+  utilities/nested_manifest.py NEW — manifest, secrets, autounattend rendering
+  utilities/nested_build_monitor.py  NEW — NestedBuildMonitor (used by the API and the Cloud Function, so it lives in common/)
+  utilities/gcp/compute/compute_image.py         (+ licenses)
+  utilities/gcp/compute/compute_machine_type.py  (+ nested machine types)
+
+api/
+  core/compute/nested/
+    validator.py               NEW — NestedHostValidator
+    nested_image.py            NEW — create, catalog, media
+  routers/compute_image.py     (+ /nested/, /nested/catalog/, /nested/media/, /{name}/nested-build/)
+
+cloud_functions/
+  cloud_fn_utilities/server_specific/nested/
+    builder.sh                 NEW
+    runtime.sh                 NEW
+    finalize_watcher.sh        NEW
+    autounattend.xml.tmpl      NEW
+  cloud_fn_utilities/course_objects/compute/
+    base_compute_manager.py    (nested virtualization, min CPU fix)
+    image_template_manager.py  (nested provisioning, finalize_nested, license, metadata merge)
+  handlers/control_handler.py  (+ NESTED_FINALIZE branch)
+  cloud_fn_utilities/periodic_maintenance/   (build monitor task; daily-stop exemption)
+
+build_files/cloud_deployment/operations/images_and_specs/
+  nested_os_catalog_sync.py    NEW — setup operation
+  nested_media_bucket.py       NEW — setup operation
+
+frontend/src/
+  components/Teacher/ServerManagement/Forms/NestedImage/
+    NestedImageWizard.tsx      NEW — stepper shell
+    HostStep.tsx, NetworksStep.tsx, GuestsStep.tsx, AccessStep.tsx, ReviewStep.tsx   NEW
+    OsPickerDialog.tsx, MediaUpload.tsx, TopologyPreview.tsx                         NEW
+  components/Teacher/ServerManagement/Forms/ServerCreator/ServerCreatorForm.tsx      (+ type toggle; display fix)
+  components/Teacher/ServerManagement/ImageListTable.tsx, ImageDetailsDialog         (+ build phase, guests)
+  components/Teacher/Specifications/NewEditor/ServerForm/NestedGuestsPanel.tsx       NEW
+  services/Server/nested.service.ts, nested.model.ts                                 NEW
+  utilities/transformers/nested.transform.ts                                         NEW
 ```
 
 ### Data Models
@@ -376,6 +466,19 @@ class CtfFlagSpecModel(BaseModel):
     unlocks_after: Optional[List[str]] = Field(default=None, description="Flag ids that must be solved before this one is listed to the team")
     file_mode: Optional[str] = Field(default=None, pattern=r'^0[0-7]{3}$', description="Linux file placements only")
     file_owner: Optional[str] = Field(default=None, pattern=r'^[a-z_][a-z0-9_-]*:[a-z_][a-z0-9_-]*$', description="Linux file placements only")
+    guest: Optional[str] = Field(default=None, pattern=r'^[a-z0-9][a-z0-9-]{1,31}$', description="CtfNestedGuestSpecModel.name on `server`; None = the server itself (Group N)")
+
+
+NestedGuestDriver = Literal['qemu-agent', 'offline']
+
+
+class CtfNestedGuestSpecModel(BaseModel):
+    """A VM running inside a lab server under libvirt/QEMU-KVM (Group N, Nested Guest Contract)."""
+    name: str = Field(..., pattern=r'^[a-z0-9][a-z0-9-]{1,31}$', description="Stable slug, unique per server; used by flags and in result keys")
+    server: str = Field(..., description="ServerModel.name of the Linux parent that runs this guest")
+    domain: str = Field(..., pattern=r'^[A-Za-z0-9_.-]{1,64}$', description="libvirt domain name on the parent")
+    operating_system: OperatingSystem = Field(...)
+    driver: NestedGuestDriver = Field(default='qemu-agent', description="How the parent writes into the guest")
 
 
 class CtfScoringSpecModel(BaseModel):
@@ -391,6 +494,7 @@ class CtfSpecModel(BaseModel):
     rules_url: Optional[str] = Field(default=None, description="Link to rules of engagement shown on the student banner")
     flags: List[CtfFlagSpecModel] = Field(..., min_length=1, max_length=200)
     scoring: CtfScoringSpecModel = Field(default_factory=CtfScoringSpecModel)
+    nested_guests: List[CtfNestedGuestSpecModel] = Field(default_factory=list, max_length=32, description="Group N; empty for labs without nested VMs")
 
 # CatalogModel, CatalogEditModel, UnitModel each gain:
 #     ctf: Optional[CtfSpecModel] = Field(default=None)
@@ -450,6 +554,7 @@ class CtfBoardModel(BaseModel):
     score: int = Field(default=0, description="Solved points + decoy points − hint costs + manual adjustments")
     solve_count: int = Field(default=0)
     decoy_count: int = Field(default=0)
+    decoy_points: int = Field(default=0, description="Sum of decoy points in `score`; student views subtract it unless reveal_decoy_penalty")
     last_solve_at: Optional[float] = Field(default=None, description="Ranking tiebreaker")
     arm_status: ArmStatus = Field(default='pending')
     arm_error: Optional[str] = Field(default=None)
@@ -518,7 +623,9 @@ class CtfLogModel(BaseModel):
 # ---------------------------------------------------------------------------
 
 class CtfCreateRequest(BaseModel):
-    unit_id: str = Field(..., pattern=r'^[a-z]{10}$')
+    spec_id: str = Field(..., min_length=1, max_length=200)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    expires: float = Field(..., gt=0)
 
 class CtfUpdateRequest(BaseModel):
     """Only fields present in the body are applied (model_fields_set);
@@ -817,7 +924,9 @@ file. The loader never prints the payload.
   the serial console and Cloud Logging).
 - On Linux, first installs (best effort, idempotent) an iptables rule rejecting
   traffic to `169.254.169.254` from non-root UIDs, to close the window before
-  the key is removed. Failure to install it is not a plant failure.
+  the key is removed, and (N1) a FORWARD rule rejecting forwarded traffic to it,
+  so a nested guest NAT'd through the host cannot read the host's metadata.
+  Failure to install either is not a plant failure.
 - Finishes by writing `ok:<nonce>` or `error:<nonce>:<message>` to the guest
   attribute.
 
@@ -874,7 +983,7 @@ Event-scoped routes also require the caller's email in the event's
 | GET | `/ctf/{ctf_id}/flags/{flag_id}/reveal/?workout_id=` | `CtfFlagRevealResponse`; writes `FLAG_REVEAL` | `admin_required` | admin |
 | GET | `/ctf/{ctf_id}/boards/` | `{'items': [CtfBoardStatus]}` | `teacher_required` | instructor |
 | GET | `/ctf/{ctf_id}/hosts/` | `{'items': [CtfHostRow]}` | `teacher_required` | instructor |
-| PUT | `/ctf/{ctf_id}/boards/{workout_id}/hosts/{server}/reset/` | `CtfHostResetRequest`; one `CTF_HOST_RESET` | `teacher_required` | instructor |
+| PUT | `/ctf/{ctf_id}/boards/{workout_id}/hosts/{server}/reset/` | `CtfHostResetRequest` (optional `guest`, Group N); one `CTF_HOST_RESET` | `teacher_required` | instructor |
 | PUT | `/ctf/{ctf_id}/boards/{workout_id}/score/` | `CtfScoreAdjustRequest`; writes `SCORE_ADJUST` | `teacher_required` | instructor |
 | GET | `/ctf/{ctf_id}/scoreboard/` | `{'items': [CtfScoreboardRow]}`, ignores the freeze | `teacher_required` | instructor |
 | GET | `/ctf/{ctf_id}/submissions/?verdict=` | `{'items': [CtfSubmissionModel]}`, newest first, max 500 | `teacher_required` | instructor |
@@ -914,7 +1023,7 @@ single objects use `data = <object>`.
 4. No document, or a different `ctf_id` → `incorrect`.
 5. Different `workout_id` in this event → `cross_submission` with `matched_workout_id`.
 6. Same board → in one transaction on the board: already solved → `duplicate`;
-   decoy → add its points, `decoy_count += 1`, `decoy`; else set `solved`,
+   decoy → add its points to `score` and `decoy_points`, `decoy_count += 1`, `decoy`; else set `solved`,
    `solved_at`, add points, `solve_count += 1`, `last_solve_at`, `correct`.
    Also increment `attempts` on the parsed flag, if it exists.
 7. Append one `CtfSubmissionModel`.
@@ -930,6 +1039,417 @@ single objects use `data = <object>`.
 `rebuild` is refused with 400 for a server with a `wireguard_endpoint_id`,
 because `LabServerManager.nuke()` leaves those servers deleted.
 
+### Nested Guest Contract
+
+Instructors build some lab servers as hypervisors: a Linux parent with nested
+virtualization (enabled today by `ip_aliases`, see `base_compute_manager.py`)
+running child VMs under libvirt/QEMU-KVM. Children may be Linux or Windows and
+may sit on subnets and routes the parent has no address on. A child is not a GCE
+instance: it has no metadata server, no guest attributes, and no
+`{workout_id}-{server}` instance name. Group N delivers its flags by **relaying
+through the parent over the hypervisor**, never over the network.
+
+**Spec shape.** A guest is declared once in `ctf.nested_guests` and referenced by
+a flag's `guest`. The flag's `server` stays the parent, so instance naming,
+`mark_stale` on a parent rebuild, and board isolation (SC-9) are unchanged. A
+flag's `operating_system` is the guest's, not the parent's.
+
+```json
+"nested_guests": [
+  {"name": "win-dc", "server": "hv-host", "domain": "win2019-dc", "operating_system": "windows", "driver": "qemu-agent"},
+  {"name": "web", "server": "hv-host", "domain": "ubuntu-web", "operating_system": "linux", "driver": "offline"}
+],
+"flags": [
+  {"id": "dc-admin", "server": "hv-host", "guest": "win-dc", "slot": 3, "location_type": "registry",
+   "path": "HKLM\\SOFTWARE\\Corp:Secret", "operating_system": "windows", "points": 300}
+]
+```
+
+**Validation** (in `object_validators/ctf.py`, both save paths):
+
+| Rule | Rejection message names |
+|------|-------------------------|
+| `nested_guests[].server` names a spec server whose `os` is Linux and that has at least one NIC with `ip_aliases` | the guest name |
+| `(server, name)` is unique; at most 8 guests per server | the guest name |
+| `flag.guest` names a guest declared on `flag.server` | the flag id |
+| `flag.operating_system` equals the guest's `operating_system` | the flag id |
+| The same-OS rule and the `(server, slot)` uniqueness rule apply per `(server, guest)`, with `guest = None` for the parent itself | the flag id |
+| `driver: offline` with `windows`: only `file`, `registry`, `env`; `windows_access` and `hidden` must be unset; a registry path must start `HKLM\SOFTWARE\` or `HKLM\SYSTEM\` | the flag id |
+
+**Contract names** (added to `common/utilities/ctf_plant_contract.py`):
+
+| Name | Value |
+|------|-------|
+| Per-guest result key | `agoge-ctf/plant-result-<guest name>`; same `ok:<nonce>` / `error:<nonce>:<message>` grammar |
+| Ack key | `agoge-ctf/plant-ack` = `<nonce>`, written by every payload as its first action |
+| Watcher unit | `agoge-ctf-watcher.service`, script `/usr/local/sbin/agoge-ctf-watcher` |
+| Run lock / dedupe | `/run/agoge-ctf/plant.lock` (`flock`), `/run/agoge-ctf/last` = SHA-256 of the last payload run; directory mode `0700` |
+| Pristine snapshot | libvirt snapshot named `agoge-pristine` on each guest domain (made by the instructor) |
+| Timeouts | `WATCHER_ACK_SECONDS = 30`, `NESTED_CONFIRM_TIMEOUT_SECONDS = 420`, relay budget `RELAY_BUDGET_SECONDS = 360` |
+
+The Cloud Function timeout is 540 s (`agoge_app.py`), so
+`WATCHER_ACK_SECONDS + NESTED_CONFIRM_TIMEOUT_SECONDS` plus API overhead must stay
+below it. These constants are chosen to satisfy that; do not raise them alone.
+
+**Plant watcher.** Installed at build on every Linux lab server with
+`ip_aliases`, by an installer `LabServerManager` merges into `startup-script`
+(idempotent at every boot). It long-polls
+`.../instance/attributes/agoge-ctf-plant?wait_for_change=true` using the response
+`ETag`, and on a non-empty value whose SHA-256 differs from `/run/agoge-ctf/last`
+runs it under the run lock, exactly as the loader would. The loader stub takes the
+same lock and writes the same `last` file, so a payload is never run twice on one
+boot. With the watcher, a nested host is planted **without a reset**, so its
+guests keep running.
+
+**Parent payload** for a nested host is the existing Linux payload plus one
+relay section per targeted guest:
+
+1. The prologue writes the ack key, then installs the metadata blocks (see N1).
+2. The parent's own flags are planted as today.
+3. Guest sections run **in parallel** (background jobs + `wait`), each bounded by
+   `RELAY_BUDGET_SECONDS`. Each writes its own per-guest result key.
+4. The epilogue writes `plant-result` last. It reports only the parent's own
+   flags, and its presence means every guest section has finished.
+
+**Driver `qemu-agent`** (guest needs `qemu-guest-agent` with `guest-exec` and
+`guest-exec-status` permitted, and the `org.qemu.guest_agent.0` channel):
+
+1. Domain not running (`virsh domstate`) → `error:<nonce>:<guest>: guest is not running`. The relay never starts a guest.
+2. `guest-ping` every 5 s until it answers or the budget ends → `<guest>: guest agent did not respond`.
+3. `guest-exec` with `capture-output: true` and the guest payload as base64
+   `input-data` (stdin). Linux: `/bin/bash -s`. Windows: `powershell.exe` with a
+   fixed bootstrap that reads stdin to the end, writes it to
+   `%ProgramData%\agoge-ctf\plant-<guid>.ps1` under the SYSTEM-only ACL the
+   Windows loader already uses, runs it with `-File`, and deletes it.
+4. Poll `guest-exec-status` until `exited`. The decoded `out-data` is the result line.
+
+**Driver `offline`** (parent needs `libguestfs-tools`):
+
+1. `virsh shutdown`, wait up to 120 s for `shut off` → `<guest>: guest did not shut down`. The relay never `virsh destroy`s a guest.
+2. Write each placement with libguestfs opened by domain name. Linux: `virt-customize --upload`, `--chmod`, and `--run-command 'chown …'`. Windows: file upload via `guestfish` with case-insensitive path resolution, and registry and env through `virt-win-reg --merge`, with `HKLM\SYSTEM\CurrentControlSet` mapped to the hive's current `ControlSet00N`.
+3. Read every value back and compare SHA-256; a mismatch is `<flag id>: verification failed`.
+4. `virsh start` in a `trap`, whatever the outcome.
+
+**Guest payload** (`FlagPlanter.build_guest_payload`) is the existing bash or
+PowerShell body for that guest's flags. Its epilogue does not touch guest
+attributes. It prints exactly one line, the result, to the stdout it saved before
+the prologue's redirect, and nothing else.
+
+**No flag value in any process argument list, on the parent or the guest.**
+`virsh` is run in shell mode with its commands on stdin (`printf … | virsh`),
+never with the agent JSON as an argument. Guest payloads travel as `guest-exec`
+`input-data`. Offline values go through root-only temp files under
+`/run/agoge-ctf/`, removed in a `trap`.
+
+**Nested plant procedure.** These changes apply to `FlagPlanter.plant` for any
+server that has `nested_guests`. Servers without them are unchanged.
+
+| Scope | After `set_metadata` | No ack within `WATCHER_ACK_SECONDS` |
+|-------|----------------------|-------------------------------------|
+| Whole server (arm, Flags-panel replant) | Wait for `plant-ack` = nonce; no reset | `reset()` the parent, as today |
+| One guest (host reset on a guest) | Wait for `plant-ack` = nonce; no reset | Every targeted flag → `failed`, `"Plant watcher did not respond"`; **never** reset |
+
+Each flag then takes its status from its own key: `plant-result-<guest>` for a
+guest flag and `plant-result` for a parent flag. The server's confirmation window
+is `NESTED_CONFIRM_TIMEOUT_SECONDS`. A payload longer than 256 KB (the metadata
+value limit) → `BadRequest`, `"Plant payload exceeds the metadata size limit"`.
+
+**Host reset modes on a guest** (`CtfHostResetRequest.guest` set). Each runs as a
+one-guest payload through the watcher and touches no GCE instance:
+
+| Mode | Guest action | Flags afterwards |
+|------|--------------|------------------|
+| `replant` | Plant that guest's flags only | Re-planted, same values, confirmed |
+| `restart` | `virsh reboot <domain>` | Unchanged |
+| `rebuild` | `virsh snapshot-revert <domain> agoge-pristine --running`, then plant that guest's flags in the same payload | Re-planted; missing snapshot → `failed`, `"<guest>: no agoge-pristine snapshot"` |
+
+A `rebuild` of the **parent** recreates every guest's disk from the image, so the
+existing `mark_stale` already covers guest flags.
+
+### Nested Image Builder Contract
+
+Group V lets an instructor build a **nested lab host** from the Create Image
+page: one Debian parent VM running libvirt/QEMU-KVM, with up to eight guest VMs
+(Kali, Linux distributions, Windows XP through Windows 11 / Server 2025, network
+appliances) on networks the instructor defines inside the parent. The result
+is an ordinary Agoge image (`image-<name>` plus an `image/<name>` document), so
+it appears in the server picker of the lab spec editor and of CTF templates. One
+VM then carries a whole lab.
+
+A reference host built by hand on 2026-10-17 exists in the development project:
+`image-nested-hv-debian12` (Debian 12 parent, `linux-guest` Debian 12 at
+192.168.122.10, `windows-guest` Windows Server 2022 Evaluation at
+192.168.122.20, both with qemu-guest-agent and an `agoge-pristine` snapshot,
+`enable-vmx` license). Group V automates what was done to build it; see Working
+Notes 14–23 for what that build taught.
+
+**Lifecycle.** It reuses the existing image-server check-out/check-in cycle
+and adds one build phase and one finalize handshake:
+
+| Step | Who | What happens |
+|------|-----|--------------|
+| Create | Instructor, wizard | `POST /compute/images/nested/` validates the spec, writes `image/<name>` CHECKED_OUT with `nested` and `nested_build.phase = "queued"`, publishes the existing CONTROL / CHECK_OUT / TEMPLATE_SERVER message |
+| Provision | Cloud Function | `ImageTemplateManager.check_out` builds the template server from the Debian family image on `build_machine_type`, with nested virtualization, `enable-guest-attributes`, the builder `startup-script`, `agoge-nested-manifest`, and `agoge-nested-secrets` |
+| Build | Builder on the parent | Installs libvirt, creates networks, downloads and verifies media, installs every guest, runs post-install scripts, reports progress in guest attributes, then reports `ready` (or `failed`). Leaves guests running |
+| Monitor | API on poll, `MaintenanceHandler` every 15 min | `NestedBuildMonitor` copies guest attributes into `nested_build`, removes `agoge-nested-secrets` once the phase is `ready` or `failed`, and fails a stalled or overlong build |
+| Customize | Instructor | Works in the guests through the consoles (SSH tunnel from the Connect dialog) to install lab software |
+| Finalize | Check In button | The API publishes `NESTED_FINALIZE` instead of CHECK_IN. The function writes `agoge-nested-finalize` = nonce. The parent's finalize watcher shuts the guests down, (re)creates `agoge-pristine`, cleans up, and answers `finalize-result`. The function then publishes the existing CHECK_IN |
+| Image | Cloud Function | The existing check-in stops, snapshots, and images the disk, adding the `enable-vmx` license; the record returns to CHECKED_IN with `nested_build.phase = "finalized"` |
+| Re-check-out | Instructor | The existing check-out of a finalized image. The startup-script installs only the finalize watcher (no manifest, nothing is rebuilt); Check In finalizes again |
+| Lab use | Unit build | A lab server built from the image gets nested virtualization from the license (and explicitly, V1). `agoge-nested-runtime.service` maps the server's alias IPs to exposed guests and isolates the guests from the parent |
+
+**Data models** (added to `common/models/agoge.py`):
+
+```python
+NestedOsFamily = Literal['linux', 'windows', 'appliance']
+NestedOsGroup = Literal['kali', 'linux', 'windows_client', 'windows_server', 'appliance']
+NestedInstallMethod = Literal['cloud_image', 'unattended_iso', 'disk_image', 'manual_iso']
+NestedMediaFormat = Literal['qcow2', 'raw', 'img.xz', 'tar.xz', 'iso', 'vmdk', 'vhd', 'vhdx', 'ova', 'zip', '7z']
+NestedNetConfig = Literal['networkd', 'netplan', 'nm-keyfile', 'ifupdown', 'windows', 'none']
+NestedGuestStatus = Literal['pending', 'downloading', 'installing', 'post_install', 'manual', 'ready', 'failed']
+NestedBuildPhase = Literal['queued', 'provisioning', 'building', 'ready', 'finalizing', 'finalized', 'failed']
+SLUG15 = r'^[a-z][a-z0-9-]{0,13}[a-z0-9]$'   # libvirt domain, hostname, NetBIOS (15 chars)
+
+# Collection `nested-os-catalog`, doc id = id. Seeded from common/data/nested_os_catalog.json (V5).
+class NestedOsCatalogModel(BaseModel):
+    id: str = Field(..., pattern=r'^[a-z0-9][a-z0-9.-]{1,47}$')    # e.g. "win-server-2022-eval"
+    display_name: str
+    family: NestedOsFamily
+    group: NestedOsGroup
+    version: str
+    install_method: NestedInstallMethod
+    media_url: Optional[str] = None            # https only; None => requires_upload
+    media_sha256: Optional[str] = Field(default=None, pattern=r'^[a-f0-9]{64}$')
+    media_formats: List[NestedMediaFormat]     # accepted formats (first = the media_url's format)
+    requires_upload: bool = False
+    license_note: str                          # shown in the wizard; never empty for windows
+    eval_days: Optional[int] = None
+    osinfo: str                                # virt-install --osinfo value, e.g. "win2k22"
+    firmware: Literal['bios', 'uefi'] = 'bios'
+    disk_bus: Literal['virtio', 'sata', 'ide'] = 'virtio'
+    nic_model: Literal['virtio', 'e1000e', 'e1000', 'rtl8139'] = 'virtio'
+    video: Literal['virtio', 'qxl', 'vga', 'cirrus'] = 'vga'
+    virtio_win_version: Optional[str] = None   # pinned virtio-win ISO release; None = no virtio media
+    agent: bool                                # qemu-guest-agent available => CTF driver qemu-agent, else offline
+    net_config: NestedNetConfig
+    unattend_template: Optional[Literal['autounattend']] = None   # Vista and later only
+    windows_image_index: Optional[int] = None
+    default_username: Optional[str] = None     # disk_image/manual entries with fixed credentials, e.g. kali
+    min_memory_mb: int
+    default_memory_mb: int
+    min_disk_gb: int
+    default_disk_gb: int
+    default_vcpus: int = 1
+    is_enabled: bool = True
+
+# Collection `nested-media`, doc id = IdGenerator.uuid(). Instructor uploads (V13).
+class NestedMediaModel(BaseModel):
+    id: str
+    filename: str
+    format: NestedMediaFormat
+    size_bytes: int
+    gcs_path: str                              # gs://<project>_nested-media/media/<id>/<filename>
+    sha256: Optional[str] = None               # filled by the builder on first use
+    os_id: Optional[str] = None                # catalog entry it was uploaded for
+    uploaded_by: str
+    uploaded_at: str
+    complete: bool = False
+
+class NestedNetworkModel(BaseModel):
+    name: str = Field(..., pattern=SLUG15)
+    cidr: str                                  # RFC 1918, /16 to /29
+    mode: Literal['nat', 'isolated']           # nat: internet through the parent
+    parent_address: Optional[str] = None       # the parent's address on this network; None = pure L2 segment
+    dhcp: bool = True
+    dhcp_start: Optional[str] = None
+    dhcp_end: Optional[str] = None
+
+class NestedGuestNicModel(BaseModel):
+    network: str
+    ip: Optional[str] = None                   # static; None = DHCP or unconfigured
+    expose: bool = False                       # 1:1 NAT to the next alias slot on the lab server
+
+class NestedGuestModel(BaseModel):
+    name: str = Field(..., pattern=SLUG15)
+    os_id: str
+    media_id: Optional[str] = None             # required when the catalog entry requires_upload
+    vcpus: int = Field(default=1, ge=1, le=8)
+    memory_mb: int = Field(default=2048, ge=256, le=32768)
+    disk_gb: int = Field(default=20, ge=2, le=500)
+    nics: List[NestedGuestNicModel] = Field(..., min_length=1, max_length=4)
+    admin_username: str = Field(..., pattern=r'^[a-zA-Z][a-zA-Z0-9_.-]{0,19}$')
+    admin_password: str                        # stored; teachers see it (like human_interaction)
+    packages: List[str] = Field(default_factory=list, max_length=50)   # cloud_image Linux only
+    post_install_script: Optional[str] = Field(default=None, max_length=65536)  # bash or PowerShell
+    console: bool = True                       # VNC console on the parent
+    autostart: bool = True
+    start_order: int = Field(default=0, ge=0, le=99)
+    start_delay_seconds: int = Field(default=0, ge=0, le=600)
+
+class NestedHostSpecModel(BaseModel):
+    parent_os: Literal['debian-12', 'debian-13'] = 'debian-12'
+    build_machine_type: str = 'n2-standard-8'
+    networks: List[NestedNetworkModel] = Field(..., min_length=1, max_length=8)
+    guests: List[NestedGuestModel] = Field(..., min_length=1, max_length=8)
+    # Derived by the API on create, never sent by the client:
+    exposures: List[Tuple[str, int]] = Field(default_factory=list)   # (guest, nic index); list index = alias slot
+    console_ports: Dict[str, int] = Field(default_factory=dict)      # guest -> 5901..5908
+    vnc_passwords: Dict[str, str] = Field(default_factory=dict)      # guest -> 8 chars (VNC limit)
+
+class NestedBuildStatusModel(BaseModel):
+    phase: NestedBuildPhase = 'queued'
+    guests: Dict[str, NestedGuestStatus] = Field(default_factory=dict)
+    message: Optional[str] = Field(default=None, max_length=200)
+    heartbeat_at: Optional[str] = None
+    started_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    finalize_nonce: Optional[str] = None
+
+# AgogeImageModel gains:
+#     nested: Optional[NestedHostSpecModel] = None
+#     nested_build: Optional[NestedBuildStatusModel] = None
+# and `base_family: Optional[str] = None` loses its trailing comma (Working Note 19).
+#
+# HumanInteractionModel gains (V22):
+#     nested_guest: Optional[str] = None   # label only
+#     alias_index: Optional[int] = None    # connect to server.nics[0].ip_aliases[alias_index]
+#     port: Optional[int] = None           # Guacamole port override (VNC console 5901..5908)
+
+# Request body, POST /compute/images/nested/
+class NestedImageCreateRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    server_name: str
+    description: str = Field(..., max_length=200)
+    labels: List[str] = Field(default_factory=list)
+    machine_type: str                          # what lab servers default to
+    disk_size: Optional[int] = None            # None = computed minimum
+    username: str
+    ssh_key: str                               # parent access, as for standard Linux images
+    nested: NestedHostSpecModel                # exposures/console_ports/vnc_passwords must be empty
+    product_keys: Dict[str, str] = Field(default_factory=dict)   # guest -> key; never persisted
+```
+
+**Validation** (`api/core/compute/nested/validator.py` `NestedHostValidator`,
+raising `BadRequest` with a message naming the network, guest, or field):
+
+| Rule | Names |
+|------|-------|
+| `server_name` passes `_validate_new_name` and is not `nested` (reserved for the route prefix) | the name |
+| Network names unique; each `cidr` is RFC 1918, /16–/29, and overlaps no other network, `169.254.0.0/16`, or libvirt's `192.168.122.0/24` | the network |
+| `parent_address`, `dhcp_start`, `dhcp_end` lie inside the CIDR and are not its network or broadcast address; `mode: nat` and `dhcp: true` both require `parent_address`; the DHCP range excludes `parent_address` and every static guest IP | the network |
+| Guest names unique; `os_id` names an enabled catalog entry; `requires_upload` ⇒ `media_id` names a `complete` medium whose `format` is in the entry's `media_formats` | the guest |
+| `memory_mb ≥ min_memory_mb`, `disk_gb ≥ min_disk_gb` | the guest |
+| Σ guest `memory_mb` + `NESTED_PARENT_OVERHEAD_MB` ≤ memory of `machine_type` and of `build_machine_type`; Σ `vcpus` ≤ 2 × the machine's vCPUs | `machine_type` |
+| `machine_type` and `build_machine_type` are N1 or N2 (nested-capable); E2 is rejected | the machine type |
+| `disk_size` (or the computed minimum) ≥ `NESTED_PARENT_BASE_DISK_GB` + Σ `disk_gb` + `NESTED_BUILD_SCRATCH_GB`, ≤ `NESTED_MAX_DISK_GB` | `disk_size` |
+| Every NIC's `network` exists; a static `ip` is inside the CIDR, unique across guests, not `parent_address`, and outside the DHCP range | the guest |
+| `expose: true` requires a static `ip`; at most `NESTED_MAX_EXPOSURES` exposed NICs | the guest |
+| An `unattended_iso` Windows entry without `eval_days` requires `product_keys[guest]` matching `^([A-Z0-9]{5}-){4}[A-Z0-9]{5}$` | the guest |
+| `packages` only for `cloud_image` Linux entries, each matching `^[a-z0-9][a-z0-9+.-]{0,63}$` | the guest |
+| `admin_password` meets Windows complexity for Windows guests (≥ 8 chars, 3 of 4 classes) and ≥ 8 chars otherwise | the guest |
+
+**Constants** (`common/constants/nested.py`):
+
+| Name | Value |
+|------|-------|
+| `ENABLE_VMX_LICENSE` | `https://www.googleapis.com/compute/v1/projects/vm-options/global/licenses/enable-vmx` |
+| `NESTED_PARENT_OVERHEAD_MB` | `2048` |
+| `NESTED_PARENT_BASE_DISK_GB` / `NESTED_BUILD_SCRATCH_GB` / `NESTED_MAX_DISK_GB` | `20` / `12` / `1000` |
+| `NESTED_MAX_EXPOSURES` | `8` |
+| `NESTED_CONSOLE_BASE_PORT` | `5901` |
+| `NESTED_MAX_MACHINE_MEMORY_MB` | `65536` (the machine-type list for nested images; standard images keep 17000) |
+| `NESTED_FINALIZE_TIMEOUT_SECONDS` | `360` (must stay below the 540 s function timeout with overhead) |
+| `NESTED_BUILD_STALL_MINUTES` / `NESTED_BUILD_MAX_MINUTES` | `45` / `240` |
+| `NESTED_MEDIA_MAX_BYTES` / `NESTED_UPLOAD_URL_TTL_SECONDS` | `21474836480` (20 GiB) / `3600` |
+| `NESTED_MEDIA_BUCKET_SUFFIX` | `nested-media` → `<project>_nested-media` |
+
+**Metadata and guest attributes:**
+
+| Name | Kind | Value |
+|------|------|-------|
+| `agoge-nested-manifest` | metadata, build only | JSON: the spec without secrets, plus each guest's resolved catalog entry and media source (`https` URL + sha256, or `gs://` path) |
+| `agoge-nested-secrets` | metadata, removed after build | JSON `{guest: {admin_password, vnc_password, product_key?}}`. The builder copies it to `/run/agoge-nested/secrets.json` (tmpfs, 0600) and never writes it to the persistent disk |
+| `agoge-nested-finalize` | metadata | nonce, written by `NESTED_FINALIZE`, removed after the answer |
+| `enable-guest-attributes` | metadata | `TRUE` |
+| `agoge-nested/phase` | guest attribute | `building`, `ready`, `failed` |
+| `agoge-nested/guest-<name>` | guest attribute | a `NestedGuestStatus`, optionally `failed:<message>` |
+| `agoge-nested/message` | guest attribute | the latest human-readable step, ≤ 200 chars |
+| `agoge-nested/heartbeat` | guest attribute | epoch seconds, written every 60 s while building |
+| `agoge-nested/finalize-result` | guest attribute | `ok:<nonce>` or `error:<nonce>:<message>` |
+
+**Parent filesystem layout:**
+
+| Path | Contents |
+|------|----------|
+| `/usr/local/sbin/agoge-nested-builder` | the builder (rendered from `cloud_functions/cloud_fn_utilities/server_specific/nested/builder.sh`); per-step markers in `/var/lib/agoge-nested/state/` so a reboot resumes rather than restarts |
+| `/var/lib/libvirt/boot/agoge-nested/` | downloaded media and unattend ISOs. Not under `/root`: `libvirt-qemu` cannot read it (Working Note 15). Deleted at finalize |
+| `/var/lib/libvirt/images/<guest>.qcow2` | guest disks |
+| `/etc/agoge-nested/host.json` | non-secret host description (networks, guests, IPs, exposures, console ports) read by the runtime |
+| `/usr/local/sbin/agoge-nested-runtime` + `agoge-nested-runtime.service` | runs at every boot of every server built from the image |
+| `/usr/local/sbin/agoge-nested-finalize` + `agoge-nested-finalize.service` | long-polls `agoge-nested-finalize`; installed only on template servers by the startup-script |
+
+**Builder.** On a template server whose manifest is present and whose state is not done, the builder:
+
+1. Writes `phase=building` and installs `qemu-system-x86 qemu-utils libvirt-daemon-system virtinst libguestfs-tools genisoimage p7zip-full ovmf swtpm`.
+2. Destroys and undefines libvirt's `default` network, then defines one persistent, autostarted network per `NestedNetworkModel` with bridge `agb<index>`. NAT networks use libvirt `<forward mode='nat'/>`; isolated networks have no `<forward>`. A network with `parent_address: None` has no `<ip>` (pure L2). DHCP reservations come from static IPs.
+3. Installs the runtime (below) and starts it, so the metadata block is in force before any guest boots.
+4. Installs guests in `start_order`, at most two installs at a time. For each guest it obtains the media (cache `gs://<project>_nested-media/cache/<sha256>` first, else the `https` URL), verifies the SHA-256, and fails the guest on a mismatch. It then runs the install method:
+
+| Method | Steps | Done when |
+|--------|-------|-----------|
+| `cloud_image` | Convert to qcow2 and resize. `virt-customize`: hostname; admin user with the password read from a root-only file (`--password user:file:…`, never on the command line); `qemu-guest-agent`, `openssh-server`, and `packages`; network config per `net_config`; disable cloud-init with `/etc/cloud/cloud-init.disabled` (do **not** purge it, Working Note 16); regenerate SSH host keys at first boot; `--selinux-relabel` for RHEL-family; on RHEL-family remove the `guest-exec` block from `/etc/sysconfig/qemu-ga`. `virt-install --import` | the agent answers `guest-ping` |
+| `unattended_iso` | Render `autounattend.xml` (V8) with hostname, admin password, product key or none, the image index, virtio driver paths, and for Windows 11 the `LabConfig` TPM/Secure Boot/RAM bypass keys. Build a small ISO. `virt-install` with the OS ISO, the pinned virtio-win ISO (when set), and the unattend ISO, `--boot hd,cdrom`. FirstLogonCommands install virtio guest tools (when set), enable RDP and ICMP, configure static IPs by MAC, delete `C:\Windows\Panther\unattend*.xml` (it holds the password), then power off. The builder waits for `shut off` (never relying on `virt-install --wait`, Working Note 17), detaches all media, and starts the guest | the agent answers, or for agentless entries the guest has been running 120 s |
+| `disk_image` | Unpack `ova`/`zip`/`7z`/`xz`, `qemu-img convert` to qcow2, grow to `disk_gb` when larger. For Linux entries with `agent: true`, the same `virt-customize` user, password, and agent steps as `cloud_image` | as above |
+| `manual_iso` | Blank qcow2 of `disk_gb`, boot the ISO with the console enabled, set guest status `manual` | the instructor finishes in the console; finalize accepts `manual` guests |
+
+5. Runs `post_install_script` through `guest-exec` with the script as `input-data` (bash `-s` / `powershell.exe -Command -`), for guests whose entry has `agent: true`. A non-zero exit fails that guest with the first 150 chars of stderr.
+6. Every domain gets `--cpu host-passthrough`, the `org.qemu.guest_agent.0` channel, a VNC console on `0.0.0.0:<console_port>` with the guest's `vnc_password` (when `console: true`), and `virsh autostart` per `autostart`.
+7. Writes `phase=ready`. One failed guest does not stop the others; the phase is `failed` only when no guest reached `ready` or `manual`. `message` says which guests failed.
+
+**Finalize watcher** (answers one nonce; the function times out after `NESTED_FINALIZE_TIMEOUT_SECONDS`):
+1. ACPI-shutdown every running guest in parallel and wait up to 240 s. A guest still running → `error:<nonce>:<guest>: guest did not shut down`. The watcher never runs `virsh destroy`.
+2. `managedsave-remove`, delete any existing `agoge-pristine`, then `snapshot-create-as <guest> agoge-pristine --atomic` (internal; BIOS guests only, see Open Questions).
+3. Remove `/var/lib/libvirt/boot/agoge-nested/`, `/run/agoge-nested/`, the builder state, and the apt cache; `fstrim -av`.
+4. Leave guests shut off; the runtime starts them in `start_order` with `start_delay_seconds` at the next boot. Write `ok:<nonce>`.
+
+**Runtime** (`agoge-nested-runtime`, every boot, idempotent):
+1. `iptables -I FORWARD -d 169.254.169.254 -j REJECT` (the same rule as N1; SC-24 applies to every nested image).
+2. `INPUT` from any `agb*` bridge accepts only DHCP (udp 67) and DNS (udp/tcp 53) to the parent; everything else is dropped, so guests cannot reach the parent's SSH, VNC, or metadata-holding processes.
+3. Reads `instance/network-interfaces/0/ip-aliases/` from the metadata server. For exposure slot *i* with alias *a* and guest IP *g*: `PREROUTING -d a -j DNAT --to g`, `POSTROUTING -s g -j SNAT --to a` on the primary NIC, and `FORWARD` accept between them. Extra aliases are ignored. Missing aliases leave that guest unexposed, which is logged, not an error.
+4. Starts autostart guests in `start_order` with their delays (libvirt's own autostart is disabled so the order holds).
+5. Configures `libvirt-guests` with `ON_SHUTDOWN=shutdown`, `PARALLEL_SHUTDOWN=8`, and `SHUTDOWN_TIMEOUT=80` so a workout stop shuts guests down instead of cutting their power.
+
+**Lab and CTF use.** A spec server whose image has `nested`:
+- needs an N1/N2 machine type;
+- needs `len(nested.exposures)` alias IPs on NIC 0 (alias slot *i* is exposure *i*);
+- gets editor help to add Guacamole connections per guest. An exposed guest uses `alias_index` and its protocol (RDP for Windows, SSH for Linux). A console uses protocol `vnc`, `port` = the console port, and the VNC password.
+
+N5's rule "the parent has at least one NIC with `ip_aliases`" also accepts a parent whose image has `nested` (V23). The CTF editor pre-fills `nested_guests` from the image: `domain` = guest name, and `driver` = `qemu-agent` when the catalog entry has `agent`, else `offline`.
+
+**Guest OS catalog.** Seeded entries (V5). Agoge downloads only media its
+publisher hosts publicly. Windows media is never redistributed, and every Windows
+entry before Windows 10 / Server 2016 requires an upload. The license note is
+shown before selection.
+
+| Group | Entries | Method | Media |
+|-------|---------|--------|-------|
+| Kali | Kali rolling (current release) | `cloud_image` (generic cloud image) | kali.org |
+| Kali | Kali QEMU VM (default `kali`/`kali`) | `disk_image` (`7z`) | kali.org |
+| Linux | Debian 11, 12, 13 | `cloud_image` | cloud.debian.org |
+| Linux | Ubuntu 16.04, 18.04, 20.04, 22.04, 24.04, 26.04 | `cloud_image` | cloud-images.ubuntu.com |
+| Linux | Fedora (current), Rocky 8/9/10, AlmaLinux 8/9/10, CentOS Stream 9/10, CentOS 7 (vault) | `cloud_image` | publisher mirrors |
+| Linux | openSUSE Leap (current), Arch Linux, Alpine (cloud) | `cloud_image` | publisher mirrors |
+| Linux | Metasploitable 2 | `disk_image` (`zip`/vmdk), agentless | SourceForge |
+| Windows server | Server 2016, 2019, 2022, 2025 Evaluation (180 days) | `unattended_iso`, agent via virtio-win | Microsoft Evaluation Center |
+| Windows client | Windows 10 Enterprise, Windows 11 Enterprise Evaluation (90 days), where Microsoft still publishes them | `unattended_iso` | Microsoft Evaluation Center |
+| Windows client | Windows Vista, 7, 8.1, 10, 11 (retail/volume, with product key) | `unattended_iso`, upload required | instructor |
+| Windows server | Server 2008, 2008 R2, 2012, 2012 R2, 2016–2025 (licensed) | `unattended_iso`, upload required | instructor |
+| Windows legacy | Windows XP, Server 2003 (2000 optional) | `manual_iso` or `disk_image`, upload required, IDE disk, `rtl8139`/`e1000`, agentless | instructor |
+| Appliance | pfSense CE, OPNsense, VyOS, Security Onion | `manual_iso` (OPNsense also `disk_image`) | publisher or upload |
+| Any | Custom ISO / custom disk image | `manual_iso` / `disk_image`, upload required | instructor |
+
+Profiles: XP/2003 use IDE + `rtl8139` or `e1000`, `cirrus`/`vga`. Vista–8.1 and 2008–2012 R2 use SATA + `e1000`, with the agent from the pinned virtio-win release that last supports them (Open Questions). Windows 10+/Server 2016+ use virtio + current virtio-win. Windows 11 and Server 2025 use BIOS with LabConfig bypass keys, not UEFI (Design Decisions).
+
 ---
 
 ## Features
@@ -940,149 +1460,253 @@ Ordered by dependency. Each item is one iteration and includes its own tests.
 
 **Group 0 — Green baseline**
 
-- [ ] **0.1 Frontend test script** — Change `frontend/package.json` `"test"` to `vitest run --exclude "tests/**"` so vitest stops collecting the `node:test` files in `frontend/tests/`.
+- [x] **0.1 Frontend test script** — Change `frontend/package.json` `"test"` to `vitest run --exclude "tests/**"` so vitest stops collecting the `node:test` files in `frontend/tests/`.
   - Done when: `(cd frontend && npm test)` exits 0 with 23 tests passing; the two `.mjs` files are untouched.
-- [ ] **0.2 Rubric opt-in tests** — Make the four failing tests in `api/unit_tests/test_rubric_opt_in.py` pass.
+- [x] **0.2 Rubric opt-in tests** — Make the four failing tests in `api/unit_tests/test_rubric_opt_in.py` pass.
   - Done when: `api/unit_tests` reports 49 passed, 0 failed; no test is deleted or skipped; `test_storing_openai_key_does_not_enable_rubrics` no longer reaches a real `input()` call.
 
 **Group A — Contracts and constants**
 
-- [ ] **A1 CTF constants** — Add `CtfStates`, six `DbCollections` members, `Handlers.CTF`, three `Actions`, three `EventAttributes`.
+- [x] **A1 CTF constants** — Add `CtfStates`, six `DbCollections` members, `Handlers.CTF`, three `Actions`, three `EventAttributes`.
   - Done when: a unit test asserts no new `Actions` value collides with an existing one.
-- [ ] **A2 CTF specification models** — Add `CtfFlagSpecModel`, `CtfScoringSpecModel`, `CtfSpecModel` and the `Literal` aliases.
+- [x] **A2 CTF specification models** — Add `CtfFlagSpecModel`, `CtfScoringSpecModel`, `CtfSpecModel` and the `Literal` aliases.
   - Done when: tests reject a bad flag id, an unknown `location_type`, and a malformed `file_mode`.
-- [ ] **A3 CTF stored models** — Add `CtfEventModel`, `CtfFlagStateModel`, `CtfBoardModel`, `CtfDigestModel`, `CtfRateLimitModel`, `CtfSubmissionModel`, `CtfLogModel`.
-- [ ] **A4 CTF request models** — Add the seven request models.
-- [ ] **A5 CTF response models** — Add the response models to `common/models/response.py`.
-- [ ] **A6 Spec block wiring** — Add `ctf: Optional[CtfSpecModel]` to `CatalogModel`, `CatalogEditModel`, `UnitModel`.
+- [x] **A3 CTF stored models** — Add `CtfEventModel`, `CtfFlagStateModel`, `CtfBoardModel`, `CtfDigestModel`, `CtfRateLimitModel`, `CtfSubmissionModel`, `CtfLogModel`.
+- [x] **A4 CTF request models** — Add the seven request models.
+- [x] **A5 CTF response models** — Add the response models to `common/models/response.py`.
+- [x] **A6 Spec block wiring** — Add `ctf: Optional[CtfSpecModel]` to `CatalogModel`, `CatalogEditModel`, `UnitModel`.
   - Done when: a test builds `CatalogEditModel → CatalogModel → UnitModel` and the `ctf` block survives each step, matching `test_opt_in_survives_specification_models_and_lab_build`.
 
 **Group B — Flag derivation and state**
 
-- [ ] **B1 Derivation module** — Write `common/utilities/ctf_flags.py` with the five contract functions.
+- [x] **B1 Derivation module** — Write `common/utilities/ctf_flags.py` with the five contract functions.
   - Done when: tests cover determinism, per-workout uniqueness (SC-3), `seed_version` sensitivity, case/whitespace normalization, `parse_flag_id` hits and misses, and that `flags_match` calls `hmac.compare_digest`.
-- [ ] **B2 Seed property** — Add the lazy `ctf_flag_seed` property to `CloudEnv`, matching `openai_api_key`.
-- [ ] **B3 Seed provisioning** — In `environment_variables.py`, add `ctf_enabled`; when set to true, create `ctf_flag_seed` with `secrets.token_hex(32)` if absent.
+- [x] **B2 Seed property** — Add the lazy `ctf_flag_seed` property to `CloudEnv`, matching `openai_api_key`.
+- [x] **B3 Seed provisioning** — In `environment_variables.py`, add `ctf_enabled`; when set to true, create `ctf_flag_seed` with `secrets.token_hex(32)` if absent.
   - Done when: a build_files test with mocked Secret Manager shows the secret is created once and not overwritten on a second enable.
-- [ ] **B4 CTF state manager** — Write `common/utilities/ctf_state_manager.py`.
+- [x] **B4 CTF state manager** — Write `common/utilities/ctf_state_manager.py`.
   - Done when: tests accept every allowed transition, raise `Conflict` for `(RUNNING, ARMING)` and `(ENDED, RUNNING)`, and stamp `state_timestamp`.
 
 **Group C — Specification validation**
 
-- [ ] **C1 Flag validator** — Write `object_validators/ctf.py`: every `server` names a server in the spec; flag ids unique; `(server, slot)` unique; every flag on one server has the same `operating_system`; `path` matches its row in Flag Location Formats; `registry`/`ads` require `windows`; non-decoy `points > 0`; every `unlocks_after` id exists and the graph has no cycle.
+- [x] **C1 Flag validator** — Write `object_validators/ctf.py`: every `server` names a server in the spec; flag ids unique; `(server, slot)` unique; every flag on one server has the same `operating_system`; `path` matches its row in Flag Location Formats; `registry`/`ads` require `windows`; non-decoy `points > 0`; every `unlocks_after` id exists and the graph has no cycle.
   - Done when: one test per rule rejects a bad spec with a message naming the flag id.
-- [ ] **C2 Validator wiring** — Call the validator from both `edit_manager._validate_spec` and `file_manager._validate_spec` when `ctf` is present.
+- [x] **C2 Validator wiring** — Call the validator from both `edit_manager._validate_spec` and `file_manager._validate_spec` when `ctf` is present.
   - Done when: a test per save path shows an invalid `ctf` block is rejected.
 
 **Group D — Compute primitives and the loader**
 
-- [ ] **D1 `set_metadata`** — Add `ComputeInstanceAPI.set_metadata(resource_name, items: dict, remove: list = None, wait=True)`: re-reads the instance for its current `fingerprint`, merges `items` into the existing metadata, drops keys in `remove`, and leaves every other key unchanged.
+- [x] **D1 `set_metadata`** — Add `ComputeInstanceAPI.set_metadata(resource_name, items: dict, remove: list = None, wait=True)`: re-reads the instance for its current `fingerprint`, merges `items` into the existing metadata, drops keys in `remove`, and leaves every other key unchanged.
   - Done when: tests show the merge keeps unrelated keys and that a 412 (stale fingerprint) triggers one re-read and retry.
-- [ ] **D2 `get_guest_attributes`** — Add `ComputeInstanceAPI.get_guest_attributes(resource_name, query_path)` returning a `{key: value}` dict, empty when none exist.
-- [ ] **D3 Plant contract module** — Write `common/utilities/ctf_plant_contract.py` with the names and both loader stubs.
-- [ ] **D4 Loader at build** — In `LabServerManager._add_metadata`, add the Linux loader through `_merge_metadata_item` and the Windows loader as `windows-startup-script-ps1`; extend `_merge_metadata_item` to concatenate `windows-startup-script-ps1`.
+- [x] **D2 `get_guest_attributes`** — Add `ComputeInstanceAPI.get_guest_attributes(resource_name, query_path)` returning a `{key: value}` dict, empty when none exist.
+- [x] **D3 Plant contract module** — Write `common/utilities/ctf_plant_contract.py` with the names and both loader stubs.
+- [x] **D4 Loader at build** — In `LabServerManager._add_metadata`, add the Linux loader through `_merge_metadata_item` and the Windows loader as `windows-startup-script-ps1`; extend `_merge_metadata_item` to concatenate `windows-startup-script-ps1`.
   - Done when: tests show an existing `startup-script` and assessment script are kept with the loader appended, and two Windows ps1 scripts are concatenated, not overwritten.
 
 **Group E — Planting**
 
-- [ ] **E1 Payload builder** — Write `FlagPlanter.build_payload(board, server, nonce, seed)` for Linux (bash) and Windows (PowerShell), covering every row of Flag Location Formats.
+- [x] **E1 Payload builder** — Write `FlagPlanter.build_payload(board, server, nonce, seed)` for Linux (bash) and Windows (PowerShell), covering every row of Flag Location Formats.
   - Done when: tests show the payload contains only that server's flags, contains the nonce, and has no command that prints a value (`echo $FLAG`-style).
-- [ ] **E2 Plant procedure** — Write `FlagPlanter.plant(board, servers)` per the Plant procedure.
+- [x] **E2 Plant procedure** — Write `FlagPlanter.plant(board, servers)` per the Plant procedure.
   - Done when: SC-5, SC-6, and SC-7 tests pass against a mocked `ComputeInstanceAPI`.
-- [ ] **E3 CTF handler** — Write `cloud_functions/handlers/ctf_handler.py` routing the three CTF actions, and add the `Handlers.CTF` branch to `cloud_functions/main.py`.
+- [x] **E3 CTF handler** — Write `cloud_functions/handlers/ctf_handler.py` routing the three CTF actions, and add the `Handlers.CTF` branch to `cloud_functions/main.py`.
   - Done when: a test shows each action reaches its class and an unknown action raises `ValueError`.
-- [ ] **E4 Arm worker** — Write `ArmWorker.run(ctf_id, workout_id)`: workout not `WorkoutStates.RUNNING` → board `failed` with `"Workout is not running"`; else plant every flag-bearing server; then aggregate.
+- [x] **E4 Arm worker** — Write `ArmWorker.run(ctf_id, workout_id)`: workout not `WorkoutStates.RUNNING` → board `failed` with `"Workout is not running"`; else plant every flag-bearing server; then aggregate.
   - Done when: SC-15 tests pass for all-armed, mixed, and zero-armed outcomes.
-- [ ] **E5 Overnight exemption** — Make `DailyMaintenance._stop_all` skip workouts with an active board in an event in `ARMING`, `ARMED`, `RUNNING`, or `PAUSED`.
+- [x] **E5 Overnight exemption** — Make `DailyMaintenance._stop_all` skip workouts with an active board in an event in `ARMING`, `ARMED`, `RUNNING`, or `PAUSED`.
   - Done when: SC-20 test passes and non-CTF workouts are still stopped.
 
 **Group F — Event core**
 
-- [ ] **F1 Config and feature flag** — Write `api/core/ctf/config.py` `is_ctf_enabled()` reading `admin-info/project` with a 60-second in-process cache, plus the `ctf_enabled_required` dependency.
+- [x] **F1 Config and feature flag** — Write `api/core/ctf/config.py` `is_ctf_enabled()` reading `admin-info/project` with a 60-second in-process cache, plus the `ctf_enabled_required` dependency.
   - Done when: a test shows a changed flag is seen after the cache expires.
-- [ ] **F2 Error helper** — Write `api/utilities/http_errors.py` `to_http_exception(e)` using the Error Handling table.
-- [ ] **F3 Audit helper** — Write `api/core/ctf/audit.py` `CtfAudit.action(...)` context manager writing one `CtfLogModel` with `OK`, `DENIED`, or `ERROR`.
+- [x] **F2 Error helper** — Write `api/utilities/http_errors.py` `to_http_exception(e)` using the Error Handling table.
+- [x] **F3 Audit helper** — Write `api/core/ctf/audit.py` `CtfAudit.action(...)` context manager writing one `CtfLogModel` with `OK`, `DENIED`, or `ERROR`.
   - Done when: tests cover all three results and show `detail` rejects a value matching `^agoge\{`.
-- [ ] **F4 Event create** — Write `CtfEvent.create(unit_id, user)`: unit not found → `NotFound`; no `ctf` → `BadRequest`; caller not on the unit → `Unauthorized`; workouts > `ctf_max_boards` → `BadRequest`; any workout already on an active board → `Conflict`; missing seed → `ServiceUnavailable`. Writes the event, one board per workout, and one digest doc per board per flag, in commits of ≤ 500 writes.
+- [x] **F4 Event create** — *Superseded by L2.* Originally `CtfEvent.create(unit_id, user)` built one board per existing workout; creation now starts from a catalog template with no teams, and boards are added per team in DRAFT.
   - Done when: SC-1, SC-2, and the SC-4 check on created documents pass.
-- [ ] **F5 Event read, update, delete** — Add `get`, `list`, `update` (applies only fields in `model_fields_set`), `delete` (per the endpoint table).
-- [ ] **F6 Event actions** — Add `process_action` per the action map.
+- [x] **F5 Event read, update, delete** — Add `get`, `list`, `update` (applies only fields in `model_fields_set`), `delete` (per the endpoint table).
+- [x] **F6 Event actions** — Add `process_action` per the action map.
   - Done when: SC-13 and SC-14 tests pass and an illegal action raises `Conflict` naming the state.
-- [ ] **F7 Event reads for panels** — Add `state()`, `boards()`, `flags()`, `log()`, `submissions()` returning the response models; `state()` reads the event and one board query.
+- [x] **F7 Event reads for panels** — Add `state()`, `boards()`, `flags()`, `log()`, `submissions()` returning the response models; `state()` reads the event and one board query.
 
 **Group G — Hosts**
 
-- [ ] **G1 Replant publish** — Write `CtfHosts.replant(ctf_id, workout_ids, servers, user)` publishing one `CTF_PLANT` per board+server.
-- [ ] **G2 Host rows** — Add `CtfHosts.hosts(ctf_id)` joining boards to their workouts' server documents.
-- [ ] **G3 Reset publish** — Add `CtfHosts.reset(ctf_id, workout_id, server, mode, user)`; `rebuild` on a WireGuard server → `BadRequest`.
-- [ ] **G4 Reset dispatcher** — Write `host_reset.py` with a mode → method map called by `CtfHandler`.
+- [x] **G1 Replant publish** — Write `CtfHosts.replant(ctf_id, workout_ids, servers, user)` publishing one `CTF_PLANT` per board+server.
+- [x] **G2 Host rows** — Add `CtfHosts.hosts(ctf_id)` joining boards to their workouts' server documents.
+- [x] **G3 Reset publish** — Add `CtfHosts.reset(ctf_id, workout_id, server, mode, user)`; `rebuild` on a WireGuard server → `BadRequest`.
+- [x] **G4 Reset dispatcher** — Write `host_reset.py` with a mode → method map called by `CtfHandler`.
   - Done when: SC-9 test passes and an unknown mode raises `ValueError`.
-- [ ] **G5 Reset `replant`** — Delegate to `FlagPlanter.plant(board, [server])`.
-- [ ] **G6 Reset `restart`** — Delegate to `ComputeManagerFactory` `stop()` then `start()`.
-- [ ] **G7 Reset `rebuild`** — Delegate to `ComputeManagerFactory` `nuke()`, then mark that server's flags `stale`.
+- [x] **G5 Reset `replant`** — Delegate to `FlagPlanter.plant(board, [server])`.
+- [x] **G6 Reset `restart`** — Delegate to `ComputeManagerFactory` `stop()` then `start()`.
+- [x] **G7 Reset `rebuild`** — Delegate to `ComputeManagerFactory` `nuke()`, then mark that server's flags `stale`.
 
 **Group H — Scoring**
 
-- [ ] **H1 Submission resolve** — Write `CtfScoring.submit` steps 1, 3, 4, 5, 7 (closed, lookup, incorrect, cross-submission, record).
+- [x] **H1 Submission resolve** — Write `CtfScoring.submit` steps 1, 3, 4, 5, 7 (closed, lookup, incorrect, cross-submission, record).
   - Done when: SC-10 test passes.
-- [ ] **H2 Solve award** — Add step 6 in a board transaction.
+- [x] **H2 Solve award** — Add step 6 in a board transaction.
   - Done when: SC-12 concurrency test passes and decoy points apply with `decoy_count`.
-- [ ] **H3 Rate limiting** — Add step 2.
+- [x] **H3 Rate limiting** — Add step 2.
   - Done when: SC-11 test passes and a new window resets the count.
-- [ ] **H4 Hints** — Add `CtfScoring.hint`: deducts `hint_cost` once; a second call returns the hint without deducting.
-- [ ] **H5 Student board read** — Add `CtfScoring.board(workout_id)` returning `CtfStudentBoardResponse`, hiding decoys and flags whose `unlocks_after` are unsolved.
+- [x] **H4 Hints** — Add `CtfScoring.hint`: deducts `hint_cost` once; a second call returns the hint without deducting.
+- [x] **H5 Student board read** — Add `CtfScoring.board(workout_id)` returning `CtfStudentBoardResponse`, hiding decoys and flags whose `unlocks_after` are unsolved.
   - Done when: SC-17 test passes on the response.
-- [ ] **H6 Scoreboards** — Add instructor ranking (score desc, then earliest `last_solve_at`) and public ranking (anonymized, `is_you`, freeze-aware).
+- [x] **H6 Scoreboards** — Add instructor ranking (score desc, then earliest `last_solve_at`) and public ranking (anonymized, `is_you`, freeze-aware).
   - Done when: SC-16 test passes.
-- [ ] **H7 Score adjustment** — Add `CtfScoring.adjust(ctf_id, workout_id, delta, reason, user)` writing `SCORE_ADJUST`.
+- [x] **H7 Score adjustment** — Add `CtfScoring.adjust(ctf_id, workout_id, delta, reason, user)` writing `SCORE_ADJUST`.
 
 **Group R — Routers**
 
-- [ ] **R1 Instructor router** — Write `api/routers/ctf.py` with every `/ctf` route, using `to_http_exception` and `CtfAudit`.
-- [ ] **R2 Student router** — Write `api/routers/ctf_board.py` with every `/ctf-board` route.
-- [ ] **R3 Router registration** — Include both routers in `api/main.py`.
-- [ ] **R4 Router auth tests** — Write `test_ctf_router_auth.py`.
+- [x] **R1 Instructor router** — Write `api/routers/ctf.py` with every `/ctf` route, using `to_http_exception` and `CtfAudit`.
+- [x] **R2 Student router** — Write `api/routers/ctf_board.py` with every `/ctf-board` route.
+- [x] **R3 Router registration** — Include both routers in `api/main.py`.
+- [x] **R4 Router auth tests** — Write `test_ctf_router_auth.py`.
   - Done when: a non-instructor gets 403 on every `/ctf` route, a non-admin gets 403 on DELETE, reveal returns 403 for an instructor, and SC-19's 404 behavior holds.
 
 **Group I — Game master UI**
 
-- [ ] **I1 CTF TypeScript models** — Write `services/Ctf/ctf.model.ts` as `export interface`s with snake_case keys mirroring every response and request model.
-- [ ] **I2 CTF transformer and service** — Write `utilities/transformers/ctf.transform.ts` and `services/Ctf/ctf.service.ts` calling each endpoint through `apiService`.
+- [x] **I1 CTF TypeScript models** — Write `services/Ctf/ctf.model.ts` as `export interface`s with snake_case keys mirroring every response and request model.
+- [x] **I2 CTF transformer and service** — Write `utilities/transformers/ctf.transform.ts` and `services/Ctf/ctf.service.ts` calling each endpoint through `apiService`.
   - Done when: `ctf.service.test.ts`, using the mock setup in `rubric.service.test.ts`, covers one GET, one PUT, and one error path.
-- [ ] **I3 Feature flag hook** — Write `hooks/useCtfEnabled.tsx` reading `GET /ctf/config/` once per session for instructors.
-- [ ] **I4 Routes and menu** — Add `URL_TEACHER_CTF_BASE` (`${URL_TEACHER_BASE}/ctf`) and the dashboard URL, two `ProtectedRoute level="instructor"` routes, and one item in the **Teachers** `AppBarMenu` that is filtered out when `useCtfEnabled` is false.
+- [x] **I3 Feature flag hook** — Write `hooks/useCtfEnabled.tsx` reading `GET /ctf/config/` once per session for instructors.
+- [x] **I4 Routes and menu** — Add `URL_TEACHER_CTF_BASE` (`${URL_TEACHER_BASE}/ctf`) and the dashboard URL, two `ProtectedRoute level="instructor"` routes, and one item in the **Teachers** `AppBarMenu` that is filtered out when `useCtfEnabled` is false.
   - Done when: verified in browser that the item appears only when enabled.
-- [ ] **I5 Events list page** — Write `CtfEventList.tsx`: `StyledDataGrid` with Active / Archived `Tabs` (same `sx` as `ActiveExpiredUnitTable`), rows link to the dashboard.
+- [x] **I5 Events list page** — Write `CtfEventList.tsx`: `StyledDataGrid` with Active / Archived `Tabs` (same `sx` as `ActiveExpiredUnitTable`), rows link to the dashboard.
   - Done when: verified in browser.
-- [ ] **I6 Create from unit** — Write `CreateCtfButton.tsx` and render it in `TeacherUnit`'s left column only when the unit has a `ctf` block, as `UnitRubricEditor` is gated; on success navigate to the dashboard.
+- [x] **I6 Create from unit** — Write `CreateCtfButton.tsx` and render it in `TeacherUnit`'s left column only when the unit has a `ctf` block, as `UnitRubricEditor` is gated; on success navigate to the dashboard.
   - Done when: verified in browser that the button is absent on a non-CTF unit.
-- [ ] **I7 Action confirm dialog** — Write `Common/Dialogs/ActionConfirmDialog/ActionConfirmDialog.tsx` with props `{open, title, message, confirmLabel, onConfirm, onClose, loading}` and a `LoadingButton`, modelled on `ConfirmCancelDialog`.
-- [ ] **I8 CTF state chip** — Add a CTF mapping to `Common/Status/StateMapping.tsx` returning `{text, color, icon}` using theme palette keys, rendered through `StatusBadge` with `icon` and announced through `StateInfo`'s `aria-live`.
-- [ ] **I9 Dashboard shell** — Write `CtfDashboard.tsx` copying `TeacherUnit`'s 25/75 `Box` split: left column holds the state chip, remaining time, and Event Control panel in `Paper elevation={2}`; right column holds MUI `Tabs` for Flags, Hosts, Scoreboard, Event Log, Submissions. Polls `state` with `usePolling` every 10 s. Shows an `Alert` banner when `budget_exceeded`.
+- [x] **I7 Action confirm dialog** — Write `Common/Dialogs/ActionConfirmDialog/ActionConfirmDialog.tsx` with props `{open, title, message, confirmLabel, onConfirm, onClose, loading}` and a `LoadingButton`, modelled on `ConfirmCancelDialog`.
+- [x] **I8 CTF state chip** — Add a CTF mapping to `Common/Status/StateMapping.tsx` returning `{text, color, icon}` using theme palette keys, rendered through `StatusBadge` with `icon` and announced through `StateInfo`'s `aria-live`.
+- [x] **I9 Dashboard shell** — Write `CtfDashboard.tsx` copying `TeacherUnit`'s 25/75 `Box` split: left column holds the state chip, remaining time, and Event Control panel in `Paper elevation={2}`; right column holds MUI `Tabs` for Flags, Hosts, Scoreboard, Event Log, Submissions. Polls `state` with `usePolling` every 10 s. Shows an `Alert` banner when `budget_exceeded`.
   - Done when: verified in browser.
-- [ ] **I10 Event Control panel** — Render Arm, Start, Pause, Resume, End, Archive, each enabled only in its legal states. Arm/Start/Pause/Resume use `ActionConfirmDialog`; End and Archive use the existing type-to-confirm `ConfirmationDialog`, extended with a `confirmLabel` prop so its button no longer reads "Delete".
+- [x] **I10 Event Control panel** — Render Arm, Start, Pause, Resume, End, Archive, each enabled only in its legal states. Arm/Start/Pause/Resume use `ActionConfirmDialog`; End and Archive use the existing type-to-confirm `ConfirmationDialog`, extended with a `confirmLabel` prop so its button no longer reads "Delete".
   - Done when: verified in browser that illegal actions are disabled.
-- [ ] **I11 Scoreboard settings** — Write `ScoreboardSettings.tsx`: freeze toggle, public-scoreboard toggle, `ends_at` picker, each sending `PUT /ctf/{id}/`.
-- [ ] **I12 Flags panel** — Render a Community DataGrid of flag id, server, slot, points, decoy, and per-board plant status, with a Replant action per row; `stale` and `failed` rows show a warning icon and text.
-- [ ] **I13 Flags bulk replant** — Add Community `checkboxSelection` driving one scoped `PUT /ctf/{id}/flags/`.
-- [ ] **I14 Hosts panel** — Render one row per board per server with server state and a reset menu offering `replant`, `restart`, `rebuild` with no default; `rebuild` is disabled with a tooltip when `rebuild_allowed` is false and confirmed with the type-to-confirm dialog.
-- [ ] **I15 Scoreboard panel** — Render ranked boards, polled every 30 s, with a visible banner while frozen.
-- [ ] **I16 Event log panel** — Render the action log, filterable by action, newest first.
-- [ ] **I17 Submission log panel** — Render the submission log, filterable by verdict, newest first, with `cross_submission` rows showing the matched team.
+- [x] **I11 Scoreboard settings** — Write `ScoreboardSettings.tsx`: freeze toggle, public-scoreboard toggle, `ends_at` picker, each sending `PUT /ctf/{id}/`.
+- [x] **I12 Flags panel** — Render a Community DataGrid of flag id, server, slot, points, decoy, and per-board plant status, with a Replant action per row; `stale` and `failed` rows show a warning icon and text.
+- [x] **I13 Flags bulk replant** — Add Community `checkboxSelection` driving one scoped `PUT /ctf/{id}/flags/`.
+- [x] **I14 Hosts panel** — Render one row per board per server with server state and a reset menu offering `replant`, `restart`, `rebuild` with no default; `rebuild` is disabled with a tooltip when `rebuild_allowed` is false and confirmed with the type-to-confirm dialog.
+- [x] **I15 Scoreboard panel** — Render ranked boards, polled every 30 s, with a visible banner while frozen.
+- [x] **I16 Event log panel** — Render the action log, filterable by action, newest first.
+- [x] **I17 Submission log panel** — Render the submission log, filterable by verdict, newest first, with `cross_submission` rows showing the matched team.
 
 **Group J — Student UI**
 
-- [ ] **J1 Student CTF polling** — In `Workout.tsx`, fetch `GET /ctf-board/{workout_id}/` once on mount; if `enrolled`, poll it with `usePolling` every 15 s (independent of the page's existing 3.5 s workout poll); if not, make no further CTF request.
-- [ ] **J2 CTF banner** — Write `CtfBanner.tsx` at the top of the left `aside`, above `TimerBox`: a `Paper` with `component="section"` and `aria-labelledby` (as in `ConfigureAccess.tsx`), showing event name, state, remaining time, and a rules link.
+- [x] **J1 Student CTF polling** — In `Workout.tsx`, fetch `GET /ctf-board/{workout_id}/` once on mount; if `enrolled`, poll it with `usePolling` every 15 s (independent of the page's existing 3.5 s workout poll); if not, make no further CTF request.
+- [x] **J2 CTF banner** — Write `CtfBanner.tsx` at the top of the left `aside`, above `TimerBox`: a `Paper` with `component="section"` and `aria-labelledby` (as in `ConfigureAccess.tsx`), showing event name, state, remaining time, and a rules link.
   - Done when: verified in browser; absent when not enrolled.
-- [ ] **J3 Flag submission card** — Write `FlagSubmitCard.tsx` in the aside below `ConfigureAccess`: one text field, the flag format shown verbatim, verdicts shown with `showModal(SimpleSnackbar, {severity})`; a 429 shows the server's message.
+- [x] **J3 Flag submission card** — Write `FlagSubmitCard.tsx` in the aside below `ConfigureAccess`: one text field, the flag format shown verbatim, verdicts shown with `showModal(SimpleSnackbar, {severity})`; a 429 shows the server's message.
   - Done when: verified in browser.
-- [ ] **J4 Challenge list** — Write `ChallengeList.tsx` in the main column below `WorkoutTable`: category, points, solved state, and a hint button confirmed with `ActionConfirmDialog` stating the cost; no host, no path. When `public_scoreboard_enabled`, add a standings table with the caller's row highlighted.
+- [x] **J4 Challenge list** — Write `ChallengeList.tsx` in the main column below `WorkoutTable`: category, points, solved state, and a hint button confirmed with `ActionConfirmDialog` stating the cost; no host, no path. When `public_scoreboard_enabled`, add a standings table with the caller's row highlighted.
   - Done when: verified in browser.
 
 **Group K — Documentation**
 
-- [ ] **K1 Game master guide** — Write `docs/guides/game-master-guide.md` covering spec authoring (with a complete `ctf` block example), create-to-archive, the three reset modes, what `stale` and `failed` mean, and the overnight-stop exemption.
+- [x] **K1 Game master guide** — Write `docs/guides/game-master-guide.md` covering spec authoring (with a complete `ctf` block example), create-to-archive, the three reset modes, what `stale` and `failed` mean, and the overnight-stop exemption.
+
+**Group L — Setup & rosters**
+
+Replaces create-from-unit. The game master creates an event from **Teachers → CTF Events**, then prepares it in DRAFT before any participant can join.
+
+- [x] **L1 Shared workout record** — Move `BaseUnit._create_workout_record` into `common/utilities/workout_record.py` `build_workout_record(unit_model, workout_id, …)` so the API can write a NOT_BUILT workout without a Pub/Sub round trip; `BaseUnit` delegates to it.
+- [x] **L2 Create from template** — `CtfSetup.create`: `POST /ctf/` body `{spec_id, name?, expires}`. Solo templates with a `ctf` block only (community → 400). Writes a solo unit (`Unit.new_unit_model`, `ctf_event_id`, `registration_required`, `count` 0) and a DRAFT event with no boards and the unit's `join_code`; publishes nothing. `GET /ctf/templates/` lists eligible templates.
+- [x] **L3 Teams** — `GET|POST /ctf/{id}/teams/`, `PUT|DELETE /ctf/{id}/teams/{workout_id}/`. A team is a board with `members` plus a NOT_BUILT workout (`team_name`, `student_email` = first member). Add/remove only in DRAFT (board id list changed in a transaction that re-checks DRAFT); remove only while NOT_BUILT; names unique per event; an email on at most one active board; `ctf_max_boards` caps teams. Members editable until ENDED.
+- [x] **L4 Per-event flags** — `PUT /ctf/{id}/spec/` in DRAFT only: `CtfSpecModel` + `CtfValidator` against the unit's servers, then every board's flag states and digests are rebuilt and stale digests deleted.
+- [x] **L5 Servers** — `PUT /ctf/{id}/servers/` `{action: build|start|stop}` publishes the existing workout BUILD/START/STOP messages per team (build only NOT_BUILT; stop never while RUNNING). Arm with no boards → 400 "Add at least one team before arming".
+- [x] **L6 Roster-only join** — `Workout._find_existing_workout`: on a unit with `ctf_event_id`, the email resolves through the active board whose `members` contains it (single `array_contains` filter; no composite index) to the team's workout; anyone else → `NotOnRoster` → 403 with a roster message. Non-CTF units unchanged.
+- [x] **L7 Setup UI** — **New CTF** dialog on the events list; a **Setup** tab (default in DRAFT) with Teams (add, CSV import, members, remove, join code), Flags (editor), and Servers (build/start/stop all) sections; Arm disabled until there is a team. The lab-page **Create CTF Event** button is removed.
+  - Done when: verified in browser on the development project.
+
+**Group N — Nested lab hosts**
+
+Plants and replants flags on VMs nested inside a lab server. See the Nested Guest Contract. N1 is a standalone security fix: ship it first.
+
+- [x] **N1 Metadata forward block** — Add an idempotent, best-effort `iptables -C FORWARD -d 169.254.169.254 -j REJECT || iptables -I FORWARD -d 169.254.169.254 -j REJECT` to the Linux payload prologue in `flag_planter.py`.
+  - Done when: a test shows every Linux payload contains the `-C`/`-I FORWARD` pair before the first placement, and that the payload still reports `ok` when `iptables` is absent.
+- [x] **N2 Loader forward block** — Add the same FORWARD rule to `LINUX_LOADER` in `ctf_plant_contract.py`, before the metadata fetch.
+  - Done when: a test shows the rule precedes the `curl` line, and the D4 merge tests still pass.
+- [x] **N3 Nested guest models** — Add `NestedGuestDriver`, `CtfNestedGuestSpecModel`, `CtfFlagSpecModel.guest`, `CtfSpecModel.nested_guests` per Data Models, plus `guest: Optional[str]` (same slug pattern) on `CtfHostResetRequest` and `CtfHostRow`.
+  - Done when: tests reject a bad guest slug, a bad `domain`, and an unknown `driver`, and a spec without `nested_guests` still loads.
+- [x] **N4 Nested contract constants** — Add the Nested Guest Contract names and timeouts to `ctf_plant_contract.py`, and `PubSub.EventAttributes.GUEST = 'guest'`.
+  - Done when: a test asserts `WATCHER_ACK_SECONDS + NESTED_CONFIRM_TIMEOUT_SECONDS < 540` and that `GUEST` collides with no existing attribute value.
+- [x] **N5 Nested guest validator** — Enforce the Nested Guest Contract validation table in `object_validators/ctf.py`.
+  - Done when: one test per table row rejects a bad spec with a message naming the guest or flag id, and an existing non-nested spec still validates.
+- [x] **N6 Guest payload builder** — Write `FlagPlanter.build_guest_payload(board, server, guest, nonce, seed)` returning the per-OS body whose epilogue prints exactly one result line to the saved stdout.
+  - Done when: tests show it holds only that guest's flags, writes no guest attribute, and has no command that prints a value; `bash -n` accepts the Linux output.
+- [x] **N7 qemu-agent relay section** — Extend `build_payload` for a server with `nested_guests`: ack first, parent flags, one parallel relay section per targeted `qemu-agent` guest, `plant-result` last; reject payloads over 256 KB.
+  - Done when: tests show `virsh` is only ever fed on stdin (no argument contains `input-data`), each section writes `plant-result-<guest>`, `plant-result` is the last write, and `bash -n` passes.
+- [x] **N8 Plant watcher installer** — In `LabServerManager._add_metadata`, merge the watcher installer into `startup-script` for Linux servers with `ip_aliases`; make the loader stub take the run lock and write `/run/agoge-ctf/last`.
+  - Done when: tests show the installer is merged only for `ip_aliases` servers, existing `startup-script` content is kept, and the loader and watcher scripts reference the same lock and dedupe file.
+- [x] **N9 Nested plant procedure** — Implement the Nested plant procedure table in `FlagPlanter.plant`, with an optional `guest` scope and per-key status mapping.
+  - Done when: mocked tests show an acked plant calls `reset` 0 times, an un-acked whole-server plant calls it once, an un-acked guest plant calls it 0 times and fails its flags with `"Plant watcher did not respond"`, and guest and parent flags take status from their own keys.
+- [x] **N10 Guest host reset publish** — `CtfHosts.reset` accepts `guest`, rejects an undeclared guest with `NotFound`, and publishes `GUEST` on `CTF_HOST_RESET`; `CtfHosts.hosts` adds one row per board per guest with `rebuild_allowed: true`.
+  - Done when: router tests show the guest reaches the message, the audit row's detail names the guest, and an unknown guest returns 404.
+- [x] **N11 Guest host reset modes** — `HostReset` with a guest runs the three guest modes from the Nested Guest Contract through `FlagPlanter`.
+  - Done when: SC-9 holds for guest resets, and mocked tests show a guest reset of any mode calls no compute `reset`, `stop`, `start`, or `nuke`.
+- [x] **N12 Offline driver** — Add the `offline` relay section to `build_payload` per the Nested Guest Contract.
+  - Done when: tests show values reach libguestfs only through `/run/agoge-ctf/` temp files, `virsh start` sits in a `trap`, `virsh destroy` never appears, and `bash -n` passes.
+- [x] **N13 Nested guests in the spec editor** — Add a nested-guests section to the CTF part of the spec editor and a guest select on each flag, filtered to guests on the flag's server.
+  - Done when: verified in browser; vitest covers the transformer round trip.
+- [x] **N14 Guest rows on the Hosts panel** — Render guest rows indented under their parent with the same reset menu.
+  - Done when: verified in browser.
+- [x] **N15 Nested host guide** — Add a "Nested lab hosts" section to `docs/guides/game-master-guide.md`: guest image prep (qemu-guest-agent with `guest-exec` allowed, which RHEL-family `/etc/sysconfig/qemu-ga` blocks by default; the agent channel; domain autostart; the `agoge-pristine` snapshot; `libguestfs-tools` for `offline`), a spec example, and the warning that root on the parent exposes every guest flag.
+
+**Group V — Nested image builder**
+
+Builds nested lab hosts from the Create Image page. See the Nested Image
+Builder Contract. Independent of the CTF groups except V23, which needs N3, N5,
+and N13. V1–V4 fix defects the rest depends on (Working Notes 18, 20, 21); ship them
+first.
+
+- [x] **V1 Nested virtualization for template and lab servers** — In `BaseComputeManager._build_server`, enable nested virtualization when `self.ip_aliases` **or** the server's image record has `nested`. `ImageTemplateManager._load_template_server` and `LabServerManager` set a `self.nested_host` flag from the image document. Fix the stale local `min_cpu_platform` (Working Note 18) so the N1/N2 platform reaches the insert. Raise `BadRequest` for an E2 machine type on a nested server.
+  - Done when: mocked tests show `InstanceResource.new` receives `advanced_machine_features={"enable_nested_virtualization": True}` and the platform for a nested template server, a nested lab server, and an `ip_aliases` lab server (unchanged); E2 is rejected; a standard template server gets neither.
+- [x] **V2 Nested machine types** — Make `ComputeMachineType.get` resolve any N1/N2 type up to `NESTED_MAX_MACHINE_MEMORY_MB` (keeping the 17000 MB cap for `list()` unless `nested=True`), and make `_lookup_machine_type` handle `None` instead of raising `AttributeError` (Working Note 20). `GET /compute/images/machine-types/?nested=true` returns N1/N2 types up to the nested cap.
+  - Done when: tests show `n2-standard-8` resolves for a nested server, an unknown type falls back to SMALL with a warning, the default list is unchanged, and the nested list holds no E2 type.
+- [x] **V3 License on check-in** — Add `licenses: Optional[List[str]]` to `ComputeImageAPI.create` (passed into `Image(...)`), and have `ImageTemplateManager._create_image_from_snapshot` pass `[ENABLE_VMX_LICENSE]` when the record has `nested`.
+  - Done when: mocked `ImagesClient.insert` receives the license for a nested record and no `licenses` for a standard one.
+- [x] **V4 Template startup-script merge** — `ImageTemplateManager._add_metadata` concatenates the image's `startup_script` with the user-creation script under one `startup-script` key (reuse `LabServerManager._merge_metadata_item`), fixing the duplicate key (Working Note 21).
+  - Done when: a test shows exactly one `startup-script` item containing both scripts, and Windows images are unchanged.
+- [x] **V5 Models and constants** — Add the contract's models, `common/constants/nested.py`, `DbCollections.NESTED_OS_CATALOG = 'nested-os-catalog'` and `NESTED_MEDIA = 'nested-media'`, `PubSub.Actions.NESTED_FINALIZE`, `AgogeImageModel.nested`/`nested_build`, the three `HumanInteractionModel` fields, and fix the `base_family` default.
+  - Done when: tests reject a bad guest slug, an http `media_url`, and an unknown install method; an existing image document without `nested` still validates; `base_family` defaults to `None`; `NESTED_FINALIZE` collides with no existing action value.
+- [ ] **V6 OS catalog and seeding** — Write `common/data/nested_os_catalog.json` per the contract's catalog table and a setup operation **Synchronize Nested Guest OS Catalog** (the four `add-setup-operation` edits) that upserts entries by id while keeping an admin's `is_enabled` choice.
+  - Done when: a test validates every JSON entry against `NestedOsCatalogModel`; every entry without `requires_upload` has an `https` URL and a SHA-256; every Windows entry with a URL points at a Microsoft host; every Windows entry older than Windows 10 / Server 2016 has `requires_upload`; a second sync changes nothing; Open Question V-5 is answered first.
+- [x] **V7 Nested host validator** — Write `NestedHostValidator` enforcing the contract's validation table, plus `derive(spec)` filling `exposures`, `console_ports`, and generated `vnc_passwords`.
+  - Done when: one test per table row rejects a bad spec with a message naming the network, guest, or field; a valid three-guest, two-network spec passes; `derive` is deterministic for a given spec except for the passwords.
+- [x] **V8 Manifest and unattend rendering** — Write `common/utilities/nested_manifest.py`: `render_manifest(spec, catalog, media)` and `render_secrets(spec, product_keys)`, and `render_autounattend(guest, entry, secrets)` from `.../server_specific/nested/autounattend.xml.tmpl`.
+  - Done when: tests show the manifest contains no admin password, VNC password, or product key; both stay under 256 KB for eight guests; the XML parses for every `unattended_iso` catalog entry, carries the virtio driver paths only when `virtio_win_version` is set, carries LabConfig only for Windows 11 / Server 2025, and its FirstLogonCommands delete `Panther\unattend*.xml` and end with a shutdown.
+- [x] **V9 Builder script** — Write `builder.sh` per the contract's Builder section: resumable step markers, network definitions, cache-then-URL media fetch with SHA-256 check, the four install methods, post-install over `guest-exec`, progress attributes, heartbeat, and phase rules.
+  - Done when: the rendered script passes `bash -n`; tests show no secret is interpolated into a command line (secrets read from `/run/agoge-nested/secrets.json` only); media lives under `/var/lib/libvirt/boot/agoge-nested/`; `virsh destroy` never appears; the script installs and starts the runtime before the first `virt-install`.
+- [x] **V10 Runtime service** — Write `agoge-nested-runtime` per the contract's Runtime section and its systemd unit; the builder installs both.
+  - Done when: tests on the rendered script show the FORWARD metadata reject, the bridge INPUT policy, DNAT/SNAT pairs generated from a sample `ip-aliases` response in slot order, ordered guest start, and the `libvirt-guests` settings; `bash -n` passes.
+- [x] **V11 Nested template server provisioning** — `ImageTemplateManager.check_out` for a record with `nested`: on the first build (phase `queued`), boot from the Debian family image of `parent_os` on `build_machine_type`, size the disk to `add_disk`, and add the four metadata items plus the builder bootstrap, then set phase `provisioning`. On re-check-out of a finalized image, boot from `image-<name>` with only the finalize-watcher bootstrap.
+  - Done when: mocked tests show both paths' metadata keys and machine type, the secrets item is present only on the first build, and a standard image's check-out is unchanged.
+- [x] **V12 Create route** — `POST /compute/images/nested/` (teacher) taking `NestedImageCreateRequest`: validate, derive, write the record (`_create_record`, status CHECKED_OUT, Debian base, `human_interaction` for the parent from `username`/`ssh_key`), then publish the existing check-out. `GET /compute/images/nested/catalog/` (teacher) lists enabled entries.
+  - Done when: router tests cover 200, 400 (validator), 409 (name exists), and 403 (student); the stored record has no product key; a router test shows `/compute/images/nested/catalog/` is not captured by `/{image_name}/`.
+- [x] **V13 Build monitor** — Write `common/utilities/nested_build_monitor.py` `NestedBuildMonitor.refresh(image)` (in `common/` because both deployables call it): read the `agoge-nested/*` guest attributes, update `nested_build` through a field mask, remove `agoge-nested-secrets` once the phase is `ready` or `failed`, and fail the build (stopping the server) when the heartbeat is older than `NESTED_BUILD_STALL_MINUTES` or the build exceeds `NESTED_BUILD_MAX_MINUTES`. Add `GET /compute/images/{name}/nested-build/` (teacher, refreshes then returns `NestedBuildStatusModel`) and a quarter-hourly maintenance task over active builds. `DailyMaintenance` skips template servers whose phase is `provisioning` or `building`.
+  - Done when: mocked tests cover each phase mapping, secrets removal exactly once, stall and timeout failure, and the daily-stop exemption.
+- [x] **V14 Finalize handshake** — `process_action_on_list` publishes `NESTED_FINALIZE` instead of `CHECK_IN` for a nested record in phase `ready` or `finalized` (CHECK_IN is refused with 409 while phase is `provisioning`, `building`, or `finalizing`). The `ControlHandler` branch calls `ImageTemplateManager.finalize_nested()`, which writes the nonce, sets phase `finalizing`, waits up to `NESTED_FINALIZE_TIMEOUT_SECONDS` for `finalize-result`, removes the key, then publishes CHECK_IN on `ok` or records `failed` with the message (leaving the server checked out and running). Write the finalize watcher per the contract and its bootstrap.
+  - Done when: mocked tests show ok → CHECK_IN published once, error → no CHECK_IN and the message stored, timeout → no CHECK_IN and phase back to `ready` with a message; the watcher script never contains `virsh destroy`, and `bash -n` passes.
+- [x] **V15 Media uploads** — A setup operation creates `<project>_nested-media` with CORS for the app origins, a lifecycle rule deleting incomplete `media/` objects after 2 days, and `roles/iam.serviceAccountTokenCreator` for the API service account on itself (needed to sign URLs on Cloud Run). Routes: `POST /compute/images/nested/media/` `{filename, size_bytes, os_id?}` returns `{media_id, upload_url}` (V4 signed resumable upload, `x-goog-content-length-range` capped at `NESTED_MEDIA_MAX_BYTES`, expiry `NESTED_UPLOAD_URL_TTL_SECONDS`); `PUT …/media/{id}/` marks it complete after checking the object's size; `GET …/media/` lists them; `DELETE …/media/{id}/` (uploader or admin). The builder fetches `gs://` media with `gcloud storage cp`.
+  - Done when: tests with mocked storage cover each route, reject an unsupported extension and an oversize request, and show completion fails when the object is missing or the wrong size.
+- [x] **V16 Frontend service layer** — `services/Server/nested.service.ts`, `nested.model.ts`, `utilities/transformers/nested.transform.ts`, and URL constants for every V2/V12–V15 route.
+  - Done when: vitest covers each service function's URL and body (pattern of `rubric.service.test.ts`) and the transformer round trip.
+- [x] **V17 Wizard shell and Host step** — Add an image-type toggle (Standard VM / Nested lab host) to `ServerCreatorForm`; Standard keeps today's form, with the `enable_display` → `display` key and the "Edit Server" heading fixed (Working Note 22). Nested renders `Forms/NestedImage/NestedImageWizard.tsx`: a non-linear MUI `Stepper` following `NewEditor/Editor.tsx` (Host, Networks, Guests, Access, Review) with per-step validation. The Host step has name, description, labels, parent OS, build and lab machine types (from `?nested=true`), disk size (computed minimum, editable upward), username, and SSH key.
+  - Done when: verified in browser on the development project; vitest covers step validation and that the Standard path still submits the same body plus the corrected `display` key.
+- [x] **V18 Networks step** — Editable network list (name, CIDR, NAT/isolated, parent address, DHCP and range), pre-filled with one NAT network `lab` `192.168.100.0/24` (parent `.1`, DHCP `.100–.199`), with client-side versions of the network rules and a read-only topology preview (networks as rails, guests as boxes, inline SVG).
+  - Done when: verified in browser; vitest covers overlap and range validation.
+- [x] **V19 Guests step** — An OS picker dialog grouped by catalog `group`, with search and chips for Auto install / Upload required / Manual install / Eval *n* days / No agent, and the license note before confirming. Then a guest form: name, vCPU/RAM/disk (catalog defaults and minimums), admin username and password (generate, show/hide), product key when required, media (upload with progress through the signed URL, or pick from the media library), NICs (network, static IP or DHCP, expose), packages (Linux `cloud_image`), post-install script, console, autostart, start order and delay.
+  - Done when: verified in browser with an upload of at least 1 GB; vitest covers the per-guest rules and that `requires_upload` blocks Next without media.
+- [x] **V20 Access and Review steps** — Access lists exposures in alias-slot order (move up/down buttons, no drag; MUI X Community) and consoles with their ports. Review shows RAM, vCPU, and disk meters against the chosen machine types, warnings (evaluation expiry, manual installs needing console work, agentless guests using the CTF `offline` driver, legacy Windows needing an upload), the estimated build time, and a credentials summary. Submit posts the request and returns to the server list.
+  - Done when: verified in browser by creating the three-guest host of SC-35; vitest covers the request body built from wizard state.
+- [x] **V21 Image list and details for nested images** — In `ImageListTable`, a nested row shows the build phase (polled through `GET …/nested-build/` while active) and disables Check In while building. `ImageDetailsDialog` lists guests with status, IPs, credentials, and console ports. The Connect dialog shows the `ssh -L <port>:localhost:<port>` tunnel per console and per exposed guest (RDP 3389 / SSH 22 through the tunnel to the guest IP).
+  - Done when: verified in browser on a live build.
+- [x] **V22 Guacamole targets for guests** — `DisplayProxy` and `GuacamoleConfiguration.prepare_guac_connection` honor `alias_index` (target `server.nics[0].ip_aliases[alias_index]`) and `port`. Lab spec validation requires a server using a nested image to have an N1/N2 machine type and at least `len(nested.exposures)` aliases on NIC 0, and every `alias_index` to be in range.
+  - Done when: mocked tests show the connection IP and port for an alias target, a console target, and an ordinary target (unchanged); the spec validator rejects the three bad cases on both save paths.
+- [x] **V23 Spec editor and CTF integration** — In the lab spec server form, selecting a nested image shows a Nested guests panel: guest list, a **Fill alias IPs** button choosing free addresses in NIC 0's subnet in slot order, and **Add connections** creating `HumanInteractionModel` entries (RDP for exposed Windows, SSH for exposed Linux, VNC console otherwise). The machine-type picker hides E2. The N5 rule accepts a parent whose image has `nested`, and the N13 nested-guests section pre-fills from the image (`domain` = guest name, `driver` from catalog `agent`).
+  - Done when: verified in browser; vitest covers alias filling and connection generation; a C/N validator test shows a nested-image parent without `ip_aliases` passes N5.
+- [x] **V24 Nested image guide** — Write `docs/guides/nested-lab-hosts.md`: licensing (evaluation periods, `slmgr /rearm`, no Windows redistribution, upload requirements), sizing, the wizard, build time and troubleshooting (where the builder logs, `agoge-nested/message`), customizing through tunnels, finalize, using the image in a lab (aliases and connections), CTF use, and the warning that root on the parent exposes every guest.
+- [ ] **V25 Live acceptance** — On the development project, build the SC-35 host, customize one guest, finalize, build a lab from it, connect through Guacamole to every guest, and run the SC-38 isolation checks. Record the results and timings in Open Questions.
+  - Done when: SC-35 through SC-38 are met and recorded.
 
 ### Phase 2 (Post-MVP)
 
@@ -1099,6 +1723,14 @@ Ordered by dependency. Each item is one iteration and includes its own tests.
 - [ ] **Attack/defense mode** — Round ticks, SLA checks, per-round flag rotation.
 - [ ] **Authenticated team boards** — Require a Firebase identity on the student routes.
 - [ ] **Event retention** — Automatic deletion of archived events after a configured age.
+- [ ] **Watcher on every lab server** — Install the plant watcher on all Linux servers, not only nested hosts, so every replant avoids a reset.
+- [ ] **Other nested hypervisors** — Windows Hyper-V parents (`Copy-VMFile` + PowerShell Direct), VirtualBox, VMware Workstation, GNS3, and EVE-NG nodes.
+- [ ] **Asynchronous plant confirmation** — Settle long plants from `MaintenanceHandler` instead of polling inside one invocation, lifting the 540 s ceiling on nested plants.
+- [ ] **Unattended legacy Windows** — `winnt.sif` automation for Windows XP and Server 2003.
+- [ ] **Role recipes for nested guests** — One-click post-install recipes: AD DS domain controller with domain join of sibling guests, IIS, DVWA/Juice Shop, Kali metapackages, appliance config injection (pfSense `config.xml`).
+- [ ] **Rebuild and duplicate nested hosts** — Regenerate an image from its saved `nested` spec, or start a new wizard pre-filled from an existing host.
+- [ ] **Guacamole consoles for image servers** — Browser consoles to guests during the build instead of SSH tunnels.
+- [ ] **UEFI and Secure Boot guests** — swtpm + OVMF for guests that need them, once Open Question V-4 allows pristine snapshots.
 
 ---
 
@@ -1112,8 +1744,9 @@ Group 0 is done.
 
 ```bash
 # Python suites. PYTHONPATH is mandatory. ./venv/bin/python is Python 3.12 with the dependencies.
-PYTHONPATH=.:api ./venv/bin/python -m pytest api/unit_tests -q                                          # today 45 passed / 4 failed; after 0.2: 49 passed
-PYTHONPATH=.:cloud_functions ./venv/bin/python -m pytest cloud_functions/tests -q                       # 280 passed
+# The api and cloud_functions lines also enforce SC-23 (>= 85% line coverage of the CTF modules).
+PYTHONPATH=.:api ./venv/bin/python -m pytest api/unit_tests -q --cov=core.ctf --cov=common.utilities.ctf_flags --cov=common.utilities.ctf_state_manager --cov-fail-under=85   # >=1554 passed, 97.75% on 2026-10-17
+PYTHONPATH=.:cloud_functions ./venv/bin/python -m pytest cloud_functions/tests -q --cov=cloud_fn_utilities.course_objects.ctf --cov=handlers.ctf_handler --cov-fail-under=85   # >=641 passed, 94.28% on 2026-10-17
 PYTHONPATH=.:build_files:cloud_functions ./venv/bin/python -m pytest build_files/cloud_deployment/tests -q  # 293 passed
 
 # Frontend unit tests.
@@ -1124,16 +1757,14 @@ PYTHONPATH=.:build_files:cloud_functions ./venv/bin/python -m pytest build_files
 
 # Type check, scoped to the new code: passes when no tsc error names a CTF file.
 (cd frontend && ! npx tsc --noEmit 2>&1 | grep -E '^src/(components/(Teacher|Student)/Ctf|services/Ctf|hooks/useCtfEnabled|utilities/transformers/ctf|components/Common/Dialogs/ActionConfirmDialog)')
+
+# Group V: the same two checks, scoped to the nested image builder code.
+(cd frontend && npx eslint --no-error-on-unmatched-pattern src/components/Teacher/ServerManagement/Forms/NestedImage src/services/Server/nested.service.ts src/services/Server/nested.model.ts src/utilities/transformers/nested.transform.ts --max-warnings 0)
+(cd frontend && ! npx tsc --noEmit 2>&1 | grep -E '^src/(components/Teacher/ServerManagement/Forms/NestedImage|services/Server/nested|utilities/transformers/nested)')
 ```
 
-Coverage gate for SC-23. `pytest-cov` is **not** installed; the first
-iteration that needs it adds `pytest-cov>=6,<8` to the root `requirements.txt`
-only:
-
-```bash
-PYTHONPATH=.:api ./venv/bin/python -m pytest api/unit_tests -q --cov=core.ctf --cov=common.utilities.ctf_flags --cov=common.utilities.ctf_state_manager --cov-fail-under=85
-PYTHONPATH=.:cloud_functions ./venv/bin/python -m pytest cloud_functions/tests -q --cov=cloud_fn_utilities.course_objects.ctf --cov=handlers.ctf_handler --cov-fail-under=85
-```
+`pytest-cov` is in the root `requirements.txt`; the coverage flags in the first two
+commands above are the SC-23 gate. Coverage data goes to `.coverage`, which is gitignored.
 
 **Do not run `api/tests/`.** It is a live integration suite that builds real VMs,
 costs money, takes many minutes, and asserts the active project is in
@@ -1173,10 +1804,19 @@ costs money, takes many minutes, and asserts the active project is in
   Formats pattern at spec-save time; the payload builder re-checks the pattern
   and raises `BadRequest` on a mismatch.
 - No credential of any kind is placed on a workout VM by this feature.
+- No guest flag value appears in a process argument list on the parent or the
+  guest (SC-25); `virsh` takes agent commands on stdin, guest payloads travel as
+  `guest-exec` `input-data`, offline values go through root-only temp files.
+- Linux lab servers reject forwarded traffic to `169.254.169.254` from boot
+  (loader) and during every plant (payload), so a nested guest cannot read its
+  parent's plant payload, startup scripts, SSH keys, or service-account token.
+- Root on a nested host is root on its guests: a game master who gives students
+  root on a parent exposes every guest flag on it. The guide says so (N15).
 - Student responses contain no `path`, `server`, `location_type`, `digest`, or
   `access_level`, and never list a decoy.
 - A decoy verdict's response names neither the host nor the penalty unless
-  `reveal_decoy_penalty` is true.
+  `reveal_decoy_penalty` is true. Without it, every score a student can read
+  (board, hint response, public scoreboard score and rank) excludes `decoy_points`.
 - Every game-master control route that reaches core writes exactly one
   `CtfLogModel`, including when core denies it. Rejections by `teacher_required`
   or `admin_required` happen before core and are not logged.
@@ -1200,6 +1840,13 @@ costs money, takes many minutes, and asserts the active project is in
 - CTF events can only be created on units built after D4 ships, because only
   those servers carry the loader. Any unit with a `ctf` block satisfies this,
   since the `ctf` field ships in the same release.
+- The N2 loader change and the N8 watcher reach only servers built after they
+  ship; a unit built earlier must be rebuilt. Until then its nested hosts fall
+  back to reset on whole-server plants, and guest-scoped resets fail with
+  `"Plant watcher did not respond"`.
+- Guest-side software (`qemu-guest-agent`, `libguestfs-tools` on the parent) is
+  instructor image preparation, not an Agoge dependency; no requirements file
+  changes for Group N.
 
 ### Deployment
 
@@ -1269,6 +1916,30 @@ adds **no** process environment variable. `api/.env` and
 
 ---
 
+## Open Questions
+
+Group N only. Resolve each on a live nested host in the development project
+before N7 and N9 run in the loop; record the answer here.
+
+- [ ] Does a guest on libvirt's default NAT network reach `169.254.169.254` through the parent today, and does the N1 FORWARD rule stop it? (Bridged setups only hit iptables with `br_netfilter` loaded.)
+- [ ] Does a dual-stack instance also need an `ip6tables` FORWARD rule for the IPv6 metadata address?
+- [ ] Does the metadata server accept a guest-attribute key of the form `plant-result-<slug>` (hyphens, up to 32 characters)?
+- [ ] Does `virsh` in shell mode accept a `qemu-agent-command` line as long as a 256 KB payload's base64 needs, or must the relay chunk with `guest-file-write`?
+- [ ] Do guest attributes from a previous boot survive a parent `reset()`? (Affects whether a stale `plant-ack` could be read; the nonce check should make it harmless.)
+
+Group V. Resolve on the development project before the item named; record the answer here.
+
+- [ ] **V-1** (V10) Does 1:1 NAT on an alias IP work with the Google guest agent's local alias routes, and without `canIpForward`? Is the metadata `ip-aliases/` list returned in the order the spec lists the aliases?
+- [ ] **V-2** (V10) Does `libvirt-guests` shut a Windows guest down within the time GCE allows during a workout stop, or does the instance need GCE graceful shutdown configured?
+- [ ] **V-3** (V9) Which virtio-win release is the last with drivers and qemu-ga for Windows 7 / 2008 R2, and for 8.1 / 2012 R2? Pin them in the catalog.
+- [ ] **V-4** (V14) Can Debian 12's libvirt (9.0) take internal snapshots of a UEFI guest? Can Debian 13's? If either can, UEFI becomes an option for Windows 11.
+- [x] **V-5** (V6) What are the current Microsoft Evaluation Center URLs and SHA-256 values for Server 2016/2019/2025 and Windows 10/11 Enterprise (if still offered)? (Server 2022: `https://go.microsoft.com/fwlink/p/?LinkID=2195280&clcid=0x409&culture=en-us&country=US` worked on 2026-10-17.) Also the Kali cloud image URL and format.
+  - **Answered 2026-10-17** by downloading every file from its publisher's own site. The URL, SHA-256 and size for each entry are in progress.md under "V-5 answers". Summary: Server 2016, 2019, 2022 and 2025 and Windows 11 Enterprise (also LTSC 2024) are offered as en-US ISOs on `software-static.download.prss.microsoft.com`, which is where the Evaluation Center's `go.microsoft.com` links redirect. Windows 10 Enterprise is **no longer offered**: its Evaluation Center page has no download links. Microsoft publishes a SHA-256 only for Windows 11 Enterprise (on its "verify the authenticity" support page), and the download matched it. The other hashes were computed from downloads whose size matched the server's `Content-Length`. Kali: the cloud image is `kali.download/cloud-images/kali-2026.2/kali-linux-2026.2-cloud-genericcloud-amd64.tar.xz`, format `tar.xz` holding a single `disk.raw`. It matched the published `SHA256SUMS`.
+- [ ] **V-6** (V15) Can the Cloud Run API service account sign V4 URLs once it has `serviceAccountTokenCreator` on itself, and does a browser resumable PUT to the bucket succeed with the CORS rule?
+- [ ] **V-7** (V13) What are the size limits on a guest attribute value, and how many keys can one namespace hold?
+
+---
+
 ## Design Decisions
 
 Each row is a decision taken deliberately, with the alternative that was
@@ -1305,6 +1976,23 @@ change this table first.
 | No fuzzy flag matching | Reusing `PuzzleControl._similarity` | Fuzzy matching on a 20-hex digest cannot help. |
 | Hints cost points and are always available | Time-gated hints | Time gating needs a per-board clock the event does not otherwise need. |
 | Archived events are never deleted automatically | Retention in `DailyMaintenance` | Deletion is an explicit admin action. |
+| Nested guests reached over the hypervisor (qemu-agent, libguestfs) | SSH/WinRM from the parent, or guests pulling from the parent | Guest subnets and routes vary and the parent may have no address on them; students change passwords and firewalls; a pull endpoint on a shared bridge leaks other guests' flags. |
+| Guests declared once in `ctf.nested_guests`, flags keep `server` = parent | Making each guest a `ServerModel` | A guest is not a GCE instance; keeping `server` as the parent leaves instance naming, `mark_stale`, and SC-9 untouched. |
+| `qemu-agent` is the default driver | `offline` (libguestfs) as default | qemu-agent keeps the guest running and supports every Windows placement; offline reboots the guest and cannot set ADS, ACLs, or Hidden. |
+| A plant watcher on nested hosts | Resetting the parent, as for other servers | A reset hard-kills every guest (disk corruption risk) and a nested reboot does not fit the 540 s function timeout. |
+| A guest-scoped plant never resets the parent | Falling back to reset, as whole-server plants do | Resetting the parent to fix one guest disrupts every sibling guest and the teams working on them. |
+| One result key per guest | One `plant-result` for the whole server | Guests succeed and fail independently, and the 200-character message would be shared by every guest. |
+| Nested lab hosts are ordinary Agoge images built through the existing check-out/check-in cycle | A separate nested-image pipeline and collection | The server picker, sharing, copying, and lab builds already work on `image/<name>`; only the build and the finalize step are new. |
+| The build runs on the parent (startup-script builder), with progress in guest attributes | Driving the build from the Cloud Function | A Windows install takes many minutes and the function stops at 540 s; guest attributes already carry CTF plant results without network access. |
+| Nested virtualization comes from the `enable-vmx` image license, and is also requested explicitly | Relying on `ip_aliases` to turn it on | Verified 2026-10-17: an instance from a licensed image has VMX without the flag, so a lab server works whether or not the spec author adds aliases. |
+| Guests reach the VPC through 1:1 NAT on the lab server's alias IPs | Bridging guests onto the VPC, or port forwards on the primary IP | GCE does not bridge foreign MACs, and alias IPs are already how Agoge marks a nested host; one alias per guest keeps every port of a guest reachable. |
+| Guest consoles are VNC on the parent, one port per guest | Requiring network access to each guest | Consoles work for isolated guests, manual installs, and agentless legacy systems, and survive a student breaking a guest's network. |
+| Windows 11 and Server 2025 install under BIOS with LabConfig bypass keys | UEFI + Secure Boot + swtpm | Internal `agoge-pristine` snapshots, which N11's rebuild uses, are not available for pflash UEFI guests on Debian 12's libvirt; lab use does not need Secure Boot. |
+| Product keys are used at build time and never stored | Saving them on the image document | Firestore image documents are readable by every teacher, and copied when shared. |
+| Guest admin passwords are stored on the image document | Write-only secrets | Lab authors need them for Guacamole connections, exactly like `human_interaction` passwords today. |
+| Cloud-init is disabled, not purged, in Linux cloud images | Purging it | Purging removed the only network configuration from the Debian cloud image in the 2026-10-17 build. |
+| Media is cached in the project bucket by SHA-256 | Downloading on every build | Publisher URLs move and Microsoft links are slow; the cache also makes a rebuild reproducible. |
+| One failed guest does not fail the host | All-or-nothing builds | An instructor can fix or replace one guest from the console instead of waiting for a full rebuild. |
 
 ---
 
@@ -1349,3 +2037,44 @@ Facts about this repository that will otherwise cost an iteration:
     `object.__new__(Handler)` with attributes set by hand, or `patch.object` on
     `CloudEnv`, `Logger`, `PubSubManager`, and
     `DocumentDatabaseFactory.create_db_object`.
+14. **Reference nested host.** `image-nested-hv-debian12` in the development
+    project was built by hand on 2026-10-17 and registered as `image/nested-hv-debian12`.
+    It carries the `enable-vmx` license. An `n2-standard-4` instance built from it
+    **without** `--enable-nested-virtualization` had VMX, and both guests
+    autostarted with working agents. Windows Server 2022 went from ISO boot to the
+    FirstLogonCommands power-off in under 10 minutes on `n2-standard-8` with
+    `--cpu host-passthrough`.
+15. **libvirt cannot read `/root`.** qemu runs as `libvirt-qemu`; media under
+    `/root` fails with "Permission denied". Keep media under `/var/lib/libvirt/boot/`.
+16. **Debian cloud images get their network from cloud-init.** Purging cloud-init
+    left the guest with no network configuration; a systemd-networkd `en*` DHCP
+    file fixed it. Disable cloud-init instead. `virt-customize --write` does not
+    expand `\n`; use `--run-command 'printf …'` or `--upload`.
+17. **`virt-install --wait` returns at the first Windows Setup reboot**, not at
+    the end of the install. Wait for the domain to reach `shut off` after
+    FirstLogonCommands powers it off.
+18. **Template servers never get nested virtualization.** `_build_server` checks
+    `self.ip_aliases`, which only `LabServerManager._add_nics` sets. In the same
+    method, the local `min_cpu_platform` is read before the N1/N2 platform is
+    assigned to `server_spec`, so the platform is never sent (V1).
+19. **`AgogeImageModel.base_family` defaults to the tuple `(None,)`** because of a
+    trailing comma (V5).
+20. **Machine types are capped at 17000 MB and N1/N2/E2.** `ComputeMachineType.get`
+    returns `None` for anything larger (for example `n2-standard-8`), and
+    `_lookup_machine_type` then raises `AttributeError` on `.name`. Today's
+    lab and image servers cannot use more than 16 GB (V2).
+21. **Template servers can get two `startup-script` items** when the image has a
+    custom script and a Linux user-creation script (V4).
+22. **Create Image form defects.** It sends `enable_display`, but
+    `_generate_human_interaction` reads `display`, so the checkbox does nothing.
+    The heading says "Edit Server". No image or server-management component,
+    service, or transformer has a vitest test.
+23. **Image servers today.** They sit on the `default` network with a public IP
+    and a `<name><parent_dns_suffix>` DNS record. The Connect dialog shows SSH/RDP
+    to that name; the VPC allows only 22 and 3389 (`default-allow-management`).
+    `DailyMaintenance` stops every checked-out template server at midnight.
+    Check-in does stop, snapshot, image delete, and image insert in one 540 s
+    invocation. `self.server_spec = self.Server` assigns the dataclass itself, so
+    attributes persist across calls in a warm function instance; set every field
+    the nested path reads. The image routes take raw `request.json()` dicts; the
+    nested routes use Pydantic request models.

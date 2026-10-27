@@ -95,7 +95,7 @@ git pull --ff-only origin feature/wireguard-kit-bootstrap
 Preserve any local edits reported by `git status` before switching branches.
 Restart `setup.py` after pulling; an already running process keeps the menu it
 loaded at startup. The updated **Server Images & Build Specs** menu has
-**7. Upload WireGuard Community Lab Template** and **8. Back to Main Menu**.
+**7. Upload WireGuard Community Lab Template** and **10. Back to Main Menu**.
 If **7** is still **Back to Main Menu**, the running process is using an older
 checkout. In an IDE, check that its script path and source roots point to the
 updated repository. GCP authentication, IAM permissions, and the selected

@@ -9,8 +9,11 @@ from fastapi import (
     Response
 )
 
-from common.exceptions import NotFound, BadRequest, Conflict, Forbidden, OperationTimeout, ServiceUnavailable, AgogeValidationError, NotReady
-from common.models.agoge import AgogeImageModel
+from starlette.concurrency import run_in_threadpool
+
+from common.exceptions import NotFound, BadRequest, Conflict, ContentTooLarge, Forbidden, OperationTimeout, ServiceUnavailable, AgogeValidationError, NotReady
+from common.models.agoge import (AgogeImageModel, NestedBuildStatusModel, NestedImageCreateRequest, NestedMediaCreateRequest,
+                                 NestedMediaModel, NestedMediaUploadResponse)
 from common.models.users import AgogeUser
 from common.models.response import (
     AgogeResponse,
@@ -18,12 +21,16 @@ from common.models.response import (
     ImageListResponse,
     ComputeImageListResponse,
     GoogleImageListResponse,
-    MachineTypeListResponse
+    MachineTypeListResponse,
+    NestedMediaListResponse,
+    NestedOsCatalogListResponse,
 )
 from common.constants.enumerators import ImageScopes
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 
 from core.compute.image import ComputeImage
+from core.compute.nested.media import NestedMedia
+from core.compute.nested.nested_image import NestedImage
 from dependencies import teacher_required, admin_required, get_cloud_env
 
 
@@ -108,6 +115,8 @@ async def process_image_list_action(
         raise HTTPException(status_code=503, detail=e.message)
     except NotFound as e:
         raise HTTPException(status_code=404, detail=e.message)
+    except Conflict as e:
+        raise HTTPException(status_code=409, detail=e.message)
 
 
 @compute_image_router.get("/project/")
@@ -135,20 +144,122 @@ async def list_project_images(
         raise HTTPException(status_code=400, detail=e.message)
 
 
+# Sync: listing calls Compute, so it runs in the worker thread pool instead of blocking the event loop.
 @compute_image_router.get('/machine-types/')
-async def list_machine_types(
+def list_machine_types(
+    nested: bool = False,
     env_dict: dict = Depends(get_cloud_env),
     current_user: AgogeUser = Depends(teacher_required)
 ) -> AgogeResponse[MachineTypeListResponse]:
     log_args = {
         'user': current_user.uid,
+        'nested': nested,
     }
     try:
-        machine_types = ComputeImage(env_dict=env_dict).machine_types()
+        machine_types = ComputeImage(env_dict=env_dict).machine_types(nested=nested)
         return AgogeResponse(data={'items': machine_types})
     except NotFound as e:
         logger.error(e.message, **log_args)
         raise HTTPException(status_code=404)
+
+
+@compute_image_router.post('/nested/')
+def create_nested_image(
+    body: NestedImageCreateRequest,
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[AgogeIDResponse]:
+    # Sync: validation reads machine types from Compute, so it runs in the worker thread pool.
+    log_args = {
+        'user': current_user.uid,
+        'image': body.server_name,
+    }
+    try:
+        logger.info(f'POST request to create nested image from user {current_user.uid}', **log_args)
+        image = NestedImage(env_dict).create(current_user, body)
+        return AgogeResponse(data={'build_id': image.name})
+    except Conflict as e:
+        raise HTTPException(status_code=409, detail=e.message)
+    except ServiceUnavailable as e:
+        logger.error(f'create_nested_image - {e.message}', **log_args)
+        raise HTTPException(status_code=503, detail=e.message)
+    except (BadRequest, AgogeValidationError) as e:
+        logger.error(f'create_nested_image - {e.message}', **log_args)
+        raise HTTPException(status_code=400, detail=e.message)
+
+
+# Sync: the catalog is a Firestore read, so it runs in the worker thread pool.
+@compute_image_router.get('/nested/catalog/')
+def list_nested_catalog(
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[NestedOsCatalogListResponse]:
+    return AgogeResponse(data={'items': NestedImage(env_dict).list_catalog()})
+
+
+# The media routes are sync: each one calls Cloud Storage, so it runs in the worker thread pool.
+@compute_image_router.post('/nested/media/')
+def create_nested_media(
+    body: NestedMediaCreateRequest,
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[NestedMediaUploadResponse]:
+    log_args = {'user': current_user.uid, 'filename': body.filename, 'size_bytes': body.size_bytes}
+    try:
+        return AgogeResponse(data=NestedMedia(env_dict).create_upload(current_user, body))
+    except BadRequest as e:
+        logger.error(f'create_nested_media - {e.message}', **log_args)
+        raise HTTPException(status_code=400, detail=e.message)
+    except ContentTooLarge as e:
+        logger.error(f'create_nested_media - {e.message}', **log_args)
+        raise HTTPException(status_code=413, detail=e.message)
+    except ServiceUnavailable as e:
+        logger.error(f'create_nested_media - {e.message}', **log_args)
+        raise HTTPException(status_code=503, detail=e.message)
+
+
+@compute_image_router.get('/nested/media/')
+def list_nested_media(
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[NestedMediaListResponse]:
+    return AgogeResponse(data={'items': NestedMedia(env_dict).list(current_user)})
+
+
+@compute_image_router.put('/nested/media/{media_id}/')
+def complete_nested_media(
+    media_id: str,
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[NestedMediaModel]:
+    log_args = {'user': current_user.uid, 'media_id': media_id}
+    try:
+        return AgogeResponse(data=NestedMedia(env_dict).complete(current_user, media_id))
+    except NotFound as e:
+        raise HTTPException(status_code=404, detail=e.message)
+    except Forbidden as e:
+        raise HTTPException(status_code=403, detail=e.message)
+    except BadRequest as e:
+        logger.error(f'complete_nested_media - {e.message}', **log_args)
+        raise HTTPException(status_code=400, detail=e.message)
+    except ServiceUnavailable as e:
+        logger.error(f'complete_nested_media - {e.message}', **log_args)
+        raise HTTPException(status_code=503, detail=e.message)
+
+
+@compute_image_router.delete('/nested/media/{media_id}/')
+def delete_nested_media(
+    media_id: str,
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[AgogeIDResponse]:
+    try:
+        NestedMedia(env_dict).delete(current_user, media_id)
+        return AgogeResponse(data={'build_id': media_id})
+    except NotFound as e:
+        raise HTTPException(status_code=404, detail=e.message)
+    except Forbidden as e:
+        raise HTTPException(status_code=403, detail=e.message)
 
 
 @compute_image_router.get("/{image_name}/")
@@ -168,6 +279,27 @@ async def get_image(
     except NotFound as e:
         logger.error(e.message, **log_args)
         raise HTTPException(status_code=404, detail=e.message)
+
+
+@compute_image_router.get('/{image_name}/nested-build/')
+def get_nested_build(
+    image_name: str,
+    env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser = Depends(teacher_required),
+) -> AgogeResponse[NestedBuildStatusModel]:
+    # Sync: the refresh reads guest attributes from Compute, so it runs in the worker thread pool.
+    log_args = {
+        'user': current_user.uid,
+        'image': image_name,
+    }
+    try:
+        return AgogeResponse(data=NestedImage(env_dict).build_status(image_name))
+    except NotFound as e:
+        logger.error(e.message, **log_args)
+        raise HTTPException(status_code=404, detail=e.message)
+    except BadRequest as e:
+        logger.error(e.message, **log_args)
+        raise HTTPException(status_code=400, detail=e.message)
 
 
 @compute_image_router.get("/{image_name}/state/")
@@ -212,13 +344,14 @@ async def create_image_server(
     json_data = await request.json()
     try:
         logger.info(f'POST request to create image server from user, {current_user.uid}', **log_args)
-        ComputeImage(env_dict=env_dict).create_image_server(
-            current_user,
-            json_data
-        )
+        # Worker thread: create waits up to CHECK_OUT_PUBLISH_TIMEOUT_SECONDS on the publish future.
+        await run_in_threadpool(ComputeImage(env_dict=env_dict).create_image_server, current_user, json_data)
         return Response(status_code=200)
     except Conflict as e:
         raise HTTPException(status_code=409, detail=e.message)
+    except ServiceUnavailable as e:
+        logger.error(e.message, **log_args)
+        raise HTTPException(status_code=503, detail=e.message)
     except NotFound as e:
         logger.error(e.message, **log_args)
         raise HTTPException(status_code=404, detail=e.message)
@@ -268,7 +401,9 @@ async def process_image_action(
     if json_data:
         try:
             logger.info(f"PUT request for image action from user {current_user.uid}", **log_args)
-            ComputeImage(env_dict=env_dict).process_action_on_image(
+            # Worker thread: a BUILD waits up to CHECK_OUT_PUBLISH_TIMEOUT_SECONDS on the publish future.
+            await run_in_threadpool(
+                ComputeImage(env_dict=env_dict).process_action_on_image,
                 requester=current_user,
                 data=json_data,
                 server_name=image_name,
@@ -276,6 +411,9 @@ async def process_image_action(
             return Response(status_code=200)
         except Conflict as e:
             raise HTTPException(status_code=409, detail=e.message)
+        except ServiceUnavailable as e:
+            logger.error(e.message, **log_args)
+            raise HTTPException(status_code=503, detail=e.message)
         except NotFound as e:
             logger.error(e.message, **log_args)
             raise HTTPException(status_code=404)

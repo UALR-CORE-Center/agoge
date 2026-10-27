@@ -7,6 +7,7 @@ import {URL_TEACHER_SERVERS_EDITOR} from "../../../../router/urls";
 import {AgogeImage} from "../../../../services/Server/image.model";
 import ChipListView from "../../../Common/ChipListView";
 import ReviewItemValueOrSkeleton from "../../Specifications/NewEditor/Review/ReviewItemValueOrSkeleton";
+import NestedGuestDetails from "../Forms/NestedImage/NestedGuestDetails";
 import {
     ImageListItem,
     NestedListItem,
@@ -152,6 +153,7 @@ export const ImageDetailsDialog: React.FC<ImageDetails> = (props) => {
                                         </ItemValue>
                                     </ImageListItem>
                                 </List>
+                                {image.nested && <NestedGuestDetails spec={image.nested} build={image.nested_build} />}
                             </Stack>
                         </DialogContent>
                         <DialogActions>

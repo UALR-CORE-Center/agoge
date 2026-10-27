@@ -15,6 +15,7 @@ class PubSub:
         ADMIN = "ADMIN"
         IOT = "IOT"
         AGENCY = "AGENCY"
+        CTF = "CTF"
 
     class Actions(Enum):
         BUILD = 1
@@ -32,6 +33,11 @@ class PubSub:
         EXTEND_RUNTIME = 13
         CHECK_IN = 16
         CHECK_OUT = 17
+        # 18-20 were unused; a CTF reset is CTF_HOST_RESET because RESET_EXPIRATION already exists
+        CTF_ARM_BOARD = 18   # plant every flag on one board, then aggregate
+        CTF_PLANT = 19       # plant one board's flags on one server (or all its servers)
+        CTF_HOST_RESET = 20  # reset one server of one board in a ResetMode
+        NESTED_FINALIZE = 21  # shut a nested template server's guests down and snapshot them, then CHECK_IN
 
     class CourseObjects(Enum):
         """Course Lab objects"""
@@ -68,3 +74,11 @@ class PubSub:
         SNAPSHOT_NAME = 'snapshot_name'
         SNAPSHOT_TYPE = 'snapshot_type'
         USER = 'user'
+        CTF_ID = 'ctf_id'
+        WORKOUT_ID = 'workout_id'
+        RESET_MODE = 'reset_mode'
+        # Nested guest slug for a CTF host reset that targets one guest, not the parent server
+        GUEST = 'guest'
+        # JSON guest -> Windows product key on a nested CHECK_OUT; never persisted, redacted from logs
+        PRODUCT_KEYS = 'product_keys'
+        # CTF messages reuse SERVER_NAME for the target server

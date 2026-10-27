@@ -14,6 +14,7 @@ main_app/tests/test.py
 /.pnp
 .pnp.js
 /coverage
+.coverage
 /build
 .DS_Store
 .env.local
@@ -38,9 +39,11 @@ frontend/node_modules/.cache/default-development/0.pack
 frontend/node_modules/.cache/default-development/index.pack
 frontend/.env*
 /.staging/
+/.deploy_logs/
 venv
 *.log
 api/.env.bak
 CLAUDE.md
 .vscode/
 bugReport.md
+.claude/

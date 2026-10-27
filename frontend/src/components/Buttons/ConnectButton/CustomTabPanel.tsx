@@ -1,6 +1,7 @@
 import {Box, Divider, Tab, Tabs, Typography} from "@mui/material";
 import React from "react";
 import {HumanInteraction} from "../../../services/Specification/specification.model";
+import {directConnection} from "../../Teacher/Specifications/NewEditor/ServerForm/nestedServer";
 import {ConnectButtonProps} from "./BaseConnectButton";
 import {UserDetailField} from "./UserDetailField";
 
@@ -38,7 +39,16 @@ const TabPanel: React.FC<{
 
 export const CustomTabPanel: React.FC<Props> = (props) => {
     const { item, fullInteractions, selectedProtocol, handleProtocolChange, renderGuacamoleConnect } = props;
-    const hostname = item.dns_record || item.hostname;
+    const serverHostname = item.dns_record || item.hostname;
+    const jumpbox = directConnection(fullInteractions);
+
+    if (fullInteractions.length === 0) {
+        return (
+            <Typography sx={{p: {xs: 0, sm: 2}}}>
+                No connections are available for this server. Contact your instructor.
+            </Typography>
+        );
+    }
 
     return (
         <Box sx={{ maxHeight: "70vh", overflowY: "auto", p: { xs: 0, sm: 2 }, pt: { xs: 1, sm: 2 } }}>
@@ -62,7 +72,11 @@ export const CustomTabPanel: React.FC<Props> = (props) => {
                 ))}
             </Tabs>
 
-            {fullInteractions.map((interaction, index) => (
+            {fullInteractions.map((interaction, index) => {
+                // A nested guest answers on an alias IP inside the lab; only the jumpbox is forwarded the
+                // parent's outside SSH, so only it can use the parent's hostname
+                const hostname = interaction.nested_guest && interaction !== jumpbox ? null : serverHostname;
+                return (
                 <TabPanel
                     key={`panel-${interaction.protocol}-${index}`}
                     protocol={interaction.protocol}
@@ -138,7 +152,8 @@ export const CustomTabPanel: React.FC<Props> = (props) => {
                         </>
                     )}
                 </TabPanel>
-            ))}
+                );
+            })}
 
             {renderGuacamoleConnect && renderGuacamoleConnect()}
         </Box>

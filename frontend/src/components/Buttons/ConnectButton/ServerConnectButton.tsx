@@ -1,5 +1,6 @@
 import React from "react";
 import {ServerStates} from "../../../types/AgogeStates";
+import NestedTunnelHints from "../../Teacher/ServerManagement/Forms/NestedImage/NestedTunnelHints";
 import {BaseConnectButton, ConnectButtonProps} from "./BaseConnectButton";
 import {CustomTabPanel} from "./CustomTabPanel";
 
@@ -17,15 +18,27 @@ export const ServerConnectButton: React.FC<ConnectButtonProps> = ({ item }) => {
     const isDisabled = () => item.state === ServerStates.START || item.state !== ServerStates.RUNNING;
 
     const renderDetails = (item: any) => {
+        // The parent's SSH access (human_interaction) is the tunnel endpoint for nested guests.
+        const parentSsh = fullInteractions.find((interaction: any) => interaction.protocol === "ssh");
         return (
-            <CustomTabPanel
-                key={item.name}
-                item={item}
-                fullInteractions={fullInteractions}
-                selectedProtocol={selectedProtocol}
-                handleProtocolChange={handleProtocolChange}
-                parsedHumanInteraction={parsedHumanInteraction}
-            />
+            <>
+                <CustomTabPanel
+                    key={item.name}
+                    item={item}
+                    fullInteractions={fullInteractions}
+                    selectedProtocol={selectedProtocol}
+                    handleProtocolChange={handleProtocolChange}
+                    parsedHumanInteraction={parsedHumanInteraction}
+                />
+                {item.nested && (
+                    <NestedTunnelHints
+                        spec={item.nested}
+                        build={item.nested_build}
+                        hostname={item.dns_record || item.hostname}
+                        username={parentSsh?.username}
+                    />
+                )}
+            </>
         );
     };
 

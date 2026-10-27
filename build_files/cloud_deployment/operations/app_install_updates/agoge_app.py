@@ -1,4 +1,4 @@
-import subprocess
+import threading
 from googleapiclient import discovery
 from pathlib import Path
 import shutil
@@ -8,11 +8,23 @@ from common.utilities.gcp.cloud_env import CloudEnv
 from common.exceptions import AgogeValidationError
 from cloud_deployment.operations.app_install_updates.firebase_build import prepare_firebase_auth
 from cloud_deployment.operations.env_and_quotas.shared_api_secrets import ensure_shared_api_secret_access
+from cloud_deployment.utilities import console as ui
+
+CLOUD_BUILD_CONFIGS = Path(__file__).resolve().parent / 'cloudbuild'
+
+# Uploaded with neither image nor function source; .env is kept on purpose.
+# gcloud's per-minute API rate limits (e.g. Resource Manager reads) clear on their own.
+QUOTA_ERROR_PATTERN = r'status=\[429\]|Quota exceeded|RESOURCE_EXHAUSTED'
+
+STAGING_IGNORE = ('__pycache__', '*.pyc', '.DS_Store', '*.bak', 'tests', 'unit_tests', '*.http')
 
 
 class Commands:
-    BASE_BUILD_CLOUD_RUN_COMMAND = "gcloud builds submit {target_dir} --tag {image_path} --project={project}"
-    BUILD_API_CLOUD_RUN_COMMAND = "gcloud builds submit . --tag {image_path} --project={project}"
+    # Layer-cached Docker builds; see cloudbuild/*.yaml.
+    BASE_BUILD_CLOUD_RUN_COMMAND = (
+        "gcloud builds submit {target_dir} --config={config} "
+        "--substitutions=_IMAGE={image_path} --project={project}"
+    )
     BASE_DEPLOY_CLOUD_RUN_COMMAND = (
         "gcloud run deploy agoge-{app_type} "
         "--image {image_path} "
@@ -23,6 +35,13 @@ class Commands:
         "--region={region} "
         "--allow-unauthenticated " 
         "--service-account={service_account}"
+    )
+    # The default TCP probe passes as soon as gunicorn binds the port, before the workers have imported
+    # the app; a min instance then idles half-loaded with throttled CPU and its first request waits ~25 s.
+    # An HTTP probe (api/health.py) keeps startup CPU until a worker actually answers.
+    API_STARTUP_PROBE = (
+        "--startup-probe=httpGet.path=/health/ready,httpGet.port=8080,"
+        "periodSeconds=3,timeoutSeconds=3,failureThreshold=60"
     )
     ADD_DEFAULT_COMPUTE_EDITOR_ROLE = (
         "gcloud projects add-iam-policy-binding {project} "
@@ -38,7 +57,7 @@ class Commands:
         "--memory=2048Mi "
         "--entry-point=agoge_cloud_function "
         "--runtime=python311 "
-        "--source=\"./.staging/\" "
+        "--source=\"{source}\" "
         "--service-account={project_number}-compute@developer.gserviceaccount.com "
         "--run-service-account={service_account} "
         "--timeout=540s "
@@ -70,6 +89,11 @@ class Commands:
         API = 'api/'
         STAGING = '.staging/'
 
+    BUILD_CONFIGS = {
+        AppType.API: CLOUD_BUILD_CONFIGS / 'cached_image.yaml',
+        AppType.REACT: CLOUD_BUILD_CONFIGS / 'cached_multistage_image.yaml',
+    }
+
     def __init__(self, env):
         self.env = env
 
@@ -85,10 +109,10 @@ class Commands:
         target_dir: str
     ) -> str:
         image_path = self.image_path(app_type)
-        print(f"Submitting build for agoge-{app_type} in {self.env.project}")
         if app_type in (self.AppType.REACT, self.AppType.API):
             return self.BASE_BUILD_CLOUD_RUN_COMMAND.format(
-                target_dir=target_dir, image_path=image_path, project=self.env.project
+                target_dir=target_dir, config=self.BUILD_CONFIGS[app_type],
+                image_path=image_path, project=self.env.project,
             )
 
     def deploy_cloud_run(
@@ -102,7 +126,6 @@ class Commands:
         else:
             service_account = self.ServiceAccounts.AGOGE.format(project=self.env.project)
 
-        print(f"Deploying agoge-{app_type} in {self.env.project} using service account {service_account}")
         cmd = self.BASE_DEPLOY_CLOUD_RUN_COMMAND.format(
             app_type=app_type,
             image_path=image_path,
@@ -110,13 +133,16 @@ class Commands:
             project=self.env.project,
             service_account=service_account
         )
+        if app_type == self.AppType.API:
+            cmd = f"{cmd} {self.API_STARTUP_PROBE}"
         if min_instance:
             return f"{cmd} --min-instances=1"
         return cmd
 
-    def deploy_cloud_function(self):
+    def deploy_cloud_function(self, source: str = f'./{AppDirectories.STAGING}{AppType.CLOUD_FN}/'):
         service_account = self.ServiceAccounts.AGOGE.format(project=self.env.project)
         return self.DEPLOY_CLOUD_FUNCTION_COMMAND.format(
+            source=source,
             project=self.env.project,
             region=self.env.region,
             service_account=service_account,
@@ -125,6 +151,8 @@ class Commands:
 
 
 class AgogeApp:
+    staging_dir = Path(".staging")
+
     def __init__(
         self,
         suppress: bool = True,
@@ -153,16 +181,28 @@ class AgogeApp:
         self.cloud_fn_dir = Path("cloud_functions")
         self.api_dir = Path("api")
 
-    def deploy_main_app(self) -> bool:
-        confirm_all = int(input("Deploy\n - [0] All\n - [1] Specific\nSelection: "))
+    def select_main_app_targets(self) -> tuple[str, ...]:
+        """Ask which Cloud Run apps to deploy, before any long-running work starts."""
+        confirm_all = int(ui.prompt("Deploy  [0] All   [1] Specific  ›"))
         if confirm_all not in (0, 1):
             raise AgogeValidationError('Choose 0 for All or 1 for Specific.')
-        api_or_frontend = None
-        if confirm_all != 0:
-            api_or_frontend = int(input("Select an app to deploy:\n - [0] API\n - [1] React\nSelection: "))
-            if api_or_frontend not in (0, 1):
-                raise AgogeValidationError('Choose 0 for API or 1 for React.')
-        include_frontend = confirm_all == 0 or api_or_frontend == 1
+        if confirm_all == 0:
+            return Commands.AppType.API, Commands.AppType.REACT
+        api_or_frontend = int(ui.prompt("App     [0] API   [1] React     ›"))
+        if api_or_frontend not in (0, 1):
+            raise AgogeValidationError('Choose 0 for API or 1 for React.')
+        return (Commands.AppType.API,) if api_or_frontend == 0 else (Commands.AppType.REACT,)
+
+    def deploy_main_app(self, targets: tuple[str, ...] | None = None, *, with_cloud_function: bool = False) -> bool:
+        """Deploy the selected Cloud Run apps, optionally alongside the Cloud Function.
+
+        Everything prepares concurrently, but when the API is part of the
+        deploy, React and the Cloud Function go live only after the API
+        deployment succeeds, so a failed API never sits behind a newer UI or
+        a function built against newer shared code.
+        """
+        targets = targets or self.select_main_app_targets()
+        include_frontend = Commands.AppType.REACT in targets
         if include_frontend:
             prepare_firebase_auth(self.env)
 
@@ -170,77 +210,130 @@ class AgogeApp:
 
         try:
             self._write_env_files(include_frontend=include_frontend)
-            if confirm_all == 0:
-                if not self._deploy_api():
-                    return False
-                return self._deploy_react()
-            else:
-                if api_or_frontend == 0:
-                    return self._deploy_api()
-                else:
-                    return self._deploy_react()
+            # Grant parent-secret access once, up front: concurrent grants from
+            # the API and function tasks race on the same IAM policy etag.
+            deploys_api = Commands.AppType.API in targets
+            if deploys_api or with_cloud_function:
+                with ui.status('Checking shared API secret access'):
+                    ensure_shared_api_secret_access(self.env)
+            tasks = []
+            wait_for_api = None
+            if deploys_api:
+                api_finished, api_result = threading.Event(), []
+
+                def deploy_api() -> bool:
+                    deployed = False
+                    try:
+                        deployed = self._deploy_api(preflight=False)
+                        return deployed
+                    finally:
+                        api_result.append(deployed)
+                        api_finished.set()
+
+                def wait_for_api() -> bool:
+                    ui.set_phase('Waiting for API deployment')
+                    api_finished.wait()
+                    return api_result[0]
+
+                tasks.append(('API', deploy_api))
+            if include_frontend:
+                tasks.append(('React', (
+                    (lambda: self._deploy_react(wait_for=wait_for_api)) if wait_for_api else self._deploy_react
+                )))
+            if with_cloud_function:
+                tasks.append(('Cloud Function', lambda: self.deploy_cloud_functions(
+                    preflight=False, wait_for=wait_for_api,
+                )))
+
+            results = ui.run_tasks(f'Deploying to {self.env.project}', tasks)
+            return all(results.values())
         finally:
             self._restore_env_files()
+            self._remove_empty_staging_root()
 
-    def _deploy_api(self):
-        ensure_shared_api_secret_access(self.env)
-        self._stage_build(app_type=Commands.AppType.API)
+    def _deploy_api(self, preflight: bool = True):
+        if preflight:
+            ensure_shared_api_secret_access(self.env)
+        staging = self._stage_build(app_type=Commands.AppType.API)
+        try:
+            return self._deploy_cloud_run(
+                app_type=self.commands.AppType.API,
+                target_dir=str(staging),
+                min_instance=True
+            )
+        finally:
+            self._remove_staging(staging)
 
-        return self._deploy_cloud_run(
-            app_type=self.commands.AppType.API,
-            target_dir=self.commands.AppDirectories.STAGING,
-            min_instance=True
-        )
-
-    def _deploy_react(self):
+    def _deploy_react(self, wait_for=None):
         return self._deploy_cloud_run(
             app_type=self.commands.AppType.REACT,
-            target_dir=self.commands.AppDirectories.REACT
+            target_dir=self.commands.AppDirectories.REACT,
+            wait_for=wait_for,
         )
 
-    def _stage_build(self, app_type: str) -> None:
+    def _stage_build(self, app_type: str) -> Path:
         """
         In order to utilize the shared 'common' code, we need to first build the directory
-        in a format that resembles the dev environment
+        in a format that resembles the dev environment. Each app gets its own
+        .staging/<app_type>/ so the API and Cloud Function can stage concurrently.
         """
-        print(f'Staging build for {app_type} in {self.env.project}')
-        if self.staging_dir.exists():
-            # First clean up any residual files from previous staging
-            shutil.rmtree(self.staging_dir)
-
-        self.staging_dir.mkdir()
         if app_type == Commands.AppType.CLOUD_FN:
-            print('... copying cloud_functions/ into .staging/')
             directory = self.cloud_fn_dir
         elif app_type == Commands.AppType.API:
-            print('... copying api/ into .staging/')
             directory = self.api_dir
         else:
             raise ValueError(f"Invalid app_type {app_type}")
 
+        ui.set_phase(f'Staging {directory}/ + common/')
+        staging = self.staging_dir / app_type
+        if staging.exists():
+            # First clean up any residual files from previous staging
+            shutil.rmtree(staging)
+        staging.mkdir(parents=True)
+
+        ignore = shutil.ignore_patterns(*STAGING_IGNORE)
         for item in directory.iterdir():
-            dest = self.staging_dir / item.name
+            if ignore(str(directory), [item.name]):
+                continue
+            dest = staging / item.name
             if item.is_dir():
-                shutil.copytree(item, dest)
+                shutil.copytree(item, dest, ignore=ignore)
             else:
                 shutil.copy2(item, dest)
 
-        print('...copying common/ into .staging/')
-        shutil.copytree(self.common_dir, self.staging_dir / "common")
+        shutil.copytree(self.common_dir, staging / "common", ignore=ignore)
+        return staging
+
+    @staticmethod
+    def _remove_staging(staging) -> None:
+        """Remove one app's staging dir. The shared .staging/ root stays, since
+        another task may be staging into it concurrently."""
+        if isinstance(staging, Path) and staging.exists():
+            shutil.rmtree(staging)
+
+    def _remove_empty_staging_root(self) -> None:
+        """Call only once no task is running."""
+        try:
+            self.staging_dir.rmdir()
+        except OSError:
+            pass  # missing, or still holds a directory
 
     def _deploy_cloud_run(
         self,
         app_type: str,
         target_dir: str,
-        min_instance: bool = False
+        min_instance: bool = False,
+        wait_for=None,
     ) -> bool:
         image_path = self.commands.image_path(app_type=app_type)
-
-        print(f"Beginning to package Agoge apps. This operation may take a few minutes...")
         build_cmd = self.commands.build_cloud_run(app_type=app_type, target_dir=target_dir)
 
-        if not self._stream_command_output(build_cmd):
-            print(f"Error packaging the Cloud Run App! Exiting without deploying the Cloud Run App")
+        if not self._stream_command_output(build_cmd, phase='Building image (Cloud Build)'):
+            ui.note(f"Cloud Build failed for agoge-{app_type}; the service was not deployed")
+            return False
+
+        if wait_for is not None and not wait_for():
+            ui.skip('Built, not deployed: API deploy failed')
             return False
 
         deploy_cmd = self.commands.deploy_cloud_run(
@@ -249,41 +342,37 @@ class AgogeApp:
             min_instance=min_instance
         )
 
-        if not self._stream_command_output(deploy_cmd):
-            print(f"Error deploying the Cloud Run {app_type.upper()} app! Exiting without deploying the Cloud Run app")
+        if not self._stream_command_output(deploy_cmd, phase='Deploying Cloud Run revision'):
+            ui.note(f"Cloud Run rejected the agoge-{app_type} deployment")
             return False
 
         return True
 
-    def deploy_cloud_functions(self) -> bool:
-        ensure_shared_api_secret_access(self.env)
+    def deploy_cloud_functions(self, preflight: bool = True, wait_for=None) -> bool:
+        if preflight:
+            ensure_shared_api_secret_access(self.env)
         # This does not need to be run everytime, but this is here temporarily to make sure it gets set up correctly.
-        print(f"Setting the default cloud function service account permissions to the editor role.")
         command = self.commands.ADD_DEFAULT_COMPUTE_EDITOR_ROLE.format(project=self.env.project,
                                                                        project_number=self.env.project_number)
 
-        if not self._stream_command_output(command):
-            print(f"Error deploying the cloud function! See messages above. Exiting without deploying the "
-                  f"cloud function")
+        if not self._stream_command_output(command, phase='Granting function service account'):
+            ui.note("Could not grant the default compute service account its role; function not deployed")
             return False
 
         # Build cloud_function directory
-        self._stage_build(app_type=Commands.AppType.CLOUD_FN)
-
-        # Deploy function
-        print(f"Beginning to deploy cloud function. This operation may take a few minutes...")
-        command = self.commands.deploy_cloud_function()
-        if not self._stream_command_output(command):
-            print(f"Error deploying the cloud function! See messages above. Exiting without deploying the "
-                  f"cloud function")
-            return False
-        if not self._set_scheduler():
-            return False
-
-        if self.staging_dir.exists():
-            print('... removing temporary .staging directory ')
-            shutil.rmtree(self.staging_dir)
-        return True
+        staging = self._stage_build(app_type=Commands.AppType.CLOUD_FN)
+        try:
+            if wait_for is not None and not wait_for():
+                ui.skip('Not deployed: API deploy failed')
+                return False
+            command = self.commands.deploy_cloud_function(source=f'./{staging}/')
+            if not self._stream_command_output(command, phase='Building & deploying function',
+                                               retry_on=QUOTA_ERROR_PATTERN, attempts=4):
+                ui.note("Cloud Function deployment failed")
+                return False
+            return self._set_scheduler()
+        finally:
+            self._remove_staging(staging)
 
     def _backup_env_files(self):
         """
@@ -307,7 +396,6 @@ class AgogeApp:
                 original.unlink(missing_ok=True)
             elif backup.exists():
                 shutil.move(backup, original)
-                print(f"Restored original file: {original}")
 
     def _set_scheduler(self) -> bool:
         parent = f'projects/{self.env.project}/locations/{self.env.region}'
@@ -320,24 +408,15 @@ class AgogeApp:
             command = self.commands.CLOUD_SCHEDULER_COMMAND.format(
                 project=self.env.project, region=self.env.region
             )
-            if not self._stream_command_output(command):
-                print(f"Error setting up the cloud scheduler! See messages above.")
+            if not self._stream_command_output(command, phase='Creating maintenance scheduler'):
+                ui.note("Could not create the Cloud Scheduler job")
                 return False
         return True
 
     @staticmethod
-    def _stream_command_output(command: str) -> bool:
-        """Helper method to stream the output of a subprocess command"""
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, text=True)
-
-        for line in process.stdout:
-            print(line, end="")
-
-        for line in process.stderr:
-            print(line, end="")
-
-        process.wait()
-        return process.returncode == 0
+    def _stream_command_output(command: str, phase: str | None = None, **retry) -> bool:
+        """Run a command on the live task board; its full output goes to the task log."""
+        return ui.run_command(command, phase=phase, **retry)
 
     def _write_env_files(self, *, include_frontend: bool = True):
         """

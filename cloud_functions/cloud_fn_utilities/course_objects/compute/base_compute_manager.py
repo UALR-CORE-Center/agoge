@@ -154,6 +154,7 @@ class BaseComputeManager:
         self.state_manager = None
         self.assessment = None
         self.ip_aliases = False
+        self.nested_host = False
         self.collection = DbCollections.SERVER
         self.primary_external_ip = None
 
@@ -235,6 +236,8 @@ class BaseComputeManager:
         self.server_spec.min_cpu_platform = server_spec.get('min_cpu_platform', None)
         self.server_spec.network_prefix = network_prefix if network_prefix else server_spec['parent_id']
         self.server_spec.nics = server_spec.get('nics', [])
+        # Server records carry the OS under details (ServerModel); the top-level key is the compute form
+        self.server_spec.os = (server_spec.get('details') or {}).get('os') or server_spec.get('os')
         self.server_spec.parent_build_type = server_spec.get('parent_build_type', None)
         self.server_spec.parent_id = server_spec.get('parent_id', None)
         self.server_spec.service_accounts = (
@@ -272,6 +275,7 @@ class BaseComputeManager:
             ]
             self.server_spec.ssh_keys = ssh_keys
         self.server_spec.image = self.image_name
+        self.nested_host = bool(server_spec.get('nested'))
         self.server_spec.ip_aliases = server_spec.get('ip_aliases', None)
         self.server_spec.machine_image = server_spec.get('machine_image', None)
         self.server_spec.machine_type = (
@@ -298,6 +302,13 @@ class BaseComputeManager:
 
     def _build_server(self, finalize_state: bool = True) -> None:
         """Build a server, optionally deferring RUNNING until caller dependencies finish."""
+        # Reject before any disk or address is created for the server
+        machine_type = self._lookup_machine_type(self.server_spec.machine_type)
+        nested_host = getattr(self, 'nested_host', False)
+        if nested_host and machine_type.startswith('e2'):
+            raise BadRequest(
+                f'{self.class_name}:{self.server_name} - Nested hosts need an N1 or N2 machine type, not {machine_type}'
+            )
         self.state_manager.state_transition(self.s.BUILDING)
         self._add_disks()
         self._add_metadata()
@@ -305,23 +316,22 @@ class BaseComputeManager:
 
         advanced_machine_features = None
         min_cpu_platform = None
-        machine_type = self._lookup_machine_type(self.server_spec.machine_type)
         service_account = (
             self.server_spec.service_accounts if self.server_spec.service_accounts is not None
             else self.compute_instance.SERVICE_ACCOUNT_CONFIG
         )
         tags = {'items': self.server_spec.tags} if self.server_spec.tags else {'items': []}
 
-        if self.server_spec.min_cpu_platform and self.server_spec.min_cpu_platform != "":
-            min_cpu_platform = self.server_spec.min_cpu_platform
-        if self.ip_aliases:
+        if self.ip_aliases or nested_host:
             advanced_machine_features = {"enable_nested_virtualization": True}
-            if self.server_spec.min_cpu_platform is None:
-                machine_type_prefix = self.server_spec.machine_type[:2]
+            if not self.server_spec.min_cpu_platform:
+                machine_type_prefix = machine_type[:2]
                 if machine_type_prefix == 'n1':
                     self.server_spec.min_cpu_platform = "Intel Haswell"
                 elif machine_type_prefix == "n2":
                     self.server_spec.min_cpu_platform = "Intel Cascade Lake"
+        if self.server_spec.min_cpu_platform and self.server_spec.min_cpu_platform != "":
+            min_cpu_platform = self.server_spec.min_cpu_platform
 
         instance = (
             InstanceResource(zone=self.env.zone)
@@ -366,6 +376,12 @@ class BaseComputeManager:
                     f"Existing instance {self.server_spec.name} does not match the requested build"
                 ) from error
             created = True
+        except Exception as error:
+            # Google refused the insert (a zone out of capacity, a quota, a bad request). Nothing retries
+            # it, so the server must not stay BUILDING with no VM behind it.
+            self.logger.error(f'{self.class_name}:{self.server_name} - Could not create the server: {error}')
+            self.state_manager.state_transition(self.s.BROKEN)
+            raise
 
         if created:
             self.logger.info(f'{self.class_name}:{self.server_name} - Successfully built server!')
@@ -696,6 +712,22 @@ class BaseComputeManager:
     def _add_metadata(self) -> None:
         pass
 
+    _CONCATENATED_SCRIPT_KEYS = frozenset({'startup-script', 'windows-startup-script-ps1'})
+
+    @classmethod
+    def _merge_metadata_item(cls, items: list, item: dict) -> None:
+        """Keep metadata keys unique, concatenating multiple startup scripts."""
+        if not isinstance(item, dict) or not item.get('key'):
+            return
+        for existing in items:
+            if existing.get('key') == item['key']:
+                if item['key'] in cls._CONCATENATED_SCRIPT_KEYS and item.get('value'):
+                    existing['value'] = f"{(existing.get('value') or '').rstrip()}\n{item['value'].lstrip()}"
+                else:
+                    existing.update(item)
+                return
+        items.append(item)
+
     @abstractmethod
     def _add_nics(self) -> None:
         pass
@@ -773,8 +805,12 @@ class BaseComputeManager:
         machine_type: Union[int, str]
     ) -> str:
         if self.compute_machine_types and isinstance(machine_type, str):
-            m_type_found = self.compute_machine_types.get(resource=machine_type)
-            return m_type_found.name
+            try:
+                m_type_found = self.compute_machine_types.get(resource=machine_type)
+            except NotFound:
+                m_type_found = None
+            if m_type_found:
+                return m_type_found.name
 
         self.logger.warning(f"Could not find machine type for {machine_type}. Defaulting to SMALL instead")
         return self.compute_instance.GOOGLE_MACHINE_TYPES[BuildConstants.MachineTypes.SMALL.value]

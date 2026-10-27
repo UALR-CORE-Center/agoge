@@ -7,6 +7,7 @@ Agoge documentation is organized by audience. These pages describe the current i
 | Audience | Guide | Covers |
 | --- | --- | --- |
 | Instructors | [Instructor Guide](guides/instructor-guide.md) | Building and distributing labs, creating templates, managing learner workouts, reusable server images, and snapshots |
+| Game masters | [Game Master Guide](guides/game-master-guide.md) | Authoring a lab's `ctf` block, running a CTF event from create to archive, host reset modes, flag plant statuses, and the overnight-stop exemption |
 | Learners | [Learner Guide](guides/learner-guide.md) | Claiming a lab, starting servers, connecting with RDP, SSH, or Guacamole, managing session time, and completing assessments |
 
 ## Project documentation

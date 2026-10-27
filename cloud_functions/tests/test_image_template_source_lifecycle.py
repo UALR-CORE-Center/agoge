@@ -10,7 +10,8 @@ from google.cloud.compute_v1 import Image
 from cloud_fn_utilities.course_objects.compute.image_template_manager import ImageTemplateManager
 from cloud_fn_utilities.course_objects.compute.snapshot_manager import SnapshotManager
 from common.constants.database import DbCollections
-from common.constants.google import ImageSource
+from common.constants.google import ImageSource, ResourceType
+from common.constants.nested import ENABLE_VMX_LICENSE
 from common.constants.pub_sub import PubSub
 from common.constants.states import ImageStatus, ServerStates
 from common.exceptions import BadRequest, NotFound, OperationTimeout
@@ -305,6 +306,7 @@ def test_authorized_shared_check_in_saves_to_original_project_and_name(template,
         description='Agoge-shared-resources production image. WireGuard template server',
         source_type=ImageSource.SNAPSHOT,
         source='projects/test-dev-787001/global/snapshots/wireguard-server-auto-0',
+        licenses=None,
     )
     shared_client.get.assert_called_once_with(source_name, project='agoge-shared-resources', fallback_to_shared=False)
     manager.compute_image.create.assert_not_called()
@@ -476,3 +478,46 @@ def test_shared_snapshot_timeout_cannot_delete_production_image(template):
     manager.compute_image.delete.assert_not_called()
     manager.compute_instance.delete.assert_not_called()
     assert record == original
+
+
+def _image_api_with_mock_client(project):
+    """A real ComputeImageAPI whose ImagesClient is a mock, so the built InsertImageRequest is inspectable."""
+    api = object.__new__(ComputeImageAPI)
+    api.class_name = 'ComputeImageAPI'
+    api.logger = Mock()
+    api.project = project
+    api.resource_type = ResourceType.IMAGE
+    api.images_client = Mock()
+    api.wait_for_operation = Mock(return_value=True)
+    return api
+
+
+# A complete NestedHostSpecModel: check-in revalidates the record against AgogeImageModel, which types `nested`.
+NESTED_SPEC = {
+    'parent_os': 'debian-12',
+    'networks': [{'name': 'lab', 'cidr': '10.10.0.0/24', 'mode': 'nat', 'parent_address': '10.10.0.1'}],
+    'guests': [{'name': 'linux-guest', 'os_id': 'debian-12', 'nics': [{'network': 'lab'}],
+                'admin_username': 'agoge', 'admin_password': 'Passw0rd!'}],
+}
+
+
+@pytest.mark.parametrize('nested, expected_licenses', [
+    (NESTED_SPEC, [ENABLE_VMX_LICENSE]),
+    (None, []),
+], ids=['nested-record', 'standard-record'])
+def test_check_in_licenses_only_nested_images_for_vmx(template, nested, expected_licenses):
+    manager, record = template
+    record['nested'] = nested
+    # Set the way _load_template_server does from the record (covered in test_nested_virtualization.py).
+    manager.nested_host = bool(nested)
+    api = _image_api_with_mock_client('test-dev-787001')
+    manager.compute_image.create = api.create
+    manager._update_record_status(ImageStatus.CHECKED_OUT)
+
+    manager.check_in()
+
+    api.images_client.insert.assert_called_once()
+    image = api.images_client.insert.call_args.kwargs['request'].image_resource
+    assert list(image.licenses) == expected_licenses
+    assert image.source_snapshot == 'projects/test-dev-787001/global/snapshots/wireguard-server-auto-0'
+    assert record['status'] == ImageStatus.CHECKED_IN.value

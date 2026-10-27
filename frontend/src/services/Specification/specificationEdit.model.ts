@@ -1,4 +1,5 @@
 import {AssessmentScriptLanguages, Firewalls, UnitType} from "../../types/BuildConstants";
+import {CtfSpec} from "../Ctf/ctf.model";
 // TODO: Some of these objects are duplicates of what already exists in /types.
 //  Revisit these models to ensure that they need to exist here
 
@@ -33,7 +34,6 @@ export interface Assessment {
     assessment_script?: AssessmentScript;
     key?: string;
 }
-
 
 interface FirewallRule {
     name: string;
@@ -76,7 +76,6 @@ export interface LMSQuiz {
     questions?: LMSQuizQuestions[];
 }
 
-
 interface Nic {
     network: string;
     internal_ip?: string | null;
@@ -117,6 +116,10 @@ export interface HumanInteraction {
     ssh_key?: string;
     domain?: string;
     security_mode?: string;
+    // Nested lab host connections (HumanInteractionModel): a label, an alias slot on NIC 0, a port override
+    nested_guest?: string | null;
+    alias_index?: number | null;
+    port?: number | null;
 }
 
 interface ServerDetails {
@@ -187,6 +190,7 @@ export interface SpecificationEdit {
     assessment?: Assessment,
     rubric_support?: boolean;
     lms_quiz?: LMSQuiz;
+    ctf?: CtfSpec | null;
 
     build_type: string;
     creation_timestamp: number;
@@ -212,6 +216,3 @@ export interface SpecificationEditId {
     build_id: string;
 }
 
-export interface PublishResponse {
-    build_id: string;
-}

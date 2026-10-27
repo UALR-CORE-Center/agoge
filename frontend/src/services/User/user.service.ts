@@ -23,7 +23,7 @@ const get_courses = async (uid: string) => {
 
 const update_settings = async (uid: string, userData: { [key: string]: any }) => {
     const endpoint = formatString(URL_USER_API_SETTINGS, {"ITEM_ID": uid});
-    return await apiService.post<AgogeUser>(endpoint, userData, true, transformToAgogeUser);
+    return await apiService.post<AgogeUser>(endpoint, userData, true, null, transformToAgogeUser);
 }
 
 const list = async () => {
@@ -31,7 +31,7 @@ const list = async () => {
 }
 
 const create = async (userData: any) => {
-    return await apiService.post<AgogeUser>(URL_USER_API_BASE, userData, true, transformToAgogeUser);
+    return await apiService.post<AgogeUser>(URL_USER_API_BASE, userData, true, null, transformToAgogeUser);
 }
 
 const delete_user = async (uid: string)=> {
@@ -41,7 +41,7 @@ const delete_user = async (uid: string)=> {
 
 const update_permissions = async (uid: string, userData: { [key: string]: any})=> {
     const endpoint = formatString(URL_USER_API_UID, {"ITEM_ID": uid});
-    return await apiService.post<AgogeUser>(endpoint, userData, true, transformToAgogeUser);
+    return await apiService.post<AgogeUser>(endpoint, userData, true, null, transformToAgogeUser);
 }
 
 const whoami = async () => {

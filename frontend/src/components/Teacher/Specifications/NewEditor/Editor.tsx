@@ -22,10 +22,13 @@ import {useNavigate, useParams} from "react-router-dom";
 import {useForm} from "../../../../hooks/useForm";
 import {useForms} from "../../../../hooks/useForms";
 import {URL_TEACHER_SPECIFICATIONS_BASE} from "../../../../router/urls";
+import {CtfSpec} from "../../../../services/Ctf/ctf.model";
 import {DocSummary} from "../../../../services/Documents/docs.model";
 import {docsService} from "../../../../services/Documents/docs.service";
 import {AgogeImage} from "../../../../services/Server/image.model";
 import {imageService} from "../../../../services/Server/image.service";
+import {NestedOsCatalogEntry} from "../../../../services/Server/nested.model";
+import {nestedService} from "../../../../services/Server/nested.service";
 import {serverService} from "../../../../services/Server/server.service";
 import {WebApplication} from "../../../../services/Specification/specification.model";
 import {
@@ -41,19 +44,29 @@ import {FormType} from "../../../../types/Form";
 import {UnitType} from "../../../../types/BuildConstants";
 import ErrorDialog from "../../../Common/Dialogs/ErrorDialog";
 import SimpleSnackbar from "../../../Common/SnackBar/SnackBar";
+import {blankCtfSpec, ctfSpecProblems} from "../../Ctf/CtfSpecEditor";
 import AssessmentForm from "./AssessmentForms/AssessmentForm";
 import {AssessmentFormKeys} from "./AssessmentForms/AssessmentFormTypes";
 import StartupScriptDialog from "./AssessmentForms/StartupScriptDialog";
 import {useAssessmentForm} from "./AssessmentForms/useAssessmentForm";
+import CtfForm from "./CtfForm";
 import NetworkForm from "./NetworkForm";
 import Review from "./Review/Review";
 import ServerForm from "./ServerForm/ServerForm";
 import {ServerFormKeys} from "./ServerForm/ServerFormTypes";
+import {isNestedImage, nestedCtfGuests} from "./ServerForm/nestedServer";
 import {useServerForm} from "./ServerForm/useServerForm";
 import SummaryForm from "./SummaryForm";
 import WebApplicationForm from "./WebApplicationForm";
 import {EditorFormFactory} from "./utils/EditorFormFactory";
-import {EditorForms, NetworkFormKeys, SummaryFormKeys, WebApplicationFormKeys} from "./utils/EditorTypes";
+import {
+    CTF_UNIT_TYPE,
+    EditorForms,
+    EditorUnitType,
+    NetworkFormKeys,
+    SummaryFormKeys,
+    WebApplicationFormKeys
+} from "./utils/EditorTypes";
 
 
 const Editor: React.FC = () => {
@@ -93,6 +106,26 @@ const Editor: React.FC = () => {
     const [files, setFiles] = useState<DocSummary[]>([]);
     const [teacherFiles, setTeacherFiles] = useState<DocSummary[]>([]);
     const [studentFiles, setStudentFiles] = useState<DocSummary[]>([]);
+    const [ctfDraft, setCtfDraft] = useState<CtfSpec | null>(null);
+
+    const isCtf = summaryForm.form?.[SummaryFormKeys.summaryUnitType]?.value === CTF_UNIT_TYPE;
+    // The CTF step exists only while the unit type is CTF.
+    const steps = Object.values(EditorForms).filter((form) => form !== EditorForms.Ctf || isCtf);
+    const ctfServerNames: string[] = serverForm.forms
+        .map((f) => f[ServerFormKeys.serverName].value)
+        .filter((name: string) => !!name);
+    const [nestedCatalog, setNestedCatalog] = useState<NestedOsCatalogEntry[]>([]);
+    useEffect(() => {
+        // Only the CTF step's "Add guests from images" needs the catalog (for each guest's OS and driver)
+        if (isCtf) {
+            nestedService.list_catalog().then(setNestedCatalog).catch(() => setNestedCatalog([]));
+        }
+    }, [isCtf]);
+    const ctfImageGuests = serverForm.forms.flatMap((f) => {
+        const name = f[ServerFormKeys.serverName].value;
+        const image = images.data.find((img) => img.image == f[ServerFormKeys.serverBaseImage].value);
+        return name && isNestedImage(image) ? nestedCtfGuests(name, image.nested, nestedCatalog) : [];
+    });
 
     const onUploadStartScript = () => {
         showModal(StartupScriptDialog, {
@@ -134,14 +167,14 @@ const Editor: React.FC = () => {
         loadImages();
         loadStartupScripts();
         loadMachineTypes();
-        const hash = window.location.hash;
-        if (hash) {
-            const step = parseInt(hash.substring(1), 10);
-            if (!isNaN(step)) {
-                setActiveStep(step);
-            }
-        }
     }, []);
+
+    // The CTF step comes and goes with the unit type, so keep the active step in range.
+    useEffect(() => {
+        if (activeStep > steps.length - 1) {
+            setActiveStep(steps.length - 1);
+        }
+    }, [steps.length]);
 
     useEffect(() => {
         // There may be a better way of doing this, but I'm not entirely sure. This listens to the
@@ -192,6 +225,12 @@ const Editor: React.FC = () => {
             (field) => field[ServerFormKeys.serverSettingCommunity].value
         ),
     ]);
+
+    useEffect(() => {
+        if (isCtf && ctfDraft === null) {
+            setCtfDraft(blankCtfSpec(summaryForm.form?.[SummaryFormKeys.summaryName]?.value || ''));
+        }
+    }, [isCtf]);
 
     useEffect(() => {
         if (summaryForm.form) {
@@ -276,21 +315,32 @@ const Editor: React.FC = () => {
         serverForm.handleInitialization(specification.servers);
 
         const legacyUnitType = (specification?.summary as Summary & {unit_type?: UnitType})?.unit_type;
+        // A saved ctf block is what marks a solo lab as CTF.
+        setCtfDraft(specification.ctf ?? null);
         summaryForm.handleInitialization(
             EditorFormFactory.generateSummaryForm(
                 specification?.summary,
-                (specification?.unit_type || legacyUnitType || UnitType.SOLO) as UnitType
+                specification.ctf
+                    ? CTF_UNIT_TYPE
+                    : (specification?.unit_type || legacyUnitType || UnitType.SOLO) as EditorUnitType
             )
         );
         networkForms.handleInitialization(localNetworkForms);
         webApplicationForms.handleInitialization(localWebAppForms);
 
+        // Restore the step from the URL only now: its index depends on whether the CTF step exists.
+        const step = parseInt(window.location.hash.substring(1), 10);
+        if (!isNaN(step)) {
+            const stepCount = Object.values(EditorForms).length - (specification.ctf ? 0 : 1);
+            setActiveStep(Math.min(Math.max(step, 0), stepCount - 1));
+        }
+
         setInitialized(true);
     };
 
     const handleNavigation = async (newStep: number) => {
-        const currentForm = Object.values(EditorForms)[activeStep];
-        const nextForm = Object.values(EditorForms)[newStep];
+        const currentForm = steps[activeStep];
+        const nextForm = steps[newStep];
 
         if (currentForm === EditorForms.Review) {
             // Directly navigate without submission if moving away from Review form
@@ -367,7 +417,7 @@ const Editor: React.FC = () => {
     };
 
     const handleNavigateTo = (form: EditorForms) => {
-        const stepIndex = Object.values(EditorForms).indexOf(form);
+        const stepIndex = steps.indexOf(form);
         handleNavigation(stepIndex);
     };
 
@@ -379,6 +429,7 @@ const Editor: React.FC = () => {
                 [EditorForms.Summary]: "summary",
                 [EditorForms.Networks]: "networks",
                 [EditorForms.Servers]: "servers",
+                [EditorForms.Ctf]: "ctf",
                 [EditorForms.WebApplications]: "web_applications",
                 [EditorForms.Assessment]: assessmentForm?.isLMS
                     ? "lms_quiz"
@@ -386,7 +437,7 @@ const Editor: React.FC = () => {
                 [EditorForms.Review]: "review",
             };
 
-            const key: string = formToKeyMap[Object.values(EditorForms)[activeStep]];
+            const key: string = formToKeyMap[steps[activeStep]];
             const body = generateSpecification();
             const dataToPost =
                 key !== "review" ? body![key as keyof SpecificationEdit] : body;
@@ -405,7 +456,11 @@ const Editor: React.FC = () => {
                 postBody = {
                     ...postBody,
                     unit_type: body!.unit_type,
+                    ctf_enabled: isCtf,
                 };
+            }
+            if (key === "ctf") {
+                postBody = {form_type: key, ctf: body!.ctf ?? null};
             }
 
             specificationEditService
@@ -485,7 +540,7 @@ const Editor: React.FC = () => {
                 tags: ((summaryForm.form![SummaryFormKeys.summaryTeachingConcepts].value as TeachingConcept[])
                     .map((t) => t.id) as unknown as TeachingConcept[]),
             }
-            const unitType = summaryForm.form![SummaryFormKeys.summaryUnitType].value as UnitType;
+            const unitType = summaryForm.form![SummaryFormKeys.summaryUnitType].value as EditorUnitType;
 
             const networkValues: Network[] = [];
             for (const form of networkForms.forms!) {
@@ -530,7 +585,14 @@ const Editor: React.FC = () => {
             return {
                 ...specification.data!,
                 id: specification.data!.id,
-                unit_type: unitType,
+                // CTF is an editor-only unit type; the API stores it as a solo unit with a ctf block.
+                unit_type: unitType === CTF_UNIT_TYPE ? UnitType.SOLO : unitType,
+                ctf: isCtf && ctfDraft ? {
+                    ...ctfDraft,
+                    name: ctfDraft.name.trim(),
+                    description: ctfDraft.description?.trim() || null,
+                    rules_url: ctfDraft.rules_url?.trim() || null,
+                } : undefined,
                 build_type: specification.data!.build_type,
                 edit_id: specification.data!.edit_id,
                 status: "",
@@ -550,7 +612,7 @@ const Editor: React.FC = () => {
         reviewAll = false
     ): boolean => {
         const validateEntireForm = () => {
-            for (const form of Object.values(EditorForms)) {
+            for (const form of steps) {
                 if (form !== EditorForms.Review && doesCurrentStepHaveErrors(form, true)) {
                     if (erroredStep !== form) {
                         setErroredStep(form);
@@ -576,6 +638,9 @@ const Editor: React.FC = () => {
                 case EditorForms.Servers:
                     hasError = serverForm.hasErrors();
                     break;
+                case EditorForms.Ctf:
+                    hasError = !ctfDraft || ctfSpecProblems(ctfDraft, ctfServerNames).length > 0;
+                    break;
                 case EditorForms.Assessment:
                     hasError = assessmentForm.hasErrors();
                     break;
@@ -595,7 +660,6 @@ const Editor: React.FC = () => {
     const theme = useTheme();
     // Below md, stack step labels under their icons so six steps fit narrow screens.
     const compactStepper = useMediaQuery(theme.breakpoints.down('md'));
-    const steps = Object.values(EditorForms);
 
     const hasError = doesCurrentStepHaveErrors(steps[activeStep]);
     return (
@@ -656,7 +720,7 @@ const Editor: React.FC = () => {
                             >
                                 Cancel
                             </Button>
-                            {activeStep === 5 && (
+                            {activeStep === steps.length - 1 && (
                                 <LoadingButton
                                     size="small"
                                     color="primary"
@@ -673,9 +737,15 @@ const Editor: React.FC = () => {
                         </Stack>
                     </Stack>
 
+                    {steps[activeStep] !== EditorForms.Review && (
+                        <Typography variant={"body2"} color={"text.secondary"} mt={1}>
+                            Fields marked with <Box component={"span"} sx={{ color: "error.main" }}>*</Box> are required.
+                        </Typography>
+                    )}
+
                     <Box>
                         {
-                            Object.values(EditorForms).map((form, index) => {
+                            steps.map((form, index) => {
                                 if (form === EditorForms.Summary && index === activeStep)
                                     return (
                                         <SummaryForm
@@ -708,6 +778,17 @@ const Editor: React.FC = () => {
                                             remoteNetworkInterfaces={specification.data?.networks || []}
                                             localNetworkInterfaces={(networkForms.forms || []).map((f => f[NetworkFormKeys.networkName].value))}
                                             machineTypes={machineTypes}
+                                        />
+                                    );
+                                else if (form === EditorForms.Ctf && index === activeStep && ctfDraft)
+                                    return (
+                                        <CtfForm
+                                            key={`ctf-${index}`}
+                                            disableForm={specification.pending || submitting}
+                                            value={ctfDraft}
+                                            onChange={setCtfDraft}
+                                            serverNames={ctfServerNames}
+                                            imageGuests={ctfImageGuests}
                                         />
                                     );
                                 else if (form === EditorForms.WebApplications && index === activeStep)

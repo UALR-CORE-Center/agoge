@@ -16,7 +16,7 @@ export const create = async (filename:string,instruction_type:string) => {
     const formData = new FormData();
     formData.append('filename',filename);
     formData.append('instructions_type',instruction_type);
-    return await apiService.post<CreateDoc>(URL_DOCS_INSTRUCTIONS_API_BASE,formData,true,transformToDoc);
+    return await apiService.post<CreateDoc>(URL_DOCS_INSTRUCTIONS_API_BASE,formData,true,null,transformToDoc);
 }
 
 export const save = async (uid: string, file_content: string, instructions_type: string, file_name?: string) => {
@@ -27,7 +27,7 @@ export const save = async (uid: string, file_content: string, instructions_type:
         'filename': file_name,
         'instructions_type': instructions_type
     }
-    return await apiService.post<Doc>(endpoint,payload,true, transformToDoc);
+    return await apiService.post<Doc>(endpoint,payload,true, null, transformToDoc);
 }
 
 export const get_list_full = async () => {

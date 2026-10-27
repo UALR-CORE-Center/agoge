@@ -78,19 +78,20 @@ class WorkoutStatesManager(BaseStateManager):
         else:
             self.build['prev_state'] = new_state
 
-        if self._is_valid_transition(existing_state, new_state):
-            if new_state == WorkoutStates.DELETED.value:
-                self.build['active'] = False
-            elif new_state == WorkoutStates.READY.value:
-                self.build['active'] = True
+        # The new state is written even when the transition is not on the allow-list (the list is
+        # incomplete -- e.g. no transition into BROKEN or DELETED is listed), so `active` must follow
+        # the state that is actually stored rather than only the transitions judged valid.
+        if new_state == WorkoutStates.DELETED.value:
+            self.build['active'] = False
+        elif new_state == WorkoutStates.READY.value:
+            self.build['active'] = True
+
+        is_valid = self._is_valid_transition(existing_state, new_state)
+        if is_valid:
             self.logger.info(f"{self.class_name}:{self.build_id} - State Transition from "
                              f"{self.s(existing_state).name} to {self.s(new_state).name}")
-
-            self.update_record(build_id=self.build_id, model=self.model, data=self.build, update_masks=update_mask)
-            return True
-        else:
-            self.update_record(build_id=self.build_id, model=self.model, data=self.build, update_masks=update_mask)
-            return False
+        self.update_record(build_id=self.build_id, model=self.model, data=self.build, update_masks=update_mask)
+        return is_valid
 
     def _is_valid_transition(
         self,
@@ -120,7 +121,7 @@ class WorkoutStatesManager(BaseStateManager):
     ) -> bool:
         valid_states = {
             self.s.BUILDING_NETWORKS.value: [
-                self.s.NOT_BUILT,
+                self.s.NOT_BUILT.value,
                 self.s.START.value,
                 self.s.BROKEN.value,
                 self.s.BUILDING_NETWORKS.value

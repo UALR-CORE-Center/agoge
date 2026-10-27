@@ -86,3 +86,14 @@ class WorkoutStates(Enum):
     DELETING_SERVERS = 70
     COMPLETED_DELETING_SERVERS = 71
     DELETED = 72
+
+
+class CtfStates(Enum):
+    DRAFT = 0        # created, digests derived, nothing planted
+    ARMING = 1       # arm workers planting across boards
+    ARMED = 2        # at least one board armed, clock not started
+    RUNNING = 3      # clock running, submissions accepted
+    PAUSED = 4       # clock held, submissions refused
+    ENDED = 5        # clock stopped, scoreboard final, submissions refused
+    ARCHIVED = 6     # read-only; boards inactive
+    BROKEN = 7       # an arm finished with zero boards armed

@@ -1,3 +1,5 @@
+from typing import Iterable
+
 from common.constants.database import DbCollections, DbOperators, DbOperationTypes
 from common.constants.states import ServerStates, ImageStatus
 from common.document_database import DatabaseQueries
@@ -19,10 +21,16 @@ class ProjectServerManager(BaseComputeManager):
     def load(self, server_name: str, **kwargs) -> None:
         pass
 
-    def stop_everything(self) -> None:
+    def stop_everything(self, exempt_prefixes: Iterable[str] = (), exempt_names: Iterable[str] = ()) -> None:
+        """Stops every instance in the project except those named in exempt_names or whose name starts
+        with one of exempt_prefixes"""
+        exempt_prefixes = tuple(exempt_prefixes)
+        exempt_names = set(exempt_names)
         instances = self.compute_instance.list(project=self.env.project, zone=self.env.zone, wait=False)
         if instances:
             for instance in instances:
+                if instance.name in exempt_names or (exempt_prefixes and instance.name.startswith(exempt_prefixes)):
+                    continue
                 try:
                     self.compute_instance.stop(resource_name=instance.name, wait=False)
                 except (BadRequest, BaseAgogeException, NotFound) as e:
@@ -38,6 +46,8 @@ class ProjectServerManager(BaseComputeManager):
         images = self.db.query(collection_name=self.collection.IMAGE, filters=filters)
         operations = []
         for image in images:
+            if image.get('name') in exempt_names:
+                continue
             image['state'] = ServerStates.STOPPED.value
             if validated := self.validate(AgogeImageModel, log_location=self.log_name).load(image):
                 operations.append(
@@ -48,6 +58,8 @@ class ProjectServerManager(BaseComputeManager):
                         data={'state': validated.state}
                     )
                 )
+        # One write after the loop; inside it, the growing batch was rewritten once per image
+        if operations:
             self.db.batch_write(operations)
 
     def _add_nics(self) -> None:

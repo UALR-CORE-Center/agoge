@@ -28,12 +28,15 @@ import {
     FormGroup,
     FormGroupOutline,
     FormTextField,
+    RequiredMark,
     StyledFormFieldLabel,
     TableSelectField,
 } from "../utils/FormFields";
+import NestedGuestsPanel from "./NestedGuestsPanel";
 import ServerFormSettings from "./ServerFormSettings";
 import {IServerForm, ServerFormKeys} from "./ServerFormTypes";
 import ServerNetworks from "./ServerNetworks";
+import {isNestedImage, nestedMachineTypes} from "./nestedServer";
 import {IUseServerForm} from "./useServerForm";
 
 interface Props extends CommonEditorChildrenProps {
@@ -208,6 +211,8 @@ const ServerForm: React.FC<Props> = ({
                     serverForm.forms.map((server, index) => {
                         initializeServerState(server, index);
                         const currentState = serverImageState.get(index);
+                        const selectedImage = images.data.find(img => img.image == server[ServerFormKeys.serverBaseImage].value);
+                        const nestedImage = isNestedImage(selectedImage) ? selectedImage : null;
 
                         return (
                             <Collapse unmountOnExit key={index}>
@@ -268,8 +273,9 @@ const ServerForm: React.FC<Props> = ({
                                         <FormFields>
                                             <FormGroupOutline showOverlay={disableForm}>
                                                 <FormGroup>
-                                                    <StyledFormFieldLabel>Name</StyledFormFieldLabel>
+                                                    <StyledFormFieldLabel>Name<RequiredMark/></StyledFormFieldLabel>
                                                     <FormTextField
+                                                        required
                                                         helpText={'Lowercase letters, numbers, hyphens allowed up to 52 characters'}
                                                         formKey={ServerFormKeys.serverName}
                                                         fieldFn={(key) => serverForm.getField(key, index)}
@@ -301,7 +307,7 @@ const ServerForm: React.FC<Props> = ({
                                                         fieldFn={(key) => serverForm.getField(key, index)}
                                                         formKey={ServerFormKeys.serverSettingsMachineType}
                                                         index={index}
-                                                        options={machineTypes.data}
+                                                        options={nestedImage ? nestedMachineTypes(machineTypes.data) : machineTypes.data}
                                                         onSelect={handleMachineTypeSelect}
                                                         required={false}
                                                         type={"mType"}
@@ -322,6 +328,17 @@ const ServerForm: React.FC<Props> = ({
                                                     />
                                                 </FormGroup>
                                             </FormGroupOutline>
+
+                                            {
+                                                nestedImage &&
+                                                <NestedGuestsPanel
+                                                    disableForm={disableForm}
+                                                    image={nestedImage}
+                                                    networks={remoteNetworkInterfaces}
+                                                    serverForm={serverForm}
+                                                    serverIndex={index}
+                                                />
+                                            }
 
                                             <ServerFormSettings
                                                 disableForm={disableForm}

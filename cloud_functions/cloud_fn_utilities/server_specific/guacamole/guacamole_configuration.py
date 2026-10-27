@@ -75,7 +75,7 @@ class GuacSQL:
         SELECT connection_id INTO @connection_id FROM guacamole_connection
             WHERE connection_name = '{connection}';
         INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'hostname', '{ip}');
-        INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'port', '22');
+        INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'port', '{port}');
         INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'username', '{ssh_username}');
         INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'password', "{ssh_password}");
     """)
@@ -86,7 +86,7 @@ class GuacSQL:
             WHERE connection_name = '{connection}';
         INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'hostname', '{ip}');
         INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'password', "{vnc_password}");
-        INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'port', '5901');
+        INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'port', '{port}');
     """)
 
     guac_startup_rdp = textwrap.dedent("""\
@@ -95,7 +95,7 @@ class GuacSQL:
             WHERE connection_name = '{connection}';
         INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'hostname', '{ip}');
         INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'password', "{rdp_password}");
-        INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'port', '3389');
+        INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'port', '{port}');
         INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'username', '{rdp_username}');
         INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'security', '{security_mode}');
         INSERT INTO guacamole_connection_parameter VALUES (@connection_id, 'ignore-cert', 'true');
@@ -139,6 +139,12 @@ class GuacamoleConfiguration:
     """Handles the creation of Guacamole connection settings and
     constructs startup SQL scripts for Apache Guacamole.
     """
+    # Used when a connection has no `port` override; VNC 5901 is display :1
+    DEFAULT_PORTS = {
+        BuildConstants.Guacamole.Protocols.RDP.value: 3389,
+        BuildConstants.Guacamole.Protocols.SSH.value: 22,
+        BuildConstants.Guacamole.Protocols.VNC.value: 5901,
+    }
 
     def __init__(self, build_id: str, env_dict: Optional[dict] = None) -> None:
         """Initializes GuacamoleConfiguration with a build identifier and optional environment dictionary.
@@ -149,13 +155,15 @@ class GuacamoleConfiguration:
         """
         self.build_id = build_id
         self.env = CloudEnv(env_dict=env_dict) if env_dict else CloudEnv()
-        self.logger = Logger(LoggerNames.CLOUD_FN, class_name=self.__class__.__name__)
+        self.class_name = self.__class__.__name__
+        self.logger = Logger(LoggerNames.CLOUD_FN, class_name=self.class_name)
         self.connection_ctr = 1
 
     def prepare_guac_connection(
         self,
         connection: HumanInteractionModel,
-        server_ip: str
+        server_ip: str,
+        ip_aliases: Optional[List[str]] = None
     ) -> Dict[str, str]:
         """Prepares a Guacamole connection dictionary to be converted into an SQL script.
 
@@ -165,17 +173,22 @@ class GuacamoleConfiguration:
         Args:
             connection (HumanInteractionModel): Model containing username, password, domain, protocol, etc.
             server_ip (str): The IP address or hostname of the target server.
+            ip_aliases (Optional[List[str]]): The alias IPs on the server's NIC 0. A connection with
+                `alias_index` targets `ip_aliases[alias_index]` (a nested guest exposed through that alias)
+                instead of `server_ip`.
 
         Returns:
-            Dict[str, str]: A dictionary containing Guacamole connection parameters.
+            Dict[str, str]: A dictionary containing Guacamole connection parameters, including the
+                resolved target `ip` and `port`.
 
         Raises:
-            ValueError: If the provided server_ip is empty or None.
+            ValueError: If the provided server_ip is empty or None, or `alias_index` is out of range.
         """
         if not server_ip:
             self.logger.error("No server IP provided. Cannot prepare Guacamole connection.")
             raise ValueError("server_ip cannot be empty or None.")
 
+        target_ip = self._resolve_target_ip(connection, server_ip, ip_aliases)
         protocol = connection.protocol
         security_mode = connection.security_mode
 
@@ -194,7 +207,8 @@ class GuacamoleConfiguration:
         connection_dict = {
             "build_id": self.build_id,
             "protocol": protocol,
-            "ip": server_ip,
+            "ip": target_ip,
+            "port": str(connection.port or self.DEFAULT_PORTS.get(protocol, self.DEFAULT_PORTS[BuildConstants.Guacamole.Protocols.RDP.value])),
             "workspace_username": workspace_username,
             "workspace_password": random_password,
             "connection_user": connection.username,
@@ -207,6 +221,27 @@ class GuacamoleConfiguration:
         self.logger.debug(f"Prepared Guacamole {protocol} connection to {server_ip}")
         self.connection_ctr += 1
         return connection_dict
+
+    def _resolve_target_ip(
+        self,
+        connection: HumanInteractionModel,
+        server_ip: str,
+        ip_aliases: Optional[List[str]]
+    ) -> str:
+        """Returns the alias IP the connection targets, or server_ip when it has no alias_index."""
+        if connection.alias_index is None:
+            return server_ip
+        aliases = ip_aliases or []
+        if connection.alias_index >= len(aliases):
+            self.logger.error(
+                f"{self.class_name}:{self.build_id} - alias_index {connection.alias_index} is out of range",
+                alias_count=len(aliases), nested_guest=connection.nested_guest
+            )
+            raise ValueError(
+                f"alias_index {connection.alias_index} is out of range for {len(aliases)} ip_aliases."
+            )
+        # Aliases are stored as bare IPs; tolerate a CIDR suffix rather than hand Guacamole an unusable host
+        return aliases[connection.alias_index].split('/')[0]
 
     def get_guac_startup_script(self, connections: List[Dict[str, str]]) -> str:
         """Builds a Guacamole startup script (SQL) from a list of connection dictionaries.
@@ -249,12 +284,14 @@ class GuacamoleConfiguration:
             if protocol == BuildConstants.Guacamole.Protocols.VNC.value:
                 startup_script += GuacSQL.guac_startup_vnc.format(
                     ip=conn["ip"],
+                    port=conn["port"],
                     connection=connection_name,
                     vnc_password=conn["connection_password"]
                 )
             elif protocol == BuildConstants.Guacamole.Protocols.SSH.value:
                 startup_script += GuacSQL.guac_startup_ssh.format(
                     ip=conn["ip"],
+                    port=conn["port"],
                     connection=connection_name,
                     ssh_username=conn["connection_user"],
                     ssh_password=conn["connection_password"]
@@ -263,6 +300,7 @@ class GuacamoleConfiguration:
                 # Default to RDP
                 startup_script += GuacSQL.guac_startup_rdp.format(
                     ip=conn["ip"],
+                    port=conn["port"],
                     connection=connection_name,
                     rdp_username=conn["connection_user"],
                     rdp_password=conn["connection_password"],

@@ -9,7 +9,7 @@ from google.cloud.compute_v1 import (
     Image
 )
 from googleapiclient.discovery import Resource
-from typing import Any, List, Union
+from typing import Any, List, Optional, Union
 
 from common.constants.google import ResourceType, ClientType, ImageSource, OperationType
 from common.exceptions import OperationTimeout, NotFound
@@ -197,6 +197,7 @@ class ComputeImageAPI(BaseComputeAPI):
         source: str = None,
         source_type: ImageSource = ImageSource.SNAPSHOT,
         image_resource: Image = None,
+        licenses: Optional[List[str]] = None,
         **kwargs
     ) -> bool:
         """Creates a new Compute Engine image.
@@ -211,6 +212,8 @@ class ComputeImageAPI(BaseComputeAPI):
             source: (str, optional): Source of compute resource to create the image.
             source_type: (ImageSource): Enumerator to define what type of source to expect.
             image_resource: (Image, optional): Image Proto object to use instead
+            licenses: (List[str], optional): License URLs to attach to a built image, such as
+                ENABLE_VMX_LICENSE. Ignored when image_resource is supplied.
 
         Returns:
             bool: True if the image was successfully created (and optionally
@@ -235,6 +238,8 @@ class ComputeImageAPI(BaseComputeAPI):
         if not image_resource:
             # Build Image object
             image_resource = Image(name=resource_name, description=description)
+            if licenses:
+                image_resource.licenses = list(licenses)
 
             if disk_size_gb:
                 image_resource.disk_size_gb = disk_size_gb

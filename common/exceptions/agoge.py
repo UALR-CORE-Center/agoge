@@ -30,6 +30,11 @@ class Forbidden(BaseAgogeException):
     pass
 
 
+class NotOnRoster(Forbidden):
+    """The email is not on the roster of a roster-only (CTF) unit."""
+    pass
+
+
 class NotFound(BaseAgogeException):
     pass
 
@@ -43,6 +48,10 @@ class RateLimitExceeded(BaseAgogeException):
 
 
 class Conflict(BaseAgogeException):
+    pass
+
+
+class PreconditionFailed(BaseAgogeException):
     pass
 
 

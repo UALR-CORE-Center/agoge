@@ -1,12 +1,23 @@
 # agoge/setup.py
-from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
-from colorama import Fore, Style, init
+# ruff: noqa: E402  -- the source roots below must be on sys.path before the project imports
+import sys
+from pathlib import Path
 
+# Same roots as PYTHONPATH=.:build_files:cloud_functions; cloud_functions is needed because a
+# maintenance operation imported by menu_options pulls in cloud_fn_utilities at module load.
+_ROOT = Path(__file__).resolve().parent
+for _source_root in (_ROOT, _ROOT / 'build_files', _ROOT / 'cloud_functions'):
+    if str(_source_root) not in sys.path:
+        sys.path.insert(0, str(_source_root))
+
+from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
+from cloud_deployment.utilities import console as ui
 from cloud_deployment.operations.env_and_quotas.gcloud_environment_manager import GcloudEnvironmentManager
 from cloud_deployment.utilities.menu_options import (
     SetupCategories,
     display_main_menu,
     display_sub_menu,
+    get_main_menu_categories,
     get_user_selection,
     category_menu
 )
@@ -15,8 +26,6 @@ from cloud_deployment.operations.lab_management.shared_lab_manager import Shared
 from common.constants.build_constants import BuildConstants
 from common.exceptions import AgogeValidationError
 from cloud_deployment.operations.env_and_quotas.project_menu import ProjectMenu
-
-init(autoreset=True)
 
 
 def main():
@@ -70,17 +79,15 @@ def main():
     # Authenticate before the environment manager queries the shared Firestore
     # database. gcloud and Python client libraries use separate credential
     # stores, so both must be checked and synchronized first.
+    ui.banner("Agoge Setup", "Deployment and administration for Agoge lab environments")
     env_manager = GcloudEnvironmentManager(load_configurations=False)
-    current_account = env_manager.get_current_account()
+    with ui.status("Checking the active Google Cloud account"):
+        current_account = env_manager.get_current_account()
 
     if current_account:
-        print(Fore.CYAN + f"Currently logged in as: {current_account}" + Style.RESET_ALL)
+        ui.info(f"Currently logged in as {current_account}")
     else:
-        print(
-            Fore.YELLOW
-            + "[!] No active Google Cloud account found. Setup can authenticate now."
-            + Style.RESET_ALL
-        )
+        ui.warning("No active Google Cloud account found. Setup can authenticate now.")
 
     # Allow user to pick/change accounts and environments
     selected_account = env_manager.set_account()
@@ -105,16 +112,22 @@ def main():
     env_manager.display_menu()
     selected_env = env_manager.select_environment()
     project_id = env_manager.switch_environment(selected_env)
+    ui.banner("Session", None, {
+        "Environment": selected_env, "Project": project_id,
+        "Account": env_manager.get_current_account(),
+    })
 
     # Main interactive loop
     while True:
         # 1. Display the main category menu (top-level)
         display_main_menu()
-        category_choice = get_user_selection(len(SetupCategories))
+        category_choice = get_user_selection(
+            valid_choices=[category.value for category in get_main_menu_categories()]
+        )
         selected_category = SetupCategories(category_choice)
 
         if selected_category == SetupCategories.EXIT:
-            print(Fore.YELLOW + "Exiting the setup script. Goodbye!" + Style.RESET_ALL)
+            ui.info("Exiting the setup script. Goodbye!")
             break
         elif selected_category == SetupCategories.SHARED_LAB_MANAGEMENT:
             SharedLabManager().run()    # This has a separate menu system. Process this and continue the next selection.
@@ -141,5 +154,9 @@ if __name__ == '__main__':
     try:
         main()
     except AgogeValidationError as exc:
-        print(Fore.RED + f"[!!] {exc}" + Style.RESET_ALL)
+        ui.error(exc)
         raise SystemExit(1) from exc
+    except KeyboardInterrupt:
+        ui.console.print()
+        ui.warning("Setup interrupted.")
+        raise SystemExit(130)

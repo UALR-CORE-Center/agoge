@@ -1,13 +1,14 @@
 from pydantic import (
     AnyUrl,
     BaseModel,
+    ConfigDict,
     Field,
     HttpUrl,
     StrictBool,
     field_validator,
     model_validator,
 )
-from typing import List, Optional, Union, Any, Dict, Literal
+from typing import List, Optional, Union, Any, Dict, Literal, Tuple
 from datetime import datetime
 from ipaddress import ip_network
 import re
@@ -26,6 +27,27 @@ UnitTypeValue = Literal[
     BuildConstants.UnitType.SOLO.value,
     BuildConstants.UnitType.COMMUNITY.value,
 ]
+
+# CTF value sets, shared by the specification, stored, and request models below.
+LocationType = Literal['file', 'registry', 'env', 'ads']
+OperatingSystem = Literal['linux', 'windows']
+NESTED_GUEST_NAME_PATTERN = r'^[a-z0-9][a-z0-9-]{1,31}$'
+PlantStatus = Literal['pending', 'planting', 'planted', 'failed', 'stale']
+ArmStatus = Literal['pending', 'arming', 'armed', 'failed']
+Verdict = Literal['correct', 'incorrect', 'duplicate', 'decoy',
+                  'cross_submission', 'rate_limited', 'closed']
+CtfAction = Literal['arm', 'start', 'pause', 'resume', 'end', 'archive']
+ResetMode = Literal['replant', 'restart', 'rebuild']
+LogAction = Literal['CTF_CREATE', 'CTF_UPDATE', 'CTF_ARM', 'CTF_START', 'CTF_PAUSE',
+                    'CTF_RESUME', 'CTF_END', 'CTF_ARCHIVE', 'CTF_DELETE',
+                    'FLAG_REPLANT', 'FLAG_REVEAL', 'HOST_RESET', 'SCORE_ADJUST',
+                    'TEAM_ADD', 'TEAM_REMOVE', 'TEAM_UPDATE', 'SPEC_UPDATE',
+                    'SERVERS_BUILD', 'SERVERS_START', 'SERVERS_STOP']
+CtfServersAction = Literal['build', 'start', 'stop']
+# Deliberately loose: the roster only has to match what a participant types on the join page.
+CTF_MEMBER_EMAIL_PATTERN = r'^[^@\s]+@[^@\s]+\.[^@\s]+$'
+MAX_CTF_TEAM_MEMBERS = 50
+LogResult = Literal['OK', 'DENIED', 'ERROR']
 
 
 class CloudEnvModel(BaseModel):
@@ -184,6 +206,9 @@ class HumanInteractionModel(BaseModel):
     domain: Optional[str] = Field(default=None)
     security_mode: Optional[str] = Field(default=BuildConstants.Guacamole.SecurityModes.NLA,
                                          description="Security mode of the human interaction")
+    nested_guest: Optional[str] = Field(default=None, description="Nested guest this connection reaches; a label only")
+    alias_index: Optional[int] = Field(default=None, ge=0, description="Connect to server.nics[0].ip_aliases[alias_index]")
+    port: Optional[int] = Field(default=None, ge=1, le=65535, description="Guacamole port override, e.g. a nested VNC console")
 
 
 class ServerDetailsModel(BaseModel):
@@ -459,6 +484,73 @@ class PuzzleModel(BaseModel):
         return v
 
 
+# The `ctf` block of a lab specification. Authored in the spec JSON, copied into the unit on build,
+# and into the event on event creation. Cross-field rules (path format per location_type, unique ids,
+# points sign, unlocks_after references) live in the specification validator, not here.
+class CtfFlagSpecModel(BaseModel):
+    id: str = Field(..., pattern=r'^[a-z0-9][a-z0-9-]{1,31}$', description="Stable slug, unique within the spec; appears inside the flag value")
+    server: str = Field(..., description="ServerModel.name this flag is planted on")
+    slot: int = Field(..., ge=1, le=9, description="Difficulty tier within the host; slot 1 is reachable by the initial foothold")
+    category: Optional[str] = Field(default=None, max_length=32, description="Board grouping, e.g. 'Web', 'Windows', 'Forensics'")
+    location_type: LocationType = Field(..., description="Where the planter writes the value; see Flag Location Formats")
+    path: str = Field(..., description="Locator in the format its location_type requires")
+    operating_system: OperatingSystem = Field(...)
+    access_level: Literal['user', 'root', 'admin'] = Field(default='user', description="Documentation only; the planter always writes as the boot account")
+    points: int = Field(..., description="Awarded on a correct submission. Must be > 0 unless decoy is true; a decoy may be negative.")
+    decoy: bool = Field(default=False, description="Deliberately out-of-scope flag; never listed to students; submitting it is recorded as a scope observation")
+    hint: Optional[str] = Field(default=None, max_length=1000)
+    hint_cost: int = Field(default=0, ge=0)
+    unlocks_after: Optional[List[str]] = Field(default=None, description="Flag ids that must be solved before this one is listed to the team")
+    file_mode: Optional[str] = Field(default=None, pattern=r'^0[0-7]{3}$', description="Linux file placements only")
+    file_owner: Optional[str] = Field(default=None, pattern=r'^[a-z_][a-z0-9_-]*:[a-z_][a-z0-9_-]*$', description="Linux file placements only")
+    windows_access: Optional[Literal['administrators', 'user', 'everyone']] = Field(
+        default=None,
+        description="Windows file/ads placements only: replaces the file's inherited permissions so only "
+                    "SYSTEM and Administrators (plus windows_user, or Everyone) can read it. None keeps the folder's"
+    )
+    windows_user: Optional[str] = Field(
+        default=None, pattern=r'^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$',
+        description="Local account given read access; required when windows_access is 'user'"
+    )
+    hidden: bool = Field(default=False, description="Windows file/ads placements only: set the file's Hidden attribute")
+    guest: Optional[str] = Field(
+        default=None, pattern=NESTED_GUEST_NAME_PATTERN,
+        description="CtfNestedGuestSpecModel.name on `server`; None = the server itself"
+    )
+
+
+NestedGuestDriver = Literal['qemu-agent', 'offline']
+
+
+# A guest is not a GCE instance: flags keep `server` = the parent, so instance naming, mark_stale on a
+# parent rebuild, and board isolation are unchanged. Cross-field rules live in the CTF validator.
+class CtfNestedGuestSpecModel(BaseModel):
+    """A VM running inside a lab server under libvirt/QEMU-KVM."""
+    name: str = Field(..., pattern=NESTED_GUEST_NAME_PATTERN, description="Stable slug, unique per server; used by flags and in result keys")
+    server: str = Field(..., description="ServerModel.name of the Linux parent that runs this guest")
+    domain: str = Field(..., pattern=r'^[A-Za-z0-9_.-]{1,64}$', description="libvirt domain name on the parent")
+    operating_system: OperatingSystem = Field(...)
+    driver: NestedGuestDriver = Field(default='qemu-agent', description="How the parent writes into the guest")
+
+
+class CtfScoringSpecModel(BaseModel):
+    flag_prefix: str = Field(default="agoge", pattern=r'^[a-z][a-z0-9]{1,15}$', description="Literal prefix of every flag value")
+    submission_rate_limit: int = Field(default=10, ge=1, le=100, description="Maximum submissions per flag id, per board, per 60 seconds")
+    reveal_decoy_penalty: bool = Field(default=False, description="Whether a decoy verdict shows its negative value to the student")
+
+
+class CtfSpecModel(BaseModel):
+    """The `ctf` block of a lab specification. Its presence makes a unit CTF-capable."""
+    name: str = Field(..., max_length=100)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    rules_url: Optional[str] = Field(default=None, description="Link to rules of engagement shown on the student banner")
+    flags: List[CtfFlagSpecModel] = Field(..., min_length=1, max_length=200)
+    scoring: CtfScoringSpecModel = Field(default_factory=CtfScoringSpecModel)
+    nested_guests: List[CtfNestedGuestSpecModel] = Field(
+        default_factory=list, max_length=32, description="Empty for labs without nested VMs"
+    )
+
+
 class UnitModel(BaseModel):
     id: str = Field(..., description="ID of the unit")
     creation_timestamp: Optional[float] = Field(default=None)
@@ -485,10 +577,12 @@ class UnitModel(BaseModel):
     firewall_rules: Optional[List[FirewallRuleModel]] = Field(default=None, description="These are ONLY set by the program to allow all internal traffic")
     assessment: Optional[AssessmentModel] = Field(default=None, description="Use Agoge to provide grading support")
     rubric_support: StrictBool = Field(default=False, description="Explicitly enable rubric tools for this lab. AI generation still requires an instructor action.")
+    ctf: Optional[CtfSpecModel] = Field(default=None, description="Capture-the-flag block; its presence makes this unit CTF-capable")
     lms_integration: Optional[LMSIntegrationModel] = Field(default=None, description="Use connected LMS to provide grading support and distribution functionality")
     escape_room: Optional[EscapeRoomModel] = Field(default=None, description="Escape room units include additional specification of the escape room puzzles associated with each workout")
     test: Optional[bool] = Field(default=None, description="Whether the unit is a test. This helps in cleaning the datastore.")
     join_code: Optional[str] = Field(default=None, description='Used to invite students to claim a unit workspace')
+    ctf_event_id: Optional[str] = Field(default=None, description="Set on a unit a CTF event created; its join is roster-only")
     workout_duration_days: Optional[int] = Field(default=None, description='For asynchronous workout builds, specify to add an expiration timestamp for the workout.')
     accessibility_features: Optional[bool] = Field(default=False, description="Whether accessibility features are enabled or not")
     state: Optional[int] = Field(default=None, description="Current build state of unit")
@@ -532,6 +626,7 @@ class CatalogModel(BaseModel):
     id: str = Field(..., description="ID of the unit")
     assessment: Optional[AssessmentModel] = Field(default=None, description="Use Agoge to provide grading support")
     rubric_support: StrictBool = Field(default=False, description="Explicitly enable rubric tools for labs built from this specification.")
+    ctf: Optional[CtfSpecModel] = Field(default=None, description="Capture-the-flag block; its presence makes units built from this specification CTF-capable")
     lms_quiz: Optional[LMSIntegrationModel] = Field(default=None, description="Use connected LMS to provide grading support and distribution functionality")
 
     class Config:
@@ -541,6 +636,7 @@ class CatalogModel(BaseModel):
 class CatalogEditModel(BaseModel):
     assessment: Optional[AssessmentModel] = Field(default=None, description="Use Agoge to provide grading support")
     rubric_support: StrictBool = Field(default=False, description="Explicitly enable rubric tools for labs built from this specification.")
+    ctf: Optional[CtfSpecModel] = Field(default=None, description="Capture-the-flag block; its presence makes units built from this specification CTF-capable")
     build_type: str = Field(..., description="Build type of the unit")
     creation_timestamp: Optional[float] = None
     discriminator: str = Field(..., description="Discriminator field")
@@ -634,6 +730,185 @@ class DiskModel(BaseModel):
     initializeParams: DiskInitializeParamsModel
 
 
+# Nested lab host value sets and models (see the Nested Image Builder Contract).
+NestedOsFamily = Literal['linux', 'windows', 'appliance']
+NestedOsGroup = Literal['kali', 'linux', 'windows_client', 'windows_server', 'appliance']
+NestedInstallMethod = Literal['cloud_image', 'unattended_iso', 'disk_image', 'manual_iso']
+NestedMediaFormat = Literal['qcow2', 'raw', 'img.xz', 'img.bz2', 'tar.xz', 'iso', 'iso.gz', 'vmdk', 'vhd', 'vhdx', 'ova', 'zip', '7z']
+NestedNetConfig = Literal['networkd', 'netplan', 'nm-keyfile', 'ifupdown', 'windows', 'none']
+NestedGuestStatus = Literal['pending', 'downloading', 'installing', 'post_install', 'manual', 'ready', 'failed']
+NestedBuildPhase = Literal['queued', 'provisioning', 'building', 'ready', 'finalizing', 'finalized', 'failed']
+# 15 characters fits a libvirt domain, a hostname, and a NetBIOS name at once.
+SLUG15 = r'^[a-z][a-z0-9-]{0,13}[a-z0-9]$'
+
+
+class NestedOsCatalogModel(BaseModel):
+    """Collection `nested-os-catalog`, doc id = id."""
+    id: str = Field(..., pattern=r'^[a-z0-9][a-z0-9.-]{1,47}$')
+    display_name: str
+    family: NestedOsFamily
+    group: NestedOsGroup
+    version: str
+    install_method: NestedInstallMethod
+    media_url: Optional[str] = Field(default=None, description="https only; None means the instructor uploads the media")
+    media_sha256: Optional[str] = Field(default=None, pattern=r'^[a-f0-9]{64}$')
+    media_size_bytes: Optional[int] = Field(default=None, gt=0, description="media_url's download size; the parent disk "
+                                            "reserves room for it, or for NESTED_MEDIA_MAX_BYTES when None")
+    media_formats: List[NestedMediaFormat] = Field(..., min_length=1, description="Accepted formats; the first is the media_url's")
+    requires_upload: bool = False
+    license_note: str = Field(..., description="Shown in the wizard before selection")
+    eval_days: Optional[int] = None
+    osinfo: str = Field(..., description="virt-install --osinfo value, e.g. win2k22")
+    firmware: Literal['bios', 'uefi'] = 'bios'
+    disk_bus: Literal['virtio', 'sata', 'ide'] = 'virtio'
+    nic_model: Literal['virtio', 'e1000e', 'e1000', 'rtl8139'] = 'virtio'
+    video: Literal['virtio', 'qxl', 'vga', 'cirrus'] = 'vga'
+    virtio_win_version: Optional[str] = Field(default=None, description="Pinned virtio-win ISO release; None = no virtio media")
+    agent: bool = Field(..., description="qemu-guest-agent available: CTF driver qemu-agent, else offline")
+    net_config: NestedNetConfig
+    unattend_template: Optional[Literal['autounattend']] = None
+    windows_image_index: Optional[int] = None
+    default_username: Optional[str] = None
+    min_memory_mb: int
+    default_memory_mb: int
+    min_disk_gb: int
+    default_disk_gb: int
+    default_vcpus: int = 1
+    is_enabled: bool = True
+
+    @field_validator('media_url')
+    @classmethod
+    def _https_only(cls, value):
+        # The builder fetches media as root on the parent; plain http would let anyone on path swap it.
+        if value is not None and not value.startswith('https://'):
+            raise ValueError("media_url must be an https URL")
+        return value
+
+    @model_validator(mode='after')
+    def _media_source(self):
+        if self.media_url is None and not self.requires_upload:
+            raise ValueError("an entry without media_url must set requires_upload")
+        if self.family == 'windows' and not self.license_note.strip():
+            raise ValueError("a windows entry needs a license_note")
+        return self
+
+
+class NestedMediaModel(BaseModel):
+    """Collection `nested-media`, doc id = IdGenerator.uuid(). Instructor uploads."""
+    id: str
+    filename: str
+    format: NestedMediaFormat
+    size_bytes: int = Field(..., ge=0)
+    gcs_path: str = Field(..., description="gs://<project>_nested-media/media/<id>/<filename>")
+    sha256: Optional[str] = Field(default=None, pattern=r'^[a-f0-9]{64}$', description="Filled by the builder on first use")
+    os_id: Optional[str] = Field(default=None, description="Catalog entry it was uploaded for")
+    uploaded_by: str
+    uploaded_at: str
+    complete: bool = False
+
+
+class NestedMediaCreateRequest(BaseModel):
+    """Request body for POST /compute/images/nested/media/."""
+    model_config = ConfigDict(extra='forbid')
+    # No slashes: the name becomes the last segment of media/<id>/<filename>.
+    filename: str = Field(..., pattern=r'^[A-Za-z0-9][A-Za-z0-9._ ()+-]{0,199}$')
+    size_bytes: int = Field(..., gt=0)
+    os_id: Optional[str] = Field(default=None, description="Catalog entry the medium is for; checks the format")
+
+
+class NestedMediaUploadResponse(BaseModel):
+    media_id: str
+    upload_url: str = Field(..., description="V4 signed URL; POST it with upload_headers to start a resumable upload")
+    upload_headers: Dict[str, str] = Field(..., description="Headers the signature covers; send them unchanged")
+    expires_in: int = Field(..., description="Seconds the upload_url stays valid")
+
+
+class NestedNetworkModel(BaseModel):
+    name: str = Field(..., pattern=SLUG15)
+    cidr: str = Field(..., description="RFC 1918, /16 to /29")
+    mode: Literal['nat', 'isolated'] = Field(..., description="nat: internet through the parent")
+    parent_address: Optional[str] = Field(default=None, description="The parent's address on this network; None = pure L2 segment")
+    dhcp: bool = True
+    dhcp_start: Optional[str] = None
+    dhcp_end: Optional[str] = None
+
+
+class NestedGuestNicModel(BaseModel):
+    network: str
+    ip: Optional[str] = Field(default=None, description="Static; None = DHCP or unconfigured")
+    expose: bool = Field(default=False, description="1:1 NAT to the next alias slot on the lab server")
+
+
+class NestedGuestModel(BaseModel):
+    name: str = Field(..., pattern=SLUG15)
+    os_id: str
+    media_id: Optional[str] = Field(default=None, description="Required when the catalog entry requires_upload")
+    vcpus: int = Field(default=1, ge=1, le=8)
+    memory_mb: int = Field(default=2048, ge=256, le=32768)
+    disk_gb: int = Field(default=20, ge=2, le=500)
+    nics: List[NestedGuestNicModel] = Field(..., min_length=1, max_length=4)
+    admin_username: str = Field(..., pattern=r'^[a-zA-Z][a-zA-Z0-9_.-]{0,19}$')
+    admin_password: str = Field(..., description="Stored; teachers see it, as with human_interaction")
+    packages: List[str] = Field(default_factory=list, max_length=50, description="cloud_image Linux only")
+    post_install_script: Optional[str] = Field(default=None, max_length=65536, description="bash or PowerShell")
+    console: bool = Field(default=True, description="VNC console on the parent")
+    autostart: bool = True
+    start_order: int = Field(default=0, ge=0, le=99)
+    start_delay_seconds: int = Field(default=0, ge=0, le=600)
+
+
+class NestedHostSpecModel(BaseModel):
+    parent_os: Literal['debian-12', 'debian-13'] = 'debian-12'
+    build_machine_type: str = 'n2-standard-8'
+    networks: List[NestedNetworkModel] = Field(..., min_length=1, max_length=8)
+    guests: List[NestedGuestModel] = Field(..., min_length=1, max_length=8)
+    # Derived by the API on create, never sent by the client:
+    exposures: List[Tuple[str, int]] = Field(default_factory=list, description="(guest, nic index); list index = alias slot")
+    console_ports: Dict[str, int] = Field(default_factory=dict, description="guest -> 5901..5908")
+    vnc_passwords: Dict[str, str] = Field(default_factory=dict, description="guest -> 8 chars (VNC limit)")
+
+    @field_validator('exposures', mode='before')
+    @classmethod
+    def _exposures_from_record(cls, value):
+        # Stored image records hold {guest, nic} maps, because Firestore rejects arrays of arrays.
+        if isinstance(value, list):
+            return [(item['guest'], item['nic']) if isinstance(item, dict) else item for item in value]
+        return value
+
+
+class NestedBuildStatusModel(BaseModel):
+    phase: NestedBuildPhase = 'queued'
+    guests: Dict[str, NestedGuestStatus] = Field(default_factory=dict)
+    # guest -> NIC index (a string, for Firestore) -> address, static or leased, for the Connect dialog's tunnels.
+    guest_addresses: Dict[str, Dict[str, str]] = Field(default_factory=dict)
+    message: Optional[str] = Field(default=None, max_length=200)
+    heartbeat_at: Optional[str] = None
+    started_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    finalize_nonce: Optional[str] = None
+
+
+class NestedImageCreateRequest(BaseModel):
+    """Request body for POST /compute/images/nested/."""
+    model_config = ConfigDict(extra='forbid')
+    server_name: str
+    description: str = Field(..., max_length=200)
+    labels: List[str] = Field(default_factory=list)
+    machine_type: str = Field(..., description="What lab servers built from the image default to")
+    disk_size: Optional[int] = Field(default=None, description="None = computed minimum")
+    username: str
+    ssh_key: str = Field(..., description="Parent access, as for standard Linux images")
+    nested: NestedHostSpecModel
+    product_keys: Dict[str, str] = Field(default_factory=dict, description="guest -> key; never persisted")
+
+    @model_validator(mode='after')
+    def _no_derived_fields(self):
+        # The API derives these; accepting them would let a client pick alias slots, ports, or VNC passwords.
+        if self.nested.exposures or self.nested.console_ports or self.nested.vnc_passwords:
+            raise ValueError("nested.exposures, console_ports and vnc_passwords are derived by the server")
+        return self
+
+
 class AgogeImageModel(BaseModel):
     """
     Agoge generated compute images ready to be used by CatalogModel instances
@@ -659,13 +934,23 @@ class AgogeImageModel(BaseModel):
         description="State of image server"
     )
     state_timestamp: Optional[str] = Field(default=None, description="Timestamp of image state")
-    base_family: Optional[str] = None,
+    base_family: Optional[str] = None
     image_exists: Optional[bool] = False
     architecture: Optional[str] = None
+    nested: Optional[NestedHostSpecModel] = None
+    nested_build: Optional[NestedBuildStatusModel] = None
     # Response metadata is derived from the stored source and active project.
     is_shared: bool = False
     source_project: Optional[str] = None
     can_edit_shared: bool = False
+
+    def firestore_dump(self) -> dict:
+        """model_dump() for writing the whole record: Firestore rejects nested.exposures' arrays of arrays."""
+        record = self.model_dump()
+        if record.get('nested'):
+            record['nested']['exposures'] = [{'guest': guest, 'nic': nic}
+                                             for guest, nic in record['nested']['exposures']]
+        return record
 
 
 class SnapshotModel(BaseModel):
@@ -747,6 +1032,192 @@ class PuzzleTestModel(BaseModel):
     join_code: Optional[str] = Field(default=None, description="Short unique join code for sharing or joining")
     sku: Optional[str] = Field(default=None, description="Lighting SKU (e.g., Govee)")
     device: Optional[str] = Field(default=None, description="Lighting device identifier")
+
+
+# ---------------------------------------------------------------------------
+# CTF stored documents. The spec models above live in catalog and unit records;
+# these are the per-event documents in the DbCollections.CTF* collections.
+# ---------------------------------------------------------------------------
+
+class CtfEventModel(BaseModel):
+    """Collection `agoge-ctf`, doc id = ctf_id (IdGenerator.build_id)"""
+    id: str = Field(...)
+    unit_id: str = Field(...)
+    instructor_id: List[str] = Field(..., description="Copied from the unit (normalized to a list) at creation")
+    spec: CtfSpecModel = Field(..., description="Copied from the unit at creation; later unit edits do not change it")
+    seed_version: int = Field(default=1, description="Always 1 in Phase 1; part of the derivation input")
+    creation_timestamp: float = Field(...)
+    starts_at: Optional[float] = Field(default=None, description="Set by start")
+    ends_at: Optional[float] = Field(default=None, description="Null means open-ended; resume extends it by the paused duration")
+    paused_at: Optional[float] = Field(default=None)
+    accumulated_pause_seconds: float = Field(default=0.0)
+    scoreboard_frozen_at: Optional[float] = Field(default=None, description="Public scoreboard ignores solves after this")
+    public_scoreboard_enabled: bool = Field(default=False)
+    board_ids: List[str] = Field(default_factory=list, description="Workout ids of the team boards")
+    join_code: Optional[str] = Field(default=None, description="The unit's join code, shown on the setup tab")
+    boards_pending: int = Field(default=0, description="Arm workers not yet finished; decremented in a transaction")
+    state: int = Field(..., description="CtfStates value")
+    state_timestamp: str = Field(..., description="ISO 8601 UTC")
+
+    class Config:
+        from_attributes = True
+
+
+class CtfFlagStateModel(BaseModel):
+    """Per-board, per-flag state. Embedded in CtfBoardModel."""
+    flag_id: str = Field(...)
+    digest: str = Field(..., description="SHA-256 hex of the normalized derived value")
+    plant_status: PlantStatus = Field(default='pending')
+    planted_at: Optional[float] = Field(default=None)
+    plant_error: Optional[str] = Field(default=None, description="Never contains a flag value")
+    solved: bool = Field(default=False)
+    solved_at: Optional[float] = Field(default=None)
+    hint_taken: bool = Field(default=False)
+    hint_taken_at: Optional[float] = Field(default=None)
+    attempts: int = Field(default=0, description="Submissions whose parsed flag id is this flag")
+
+
+class CtfBoardModel(BaseModel):
+    """Collection `agoge-ctf-board`, doc id = f"{ctf_id}-{workout_id}" """
+    id: str = Field(...)
+    workout_id: str = Field(...)
+    ctf_id: str = Field(...)
+    active: bool = Field(default=True, description="False once the event is archived or deleted; a workout has at most one active board")
+    team_name: str = Field(..., description="WorkoutModel.team_name, else student_email, else workout_id")
+    members: List[str] = Field(default_factory=list, description="Lowercased roster emails; the join page accepts only these")
+    flags: List[CtfFlagStateModel] = Field(default_factory=list)
+    score: int = Field(default=0, description="Solved points + decoy points - hint costs + manual adjustments")
+    solve_count: int = Field(default=0)
+    decoy_count: int = Field(default=0)
+    decoy_points: int = Field(default=0, description="Sum of decoy points in `score`; student views subtract it unless reveal_decoy_penalty")
+    last_solve_at: Optional[float] = Field(default=None, description="Ranking tiebreaker")
+    arm_status: ArmStatus = Field(default='pending')
+    arm_error: Optional[str] = Field(default=None)
+
+    class Config:
+        from_attributes = True
+
+
+class CtfDigestModel(BaseModel):
+    """Collection `agoge-ctf-digest`, doc id = digest. Written at event creation so
+    one document read resolves any submitted value to its board and flag."""
+    digest: str = Field(...)
+    ctf_id: str = Field(...)
+    workout_id: str = Field(...)
+    flag_id: str = Field(...)
+
+
+class CtfRateLimitModel(BaseModel):
+    """Collection `agoge-ctf-rate-limit`, doc id = f"{ctf_id}-{workout_id}-{bucket}" where
+    bucket is the parsed flag id, or "unparsed". Updated in a transaction."""
+    id: str = Field(...)
+    window_start: float = Field(..., description="Start of the current 60 s window")
+    count: int = Field(default=0)
+
+
+class CtfSubmissionModel(BaseModel):
+    """Collection `agoge-ctf-submission`, doc id = IdGenerator.uuid(). Append-only."""
+    id: str = Field(...)
+    ctf_id: str = Field(...)
+    workout_id: str = Field(...)
+    flag_id: Optional[str] = Field(default=None, description="Resolved flag id, else the parsed flag id, else null")
+    submitted_digest: str = Field(..., description="The submission itself is never stored")
+    verdict: Verdict = Field(...)
+    matched_workout_id: Optional[str] = Field(default=None, description="Set on cross_submission")
+    points_awarded: int = Field(default=0)
+    submitted_at: float = Field(...)
+    origin_ip: Optional[str] = Field(default=None, description="request.client.host")
+
+
+class CtfLogModel(BaseModel):
+    """Collection `agoge-ctf-log`, doc id = IdGenerator.uuid(). Append-only."""
+    id: str = Field(...)
+    ctf_id: str = Field(...)
+    action: LogAction = Field(...)
+    actor: str = Field(..., description="AgogeUser.email, or 'system'")
+    target: Optional[str] = Field(default=None, description="workout_id, server name, or flag id")
+    result: LogResult = Field(...)
+    detail: Optional[Dict[str, Union[str, int, bool]]] = Field(default=None, description="Scalar context only. Never a flag value, never a seed.")
+    created_at: float = Field(...)
+
+
+class CtfCreateRequest(BaseModel):
+    spec_id: str = Field(..., min_length=1, max_length=200, description="Catalog id of a template with a ctf block")
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100, description="Overrides the spec's ctf name")
+    expires: float = Field(..., gt=0, description="UTC epoch seconds when the event's lab and workouts expire")
+
+
+def _normalize_members(members: List[str]) -> List[str]:
+    normalized = []
+    for member in members:
+        email = member.strip().lower()
+        if not re.fullmatch(CTF_MEMBER_EMAIL_PATTERN, email):
+            raise ValueError("each member must be an email address")
+        if email not in normalized:
+            normalized.append(email)
+    return normalized
+
+
+class CtfTeamMembersRequest(BaseModel):
+    members: List[str] = Field(..., min_length=1, max_length=MAX_CTF_TEAM_MEMBERS)
+
+    @field_validator('members')
+    @classmethod
+    def normalize_members(cls, members: List[str]) -> List[str]:
+        return _normalize_members(members)
+
+
+class CtfTeamRequest(CtfTeamMembersRequest):
+    team_name: str = Field(..., min_length=1, max_length=64)
+
+    @field_validator('team_name')
+    @classmethod
+    def strip_team_name(cls, team_name: str) -> str:
+        if not (team_name := team_name.strip()):
+            raise ValueError("team_name cannot be blank")
+        return team_name
+
+
+class CtfSpecUpdateRequest(BaseModel):
+    ctf: CtfSpecModel
+
+
+class CtfServersRequest(BaseModel):
+    action: CtfServersAction
+
+
+class CtfUpdateRequest(BaseModel):
+    """Only fields present in the body are applied (model_fields_set);
+    sending scoreboard_frozen_at: null unfreezes."""
+    ends_at: Optional[float] = None
+    scoreboard_frozen_at: Optional[float] = None
+    public_scoreboard_enabled: Optional[bool] = None
+
+
+class CtfActionRequest(BaseModel):
+    action: CtfAction
+
+
+class CtfReplantRequest(BaseModel):
+    workout_ids: Optional[List[str]] = Field(default=None, description="Null = every board")
+    servers: Optional[List[str]] = Field(default=None, description="Null = every flag-bearing server")
+
+
+class CtfHostResetRequest(BaseModel):
+    mode: ResetMode
+    guest: Optional[str] = Field(
+        default=None, pattern=NESTED_GUEST_NAME_PATTERN, description="Reset this nested guest; None = the server itself"
+    )
+
+
+class CtfScoreAdjustRequest(BaseModel):
+    delta: int = Field(..., ge=-10000, le=10000)
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+class CtfSubmitRequest(BaseModel):
+    flag: str = Field(..., min_length=1, max_length=200)
+
 
 UnitModel.model_rebuild()
 AssessmentModel.model_rebuild()

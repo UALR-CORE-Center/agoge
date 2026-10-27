@@ -20,7 +20,7 @@ export const transformToSpecification = (data: any) : Specification  => {
         escape_room: data?.escape_room,
         test: Boolean(data?.test),
         workout_duration_days: data?.workout_duration_days,
-        accessibility_features: data?.workout_duration_days,
+        accessibility_features: data?.accessibility_features,
         discriminator: data.discriminator,
     };
 }
@@ -44,7 +44,7 @@ export const transformToCatalog = (data: any) : Specification => {
         lms_quiz: data?.lms_quiz,
         test: Boolean(data?.test),
         workout_duration_days: data?.workout_duration_days,
-        accessibility_features: data?.workout_duration_days,
+        accessibility_features: data?.accessibility_features,
         discriminator: data.discriminator,
     };
 }

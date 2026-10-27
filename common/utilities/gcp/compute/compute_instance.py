@@ -13,12 +13,16 @@ from google.cloud.compute_v1 import (
     DetachDiskInstanceRequest,
     Disk,
     AttachDiskInstanceRequest,
+    Items,
+    Metadata,
     SetMetadataInstanceRequest,
+    GetGuestAttributesInstanceRequest
 )
+from google.api_core.exceptions import NotFound as GoogleNotFound
 from googleapiclient.discovery import Resource
 
 from common.constants.google import ResourceType, ClientType
-from common.exceptions import NotFound
+from common.exceptions import NotFound, PreconditionFailed
 from common.utilities.gcp.cloud_logger import LoggerNames
 from .base_compute_api import BaseComputeAPI
 
@@ -172,7 +176,7 @@ class ComputeInstanceAPI(BaseComputeAPI):
     def update(self, resource_name: str, wait: bool = True, **kwargs) -> bool:
         raise NotImplemented("Method not yet implemented")
 
-    def set_metadata(self, resource_name: str, metadata, wait: bool = True) -> bool:
+    def replace_metadata(self, resource_name: str, metadata, wait: bool = True) -> bool:
         """Replace metadata using the caller's freshly read fingerprint."""
         client = self.client()
         return self._make_request(
@@ -351,4 +355,96 @@ class ComputeInstanceAPI(BaseComputeAPI):
             request=reset_request
         )
 
+    def set_metadata(
+        self,
+        resource_name: str,
+        items: dict = None,
+        remove: list = None,
+        wait: bool = True,
+        **kwargs
+    ) -> bool:
+        """Merges `items` into the instance metadata and drops the keys in `remove`.
+
+        Every other existing key is preserved. The write is guarded by the
+        instance's current metadata fingerprint; on a 412 (another writer got
+        there first) the instance is re-read once and the merge retried.
+        """
+        client = self.client()
+        project = kwargs.get('project', self.project)
+        zone = kwargs.get('zone', self.zone)
+        items = items or {}
+        remove = set(remove or [])
+
+        for attempt in range(2):
+            instance = self.get(resource_name=resource_name, project=project, zone=zone)
+            merged = {item.key: item.value for item in instance.metadata.items}
+            merged.update(items)
+            for key in remove:
+                merged.pop(key, None)
+
+            metadata_request = SetMetadataInstanceRequest(
+                instance=resource_name,
+                project=project,
+                zone=zone,
+                metadata_resource=Metadata(
+                    fingerprint=instance.metadata.fingerprint,
+                    items=[Items(key=key, value=value) for key, value in merged.items()]
+                )
+            )
+            try:
+                return self._make_request(
+                    client_request=client.set_metadata,
+                    action='set metadata',
+                    resource=resource_name,
+                    wait=wait,
+                    request=metadata_request
+                )
+            except PreconditionFailed:
+                if attempt:
+                    raise
+                self.logger.warning(
+                    f'{self.class_name}:{resource_name} - metadata fingerprint stale; re-reading and retrying once'
+                )
+
 # [ eof ]
+
+    def get_guest_attributes(
+        self,
+        resource_name: str,
+        query_path: str,
+        **kwargs
+    ) -> dict:
+        """Returns the guest attributes under `query_path` (e.g. `agoge-ctf/`) as `{key: value}`.
+
+        Returns an empty dict when the VM has written nothing under the path yet. GCE answers that case
+        with a 404, the same status as a missing instance, so on a 404 the instance is re-read: a missing
+        instance still raises NotFound rather than looking like "no answer yet" to a poller.
+        """
+        client = self.client()
+        project = kwargs.get('project', self.project)
+        zone = kwargs.get('zone', self.zone)
+
+        def fetch(request):
+            # The 404 is caught here, not in _make_request, so routine polling of an empty path logs no error.
+            try:
+                return client.get_guest_attributes(request=request)
+            except GoogleNotFound:
+                return None
+
+        request = GetGuestAttributesInstanceRequest(
+            instance=resource_name,
+            project=project,
+            zone=zone,
+            query_path=query_path
+        )
+        attributes = self._make_request(
+            client_request=fetch,
+            action='get guest attributes',
+            resource=resource_name,
+            wait=False,
+            request=request
+        )
+        if attributes is None:
+            self.get(resource_name=resource_name, project=project, zone=zone)
+            return {}
+        return {entry.key: entry.value for entry in attributes.query_value.items}

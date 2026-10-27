@@ -1,7 +1,7 @@
 import copy
 import re
 from typing import Type
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, ValidationError
 from datetime import datetime
 from enum import Enum
 
@@ -9,13 +9,15 @@ from common.constants.build_constants import BuildConstants
 from common.constants.database import DbCollections
 from common.constants.states import SpecificationStates
 from common.exceptions import AgogeValidationError
-from common.models.agoge import NetworkModel, FirewallRuleModel, RouteModel, ServerModel
+from common.models.agoge import CtfSpecModel, NetworkModel, FirewallRuleModel, RouteModel, ServerModel
 from common.models.users import AgogeUser
 from common.utilities.id_generator import IdGenerator
 
 from utilities.infrastructure_as_code.object_validators import (
     AssessmentValidator,
+    CtfValidator,
     FirewallRulesValidator,
+    NestedServersValidator,
     NetworksValidator,
     RoutesValidator,
     ServersValidator,
@@ -28,6 +30,7 @@ from .lab_spec_base import LabSpecBase
 
 class FormTypes(str, Enum):
     ASSESSMENT = 'assessment'
+    CTF = 'ctf'
     NETWORKS = 'networks'
     REVIEW = 'review'
     SUMMARY = 'summary'
@@ -46,6 +49,7 @@ class SpecEditManager(LabSpecBase):
         self.class_name = self.__class__.__name__
         self.spec_form = None
         self.catalog = False
+        self.form_type = None
 
     @property
     def edit_id(self) -> str:
@@ -123,6 +127,10 @@ class SpecEditManager(LabSpecBase):
         return True, "Spec is valid"
 
     def save(self) -> None:
+        # Validate before any write so an invalid spec is never persisted to the edits or catalog collection
+        if not self.is_valid()[0]:
+            raise AgogeValidationError("Cannot save invalid spec")
+
         if self.catalog:
             edit_id = self.edit_id
 
@@ -146,10 +154,6 @@ class SpecEditManager(LabSpecBase):
                 doc_id=self.edit_id,
                 data=self.spec
             )
-
-        if not self.is_valid()[0]:
-            raise AgogeValidationError("Cannot save invalid spec")
-        return
 
     def delete(
         self,
@@ -269,6 +273,9 @@ class SpecEditManager(LabSpecBase):
                 list(self._generate_schema(servers, ServerModel))
                 server_validator = ServersValidator(self.spec).load()
                 self.spec.update(server_validator)
+                # Every field it checks (image, machine type, NIC 0 aliases, connections) comes from the
+                # servers form itself, so unlike the WireGuard listener it can run on partial saves too
+                NestedServersValidator(self.spec, image_loader=self._get_image_record).load()
             if routes := self.spec.get('routes'):
                 list(self._generate_schema(routes, RouteModel))
                 routes_validator = RoutesValidator(self.spec).load()
@@ -292,16 +299,27 @@ class SpecEditManager(LabSpecBase):
                 web_apps = WebApplicationsValidator(self.spec).load()
                 self.spec.update(web_apps)
 
+        # Outside the build_type branch so no spec carrying a ctf block skips the flag path checks
+        if ctf := self.spec.get('ctf'):
+            CtfSpecModel(**ctf)
+            # A partial editor save (e.g. renaming a server) may leave flags pointing at the old
+            # name; the CTF step is where that is fixed, so only its own save and publish enforce
+            # the cross-references. Uploads and direct validation (no form) always do.
+            if self.form_type in (None, FormTypes.CTF.value, FormTypes.REVIEW.value):
+                CtfValidator(self.spec, image_loader=self._get_image_record).load()
+
     def _form_to_dict(
         self,
         form: dict
     ) -> dict:
         ignore = ['build_id', 'form_type', 'spec_type', 'unit_type']
         form_type = self._get_form_type(form)
+        self.form_type = form_type
         if form_type:
             form_methods = {
                 FormTypes.SUMMARY.value: self._parse_summary_form,
                 FormTypes.ASSESSMENT.value: self._parse_assessment_form,
+                FormTypes.CTF.value: self._parse_ctf_form,
                 FormTypes.NETWORKS.value: self._parse_networks_form,
                 FormTypes.SERVERS.value: self._parse_servers_form,
                 FormTypes.FIREWALL_RULES.value: self._parse_firewall_rules_form,
@@ -353,6 +371,37 @@ class SpecEditManager(LabSpecBase):
         self.spec['unit_type'] = unit_type
         # Earlier versions of the editor incorrectly nested this value in summary.
         self.spec['summary'].pop('unit_type', None)
+
+        # The editor's "CTF" unit type is a solo lab carrying a ctf block. Choosing another
+        # unit type drops the block; older clients omit ctf_enabled and leave it untouched.
+        ctf_enabled = form.get('ctf_enabled')
+        if ctf_enabled is not None:
+            if self._parse_boolean_field(ctf_enabled):
+                if unit_type != BuildConstants.UnitType.SOLO.value:
+                    raise AgogeValidationError('A CTF lab must use the solo unit type')
+            else:
+                self.spec.pop('ctf', None)
+
+    def _parse_ctf_form(
+        self,
+        form: dict,
+        **kwargs
+    ) -> None:
+        ctf = form.get('ctf')
+        if not ctf:
+            self.spec.pop('ctf', None)
+            return
+        if self.spec.get('unit_type', BuildConstants.UnitType.SOLO.value) != BuildConstants.UnitType.SOLO.value:
+            raise AgogeValidationError('A CTF lab must use the solo unit type')
+        # Cross-references (servers, unlocks) are checked by CtfValidator in _validate_spec.
+        try:
+            self.spec['ctf'] = CtfSpecModel(**ctf).model_dump()
+        except ValidationError as e:
+            # The router maps ValueError (which ValidationError subclasses) to a bare 500.
+            problems = '; '.join(
+                f"{'.'.join(str(part) for part in err['loc'])}: {err['msg']}" for err in e.errors()
+            )
+            raise AgogeValidationError(f'Invalid CTF settings: {problems}') from e
 
     def _parse_assessment_form(
         self,
@@ -440,6 +489,7 @@ class SpecEditManager(LabSpecBase):
                     if 'ssh_key' in human_interaction:
                         del human_interaction['ssh_key']
                     processed_human_interaction = [human_interaction]
+            processed_human_interaction.extend(self._nested_guest_connections(server.get('human_interaction')))
 
             machine_type = server.get('machine_type')
             processed_machine_type = ""
@@ -499,6 +549,21 @@ class SpecEditManager(LabSpecBase):
                     processed_server['tags'].append('deny-outbound')
             servers.append(processed_server)
         self.spec['servers'] = servers
+
+    @staticmethod
+    def _nested_guest_connections(submitted) -> list:
+        """The editor's "Add connections" output: connections to nested guests, which the image does not carry.
+
+        The parent's own connections still come from the image, so only `nested_guest` ones are taken from the
+        form; NestedServersValidator range-checks their alias_index.
+        """
+        if not isinstance(submitted, list):
+            return []
+        return [
+            {key: value for key, value in connection.items() if key != 'ssh_key'}
+            for connection in submitted
+            if isinstance(connection, dict) and connection.get('nested_guest')
+        ]
 
     def _parse_web_applications_form(
         self,

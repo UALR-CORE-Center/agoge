@@ -29,6 +29,7 @@ import {
     FormGroup,
     FormGroupOutline,
     FormTextField,
+    RequiredMark,
     StyledFormFieldLabel,
 } from "./utils/FormFields";
 
@@ -140,8 +141,9 @@ const NetworkForm: React.FC<Props> = ({formHooks, disableForm, specification, se
                                     <AccordionDetails id={`network-panel-${index}-content`} aria-labelledby={`network-panel-${index}-header`} sx={{ px: { xs: 1, sm: 2 } }}>
                                         <FormFields>
                                             <FormGroupOutline showOverlay={disableForm}> <FormGroup>
-                                                <StyledFormFieldLabel>Name</StyledFormFieldLabel>
+                                                <StyledFormFieldLabel>Name<RequiredMark/></StyledFormFieldLabel>
                                                 <FormTextField
+                                                    required
                                                     helpText={index === 0 ? 'External is required as the first one' : 'Lowercase letters, numbers, hyphens allowed up to 52 characters'}
                                                     formKey={NetworkFormKeys.networkName}
                                                     disabled={disableForm}
@@ -155,8 +157,9 @@ const NetworkForm: React.FC<Props> = ({formHooks, disableForm, specification, se
                                             </FormGroupOutline>
 
                                             <FormGroupOutline showOverlay={disableForm}> <FormGroup>
-                                                <StyledFormFieldLabel>IPv4 Range</StyledFormFieldLabel>
+                                                <StyledFormFieldLabel>IPv4 Range<RequiredMark/></StyledFormFieldLabel>
                                                 <FormTextField
+                                                    required
                                                     helpText={'The address range for this subnet, in CIDR notation. Use a standard private VPC network address range: for example, 10.0.0.0/9.'}
                                                     formKey={NetworkFormKeys.networkSubnets}
                                                     disabled={disableForm}

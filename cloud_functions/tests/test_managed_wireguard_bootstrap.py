@@ -97,7 +97,7 @@ def test_new_vm_prepares_nonce_dedicated_identity_and_narrow_secret_access():
         {'email': EMAIL, 'scopes': ['https://www.googleapis.com/auth/cloud-platform']}
     ]
     assert value.server_spec.can_ip_forward is True
-    value.compute_instance.set_metadata.assert_not_called()
+    value.compute_instance.replace_metadata.assert_not_called()
 
 
 def test_start_replaces_nonce_before_start_and_preserves_metadata_fingerprint():
@@ -107,7 +107,7 @@ def test_start_replaces_nonce_before_start_and_preserves_metadata_fingerprint():
     with patch.object(module, 'WireGuardGatewayIdentity') as identity:
         identity.return_value.ensure.return_value = EMAIL
         value._prepare_wireguard_bootstrap(for_start=True)
-    name, metadata = value.compute_instance.set_metadata.call_args.args
+    name, metadata = value.compute_instance.replace_metadata.call_args.args
     assert name == value.server_name
     assert metadata['fingerprint'] == 'current-fingerprint'
     fields = {item['key']: item['value'] for item in metadata['items']}
@@ -136,7 +136,7 @@ def test_existing_foreign_or_stale_vm_does_not_get_new_configuration(change):
         identity.return_value.ensure.return_value = EMAIL
         with pytest.raises(BadRequest):
             value._prepare_wireguard_bootstrap()
-    value.compute_instance.set_metadata.assert_not_called()
+    value.compute_instance.replace_metadata.assert_not_called()
 
 
 def test_build_waits_for_guest_service_before_reporting_running():

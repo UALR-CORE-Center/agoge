@@ -15,8 +15,11 @@ interface Props {
     onClose: () => void;
     handleConfirm: () => void;
     expectedText: string;
-    action?: "rebuild" | "delete" | "cancel"
+    action?: "rebuild" | "delete" | "cancel" | "end" | "archive"
     loading: boolean;
+    // Defaults keep the original delete wording; other irreversible actions name themselves.
+    confirmLabel?: string;
+    message?: React.ReactNode;
 }
 
 export default function ConfirmationDialog(props: Props) {
@@ -43,7 +46,7 @@ export default function ConfirmationDialog(props: Props) {
             </DialogTitle>
             <DialogContent>
                 <DialogContentText sx={{ color: theme.palette.text.primary }}>
-                    Are you sure you want to {action} the selected items? This action cannot be undone.
+                    {props.message ?? `Are you sure you want to ${action} the selected items? This action cannot be undone.`}
                 </DialogContentText>
                 <DialogContentText sx={{ color: theme.palette.text.primary, overflowWrap: 'anywhere' }}>
                     Please type <strong>{props.expectedText}</strong> to confirm.
@@ -88,10 +91,11 @@ export default function ConfirmationDialog(props: Props) {
                     }}
                     disabled={!isConfirmEnabled}
                     loading={props.loading}
-                    loadingPosition={"start"}
-                    startIcon={props.loading ? <CircularProgress /> : <DeleteIcon /> }
+                    // loadingPosition "start" needs a startIcon, so a custom label (no trash icon) centres the spinner.
+                    loadingPosition={props.confirmLabel ? "center" : "start"}
+                    startIcon={props.confirmLabel ? undefined : (props.loading ? <CircularProgress /> : <DeleteIcon />)}
                 >
-                    Delete
+                    {props.confirmLabel ?? "Delete"}
                 </LoadingButton>
             </DialogActions>
         </Dialog>

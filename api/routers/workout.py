@@ -5,6 +5,7 @@ from typing import Optional
 from common.exceptions import (
     BadRequest,
     Forbidden,
+    NotOnRoster,
     NotFound,
     Unauthorized,
     Conflict,
@@ -89,6 +90,11 @@ async def create_workout(
         msg = "Invalid request data. Please ensure all required fields are correctly filled and formatted"
         logger.error(e.message, details=msg, **log_args)
         raise HTTPException(status_code=400, detail=msg)
+    except NotOnRoster as e:
+        msg = ("This email is not on the roster for this event. Use the email your instructor "
+               "registered, or ask them to add you.")
+        logger.info(e.message, details=msg, **log_args)
+        raise HTTPException(status_code=403, detail=msg)
     except Forbidden as e:
         msg = ("Request denied. Maximum allowed workout builds for the "
                "unit have been reached. Contact your instructor for further assistance.")

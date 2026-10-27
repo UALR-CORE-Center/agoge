@@ -2,8 +2,10 @@ from datetime import datetime
 from common.exceptions import AgogeValidationError
 
 from common.constants.build_constants import BuildConstants
-from common.models.agoge import UnitModel
+from common.models.agoge import CtfSpecModel, UnitModel
 
+from utilities.infrastructure_as_code.object_validators.ctf import CtfValidator
+from utilities.infrastructure_as_code.object_validators.nested_servers import NestedServersValidator
 from utilities.infrastructure_as_code.object_validators.unit import UnitValidator
 from .lab_spec_base import LabSpecBase
 
@@ -60,6 +62,12 @@ class SpecFileManager(LabSpecBase):
             UnitValidator(
                 wireguard_port=self.env_dict.get('wireguard_port', 51820)
             ).load(self.spec)
+            NestedServersValidator(self.spec, image_loader=self._get_image_record).load()
+
+        # Outside the build_type branch so no spec carrying a ctf block skips the flag path checks
+        if ctf := self.spec.get('ctf'):
+            CtfSpecModel(**ctf)
+            CtfValidator(self.spec, image_loader=self._get_image_record).load()
 
         # Spec is now validated
         self.validated = True

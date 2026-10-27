@@ -16,6 +16,7 @@ from common.exceptions import BadRequest, Unauthorized, Forbidden
 
 from app_config import AppConfig
 from dependencies import verify_token
+from health import HealthCheckMiddleware
 from routers.puzzle_control import puzzle_control_router
 from routers.rubric import rubric_router
 from routers.webgl import webgl_router
@@ -23,6 +24,8 @@ from routers.webgl import webgl_router
 # Routers
 from routers.compute_image import compute_image_router
 from routers.compute_snapshot import compute_snapshot_router
+from routers.ctf import ctf_router
+from routers.ctf_board import ctf_board_router
 from routers.docs import docs_router
 from routers.guacamole import guacamole_router
 from routers.lab_specs import lab_spec_router
@@ -66,6 +69,8 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 hosts = app_config.hosts()
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
+# Added last, so it runs first: the startup probe must get past TrustedHostMiddleware.
+app.add_middleware(HealthCheckMiddleware)
 
 # Initialize Firebase
 firebase_admin.initialize_app()
@@ -74,6 +79,8 @@ cloud_env = None
 # Add APIRouters
 app.include_router(compute_image_router)
 app.include_router(compute_snapshot_router)
+app.include_router(ctf_router)
+app.include_router(ctf_board_router)
 app.include_router(docs_router)
 app.include_router(guacamole_router)
 app.include_router(lab_spec_router)

@@ -1,16 +1,13 @@
-import os
-
 from fastapi import Depends, Security, Request, HTTPException, Path
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from firebase_admin import auth
-from google.auth.transport import requests as google_requests
-from google.oauth2 import id_token
 from typing import Optional
 
-from common.exceptions.agoge import BadRequest, Forbidden, NotFound, Unauthorized
+from common.exceptions.agoge import BadRequest, NotFound, Unauthorized
 from common.models.users import AgogeUser, AnonymousAppUser
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 
+from core.ctf.config import is_ctf_enabled
 from core.users import Users
 
 security = HTTPBearer()
@@ -30,7 +27,14 @@ def get_current_user(
     token: Optional[HTTPAuthorizationCredentials] = Security(security)
 ) -> AgogeUser:
     if token:
-        return verify_token(request=request, token=token)
+        # Dependencies resolve outside each route's try/except, so custom
+        # exceptions must become HTTPExceptions here or FastAPI returns a 500.
+        try:
+            return verify_token(request=request, token=token)
+        except Unauthorized as e:
+            raise HTTPException(status_code=401, detail=e.message)
+        except BadRequest as e:
+            raise HTTPException(status_code=400, detail=e.message)
     return AnonymousAppUser()
 
 
@@ -39,7 +43,7 @@ def teacher_required(
 ) -> AgogeUser:
     if not current_user.is_authorized:
         logger.error("Insufficient permissions")
-        raise Forbidden("Insufficient permissions")
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
     return current_user
 
 
@@ -49,8 +53,14 @@ def admin_required(
 
     if not current_user.is_admin:
         logger.error("Insufficient permissions")
-        raise Forbidden("Insufficient permissions")
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
     return current_user
+
+
+def ctf_enabled_required() -> None:
+    # 404 rather than 403 so a disabled deployment doesn't reveal the CTF routes exist (SC-19).
+    if not is_ctf_enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
 
 
 def verify_token(
@@ -78,53 +88,3 @@ def verify_token(
     user_name = decoded_token.get('name')
     agoge_user.set_default_name_or_email(user_name)
     return agoge_user
-
-
-def verify_request_origin(request: Request):
-    """
-    Verifies that the request is coming from an authorized source,
-    such as the React application running on Cloud Run.
-
-    Args:
-        request (Request): The incoming FastAPI request object.
-
-    Raises:
-        HTTPException: If the origin is invalid.
-    """
-    auth_header = request.headers.get("Authorization")
-
-    if not auth_header or not auth_header.startswith("Bearer "):
-        msg = "Missing or invalid authorization header"
-        logger.error(msg)
-        raise HTTPException(status_code=403, detail=msg)
-    try:
-        # Extract the bearer token
-        identity_token = auth_header.split(" ")[1]
-
-        # Verify the identity token with Google
-        audience = os.getenv("SERVICE_URL")
-        id_info = id_token.verify_oauth2_token(identity_token, google_requests.Request(), audience)
-
-        # Check that the token was issued to the correct service account
-        expected_email = 'agoge-react-service@agoge-test-427119.iam.gserviceaccount.com'
-        if id_info['email'] != expected_email:
-            msg = "Unauthorized request: Invalid token issuer"
-            logger.error(msg)
-            raise HTTPException(status_code=403, detail=msg)
-
-        # Token is valid; request is authorized
-        return True
-
-    except ValueError as e:
-        # This exception is raised for token verification issues
-        logger.error(f"Token verification failed: {str(e)}")
-        raise HTTPException(status_code=401, detail="Token verification failed")
-
-    except KeyError:
-        logger.error("Token missing required email claim")
-        raise HTTPException(status_code=401, detail="Missing auth token")
-
-    except Exception as e:
-        # Catch other exceptions and raise an HTTPException
-        logger.error(f"Internal Server Error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")

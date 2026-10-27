@@ -13,12 +13,7 @@ import { Specification } from "./specification.model";
 
 const get = async (specId: string) => {
     const endpoint = formatString(URL_SPEC_API_ITEM, {"ITEM_ID": specId}, true);
-    return await apiService.post<Specification>(
-        endpoint,
-        null,
-        true,
-        transformToSpecification
-    )
+    return await apiService.get<Specification>(endpoint, null, true, transformToSpecification);
 };
 
 const list = async () => {

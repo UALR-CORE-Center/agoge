@@ -23,6 +23,7 @@ import {ImageStates} from "../../../../../types/AgogeStates";
 import {IFormFieldMeta} from "../../../../../types/Form";
 import {ExpandableCell} from "../../../../Common/DataGrid/ExpandableCell";
 import StyledDataGrid from '../../../../Common/DataGrid/StyledDataGrid';
+import {RequiredMark} from "../utils/RequiredMark";
 
 interface Props {
     loading: boolean;
@@ -225,7 +226,7 @@ export const SelectImageTable: React.FC<Props> = (props) => {
                 >
                     <>
                         {props.loading ? <CircularProgress size={18} sx={{mr: 1}} /> : <Memory sx={{mr: 1}}/>}
-                        <Typography mr={1}>Server Image *</Typography>
+                        <Typography mr={1}>Server Image<RequiredMark/></Typography>
                         (<Typography color={props.formField.value.trim() != "" ? "info" : "error"} sx={{overflowWrap: 'anywhere'}}>
                             {getImage()?.image || "No image selected"}
                         </Typography>)

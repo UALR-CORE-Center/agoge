@@ -67,6 +67,22 @@ class AgogeUser(BaseModel):
             for lms, settings in self.settings.items()
         }
 
+    def redacted(self, include_api_key: bool = False) -> "AgogeUser":
+        """
+        Copy of the user that is safe to return in an API response. LMS secrets never leave the
+        server; the API key is kept only when the caller is the user who owns it (the settings
+        page pre-fills it).
+        """
+        return self.model_copy(update={
+            'settings': {
+                lms: settings.model_copy(update={
+                    'secret': None,
+                    'api': settings.api if include_api_key else None,
+                })
+                for lms, settings in self.settings.items()
+            }
+        })
+
 
 class SafeAgogeUser(BaseModel):
     uid: str
@@ -106,15 +122,13 @@ class SafeAgogeUser(BaseModel):
 
 
 class AnonymousAppUser(AgogeUser):
+    # An anonymous caller has no identity. None (not '') keeps an empty string from ever
+    # matching a stored uid or student_email.
+    uid: Optional[str] = None
+    email: Optional[str] = None
+
     def __init__(self):
-        super().__init__(
-            uid=None,
-            email=None,
-            name='Anonymous User',
-            permissions={},
-            settings=None
-        )
-        self.set_default_name_or_email()
+        super().__init__(name='Anonymous User', permissions={})
 
     @property
     def is_authenticated(self) -> bool:

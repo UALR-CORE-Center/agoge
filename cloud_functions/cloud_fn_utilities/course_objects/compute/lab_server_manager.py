@@ -1,4 +1,5 @@
 import time
+from typing import Optional
 
 from google.api_core.exceptions import NotFound as GoogleNotFound
 
@@ -7,6 +8,7 @@ from cloud_fn_utilities.gcp.address_manager import AddressManager
 from cloud_fn_utilities.gcp.dns_manager import DnsManager
 from cloud_fn_utilities.gcp.route_manager import RouteManager
 from cloud_fn_utilities.server_specific.assessment_manager import AssessmentManager
+from cloud_fn_utilities.server_specific.nested_scripts import direct_connect_slot, render_direct_connect
 from cloud_fn_utilities.server_specific.wireguard_gateway import (
     BOOT_METADATA_KEY, SECRET_METADATA_KEY, UBUNTU_IMAGE,
     WireGuardGatewayIdentity, managed_metadata,
@@ -19,6 +21,13 @@ from common.constants.states import ServerStates
 from common.document_database import DocumentDatabaseFactory
 from common.exceptions import Conflict, NotFound, BadRequest, BaseAgogeException
 from common.services.wireguard_endpoint import WireGuardEndpointRegistry
+from common.utilities.ctf_plant_contract import (
+    LINUX_LOADER,
+    LINUX_LOADER_METADATA_KEY,
+    WATCHER_INSTALLER,
+    WINDOWS_LOADER,
+    WINDOWS_LOADER_METADATA_KEY,
+)
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.compute.resources.attached_disk_resource import AttachedDiskResource
@@ -85,6 +94,7 @@ class LabServerManager(BaseComputeManager):
             raise LookupError
 
         self._load_lab_server(server_name, server_spec=server_spec, network_prefix=network_prefix)
+        self.nested_host = self._image_is_nested(self.server_spec.image)
 
         self.state_manager.set_build_record(server_name)
         self.assessment = AssessmentManager(
@@ -92,6 +102,14 @@ class LabServerManager(BaseComputeManager):
             build_type=self.parent_build_type,
             env_dict=self.env_dict
         )
+
+    def _image_is_nested(self, image: Optional[str]) -> bool:
+        """Returns True when the server's image record is a nested lab host."""
+        if not image:
+            return False
+        _, image_doc_id = self._extract_image_and_server_names(image)
+        image_record = self.db.get(collection_name=DbCollections.IMAGE, doc_id=image_doc_id)
+        return bool(image_record and image_record.get('nested'))
 
     def build(self) -> None:
         """Builds an individual server based on the server specifications."""
@@ -381,21 +399,70 @@ class LabServerManager(BaseComputeManager):
         assessment_startup_script = self.assessment.get_startup_scripts(server_name=self.server_spec.name)
         if assessment_startup_script:
             self._merge_metadata_item(metadata['items'], assessment_startup_script)
+        if self._is_linux_nested_host():
+            self._add_ctf_watcher(metadata['items'])
+            self._add_nested_direct_connect(metadata['items'])
+        self._add_ctf_loaders(metadata['items'])
         self.server_spec.metadata = metadata
 
-    @staticmethod
-    def _merge_metadata_item(items: list, item: dict) -> None:
-        """Keep metadata keys unique, concatenating multiple startup scripts."""
-        if not isinstance(item, dict) or not item.get('key'):
+    def _is_linux_nested_host(self) -> bool:
+        """A Linux server with an ip_aliases NIC, or one the unit's CTF block names as a nested_guests parent."""
+        # Reads the spec, not self.ip_aliases, because _add_nics sets that after _add_metadata runs
+        if getattr(self.server_spec, 'os', None) != 'linux':
+            return False
+        if any(isinstance(nic, dict) and nic.get('ip_aliases') for nic in getattr(self.server_spec, 'nics', None) or []):
+            return True
+        return self._declares_nested_guests()
+
+    def _declares_nested_guests(self) -> bool:
+        """True when ctf.nested_guests on the unit (already loaded by AssessmentManager) names this server."""
+        unit = getattr(self.assessment, 'unit', None)
+        if not isinstance(unit, dict):
+            return False
+        guests = (unit.get('ctf') or {}).get('nested_guests') or []
+        # Instance names are f"{parent_id}-{spec name}"; guests reference the spec name
+        spec_name = self.server_spec.name.removeprefix(f"{getattr(self.server_spec, 'parent_id', None)}-")
+        return any(isinstance(guest, dict) and guest.get('server') == spec_name for guest in guests)
+
+    @classmethod
+    def _add_ctf_watcher(cls, items: list) -> None:
+        """Merge the plant watcher installer into startup-script, so a nested host is planted without a reset."""
+        # Spec metadata copied from an already-built server may carry the installer; one copy only.
+        if any(
+            item.get('key') == LINUX_LOADER_METADATA_KEY and WATCHER_INSTALLER in (item.get('value') or '')
+            for item in items
+        ):
             return
-        for existing in items:
-            if existing.get('key') == item['key']:
-                if item['key'] == 'startup-script' and item.get('value'):
-                    existing['value'] = f"{existing.get('value', '').rstrip()}\n{item['value'].lstrip()}"
-                else:
-                    existing.update(item)
-                return
-        items.append(item)
+        cls._merge_metadata_item(items, {'key': LINUX_LOADER_METADATA_KEY, 'value': WATCHER_INSTALLER})
+
+    def _add_nested_direct_connect(self, items: list) -> None:
+        """On a direct-connect nested host, merge the forward that sends outside SSH to its jumpbox guest."""
+        nics = getattr(self.server_spec, 'nics', None) or []
+        nic0 = nics[0] if nics and isinstance(nics[0], dict) else {}
+        if not (nic0.get('direct_connect') and nic0.get('external_nat')):
+            return
+        slot = direct_connect_slot(getattr(self.server_spec, 'human_interaction', None))
+        if slot is None:
+            return
+        script = render_direct_connect(slot)
+        # Spec metadata copied from an already-built server may carry the forward; one copy only.
+        if any(item.get('key') == 'startup-script' and script in (item.get('value') or '') for item in items):
+            return
+        self._merge_metadata_item(items, {'key': 'startup-script', 'value': script})
+
+    @classmethod
+    def _add_ctf_loaders(cls, items: list) -> None:
+        """Append the fixed CTF loaders last, so they run after every other boot script.
+
+        Every lab server gets both: the guest agent only runs the key for its own OS, and a
+        loader with no `agoge-ctf-plant` key present does nothing. A CTF event can only plant
+        servers built with these loaders, so they are not gated on the unit having a ctf block.
+        """
+        for key, loader in ((LINUX_LOADER_METADATA_KEY, LINUX_LOADER), (WINDOWS_LOADER_METADATA_KEY, WINDOWS_LOADER)):
+            # Spec metadata copied from an already-built server may carry the loader; one copy only.
+            if any(item.get('key') == key and loader in (item.get('value') or '') for item in items):
+                continue
+            cls._merge_metadata_item(items, {'key': key, 'value': loader})
 
     def _add_nics(self) -> None:
         network_interface_resource = NetworkInterfaceResource(region=self.env.region, project=self.env.project)
@@ -664,7 +731,7 @@ class LabServerManager(BaseComputeManager):
                 }
             ]
             metadata['items'] = preserved + metadata['items']
-            if not self.compute_instance.set_metadata(self.server_name, metadata, wait=True):
+            if not self.compute_instance.replace_metadata(self.server_name, metadata, wait=True):
                 raise BaseAgogeException('Unable to update WireGuard startup configuration; retry start')
 
     def _refresh_wireguard_external_ip(self) -> None:

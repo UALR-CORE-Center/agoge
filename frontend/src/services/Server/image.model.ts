@@ -1,4 +1,5 @@
 import {HumanInteraction} from "../Specification/specification.model";
+import {NestedBuildStatus, NestedHostSpec} from "./nested.model";
 
 interface InitializeParams {
     diskSizeGb: number;
@@ -36,6 +37,9 @@ export interface AgogeImage {
     is_shared?: boolean;
     can_edit_shared?: boolean;
     source_project?: string | null;
+    // Present only on nested lab host images.
+    nested?: NestedHostSpec | null;
+    nested_build?: NestedBuildStatus | null;
 }
 
 export interface ImageSummary {

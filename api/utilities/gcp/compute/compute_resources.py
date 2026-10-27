@@ -8,10 +8,10 @@ from common.document_database import DocumentDatabaseFactory
 from common.models.google import MachineTypeModel
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
+from common.utilities.gcp.compute.compute_machine_type import is_allowed_machine_type
 
 
 class ComputeResources:
-    ALLOWED_M_TYPES = ["n1", "n2", "e2"]
     IGNORE = {
         'guacamole-ssl',
         'image-cyberarena-labentry-ssl',
@@ -53,7 +53,7 @@ class ComputeResources:
                 and (not filters or name in filters)
         )
 
-    def get_machine_types(self) -> List[MachineTypeModel]:
+    def get_machine_types(self, nested: bool = False) -> List[MachineTypeModel]:
         request_body = compute_v1.ListMachineTypesRequest(
             project=self.env.project,
             zone=self.env.zone,
@@ -62,7 +62,7 @@ class ComputeResources:
 
         machine_types = []
         for m_type in resp:
-            if cleaned_machine_type := self._machine_type_object(m_type):
+            if cleaned_machine_type := self._machine_type_object(m_type, nested=nested):
                 machine_types.append(cleaned_machine_type)
 
         return machine_types
@@ -90,11 +90,11 @@ class ComputeResources:
 
     def _machine_type_object(
         self,
-        request: compute_v1.MachineType
+        request: compute_v1.MachineType,
+        nested: bool = False
     ) -> Union[MachineTypeModel, None]:
         name = request.name
-        if (name.split("-")[0] in self.ALLOWED_M_TYPES
-                and request.memory_mb <= 17000):
+        if is_allowed_machine_type(name, request.memory_mb, nested=nested):
             return MachineTypeModel(
                 id=name,
                 name=name,

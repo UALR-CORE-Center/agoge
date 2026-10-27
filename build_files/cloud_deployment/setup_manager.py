@@ -18,6 +18,8 @@ from cloud_deployment._archive.build_specification import BuildSpecification
 from cloud_deployment.operations.images_and_specs.default_server_image import DefaultServerImage
 from cloud_deployment.operations.images_and_specs.public_image_catalog import PublicImageCatalog
 from cloud_deployment.operations.images_and_specs.wireguard_lab_template import WireGuardLabTemplate
+from cloud_deployment.operations.images_and_specs.nested_media_bucket import NestedMediaBucket
+from cloud_deployment.operations.images_and_specs.nested_os_catalog_sync import NestedOsCatalogSync
 from cloud_deployment.operations.images_and_specs.local_to_cloud import LocalToCloud
 from cloud_deployment.operations.env_and_quotas.increase_quotas import QuotaManager
 from cloud_deployment.operations.project_manager import ProjectManager
@@ -33,6 +35,7 @@ from cloud_deployment.utilities.menu_options import (
     get_user_selection,
 )
 from cloud_deployment.utilities.menu_options import get_user_selection
+from cloud_deployment.utilities import console as ui
 
 from cloud_deployment.operations.guacamole_image_management.guacamole_image_manager import (
     GuacamoleImageManager,
@@ -71,6 +74,8 @@ class SetupManager:
             SetupOptions.DEFAULT_SERVER_IMAGES: lambda: DefaultServerImage().run(),
             SetupOptions.SYNC_PUBLIC_IMAGES: lambda: PublicImageCatalog(project=self.project).run(),
             SetupOptions.WIREGUARD_LAB_TEMPLATE: lambda: WireGuardLabTemplate(project=self.project).run(),
+            SetupOptions.NESTED_MEDIA_BUCKET: lambda: NestedMediaBucket(project=self.project).run(),
+            SetupOptions.NESTED_OS_CATALOG: lambda: NestedOsCatalogSync(project=self.project).run(),
             SetupOptions.CLASSIFIED_APP: lambda: ClassifiedApp().deploy(),
             SetupOptions.ENV: lambda: EnvironmentVariables(project=self.project).run(),
             SetupOptions.IMPORT_CUSTOM_IMAGES: lambda: CustomImageImportManager(project=self.project).run(),
@@ -92,11 +97,14 @@ class SetupManager:
             # Retrieve the operation based on the current selection
             operation = operation_map.get(self.selection)
             if operation:
+                ui.section(self.selection.description)
+                started = time.monotonic()
                 operation()  # execute
+                ui.muted(f"Finished in {ui.duration(time.monotonic() - started)}")
 
         except KeyError as e:
-            print(f"A KeyError occurred, possibly due to a missing environment variable: {e}")
-            print(f"Attempting to synchronize environment variables for project '{self.project}' before retrying.")
+            ui.error(f"A KeyError occurred, possibly due to a missing environment variable: {e}")
+            ui.info(f"Synchronizing environment variables for project '{self.project}' before retrying.")
             EnvironmentVariables(project=self.project).run()
 
     def _deploy_and_configure_routing(self, deployment: str) -> None:
@@ -128,4 +136,4 @@ class SetupManager:
                     operation_kwargs["project"] = self.project
                 operation_class(**operation_kwargs).run()
             else:
-                print(f"Unsupported maintenance selection: {selection}")
+                ui.error(f"Unsupported maintenance selection: {selection}")

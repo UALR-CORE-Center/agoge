@@ -1,5 +1,6 @@
 import json
 import re
+from concurrent.futures import Future
 
 from google.api_core.exceptions import AlreadyExists
 from markupsafe import escape
@@ -31,8 +32,11 @@ from common.utilities.gcp.compute.compute_machine_type import ComputeMachineType
 from common.utilities.gcp.compute.image_compatibility import compatible_boot_image, normalize_architecture
 from common.utilities.gcp.compute.image_ownership import image_source, image_source_project, is_shared_image
 from common.utilities.gcp.pubsub_manager import PubSubManager
+from common.utilities.nested_build_monitor import is_stale_finalize
 from common.document_database.factory import DocumentDatabaseFactory
-from common.exceptions import BadRequest, Conflict, Forbidden, NotFound, AgogeValidationError, NotReady, OperationTimeout
+from common.exceptions import (
+    BadRequest, Conflict, Forbidden, NotFound, AgogeValidationError, NotReady, OperationTimeout, ServiceUnavailable
+)
 
 from utilities.gcp.compute.compute_resources import ComputeResources
 from utilities.global_objects.words import Words
@@ -40,6 +44,7 @@ from utilities.global_objects.words import Words
 
 class ComputeImage:
     NAME_RESERVATIONS = ["agoge", "google"]
+    CHECK_OUT_PUBLISH_TIMEOUT_SECONDS = 30
 
     def __init__(
         self,
@@ -120,9 +125,9 @@ class ComputeImage:
             raise NotFound(message="No image data found")
         raise BadRequest(message=f"List request with invalid or missing `scope`: {scope}")
 
-    def machine_types(self) -> List[MachineTypeModel]:
-        """Retrieve list of valid machine types to use in server builds"""
-        return ComputeResources(env_dict=self.env_dict).get_machine_types()
+    def machine_types(self, nested: bool = False) -> List[MachineTypeModel]:
+        """Retrieve list of valid machine types to use in server builds, or in nested host builds"""
+        return ComputeResources(env_dict=self.env_dict).get_machine_types(nested=nested)
 
     def _with_ownership(self, image: dict, requester: AgogeUser = None) -> dict:
         shared = is_shared_image(image, self.env.project)
@@ -155,11 +160,13 @@ class ComputeImage:
             raise BadRequest('Confirm that changes to this shared image affect multiple sites and applications.')
         return True
 
-    def _validate_new_name(self, server_name: str) -> None:
+    @classmethod
+    def _validate_new_name(cls, server_name: str) -> None:
+        # A classmethod so NestedHostValidator applies the same rule without a ComputeImage.
         # Leave nine characters for the longest snapshot suffix (-manual-0).
         if not isinstance(server_name, str) or not re.fullmatch(r'[a-z](?:[a-z0-9-]{0,52}[a-z0-9])?', server_name):
             raise BadRequest('Use 1–54 lowercase letters, numbers, or hyphens. Start with a letter and end with a letter or number.')
-        if server_name.startswith('image-') or server_name in self.NAME_RESERVATIONS:
+        if server_name.startswith('image-') or server_name in cls.NAME_RESERVATIONS:
             raise BadRequest('Choose a server name without the reserved image- prefix or reserved names agoge and google.')
 
     def _create_record(self, image: dict) -> None:
@@ -274,7 +281,7 @@ class ComputeImage:
             except (ValidationError, AgogeValidationError) as e:
                 self.logger.error(f"Image failed validation with errors {e}", user=user.uid, action=action)
                 raise BadRequest(message=f"Image failed validation with errors {e}")
-            self._check_out(server_name)
+            self._check_out_new_record(server_name)
             return
         else:
             self.logger.error(f"Invalid or missing data", action=action, server_name=server_name)
@@ -330,6 +337,8 @@ class ComputeImage:
                 )
                 msg_args[self.pubsub_keys.IMAGE_NAME] = name
                 msg_args['shared_edit_authorized'] = 'true' if shared else 'false'
+                msg_args[self.pubsub_keys.ACTION] = self._check_in_action(image, name) \
+                    if action == str(PubSub.Actions.CHECK_IN.value) else str(action)
                 # Only checkout boots from the saved image. Check-in must be
                 # retryable if the previous image was deleted before a failed
                 # replacement; start/stop/cancel operate on the working VM.
@@ -347,6 +356,23 @@ class ComputeImage:
                 self.pubsub_manager.msg(**message)
             return
         raise BadRequest(message="Invalid or missing data")
+
+    @staticmethod
+    def _check_in_action(image: dict, name: str) -> str:
+        """CHECK_IN, or NESTED_FINALIZE for a nested host whose guests must be snapshotted first."""
+        if not image.get('nested'):
+            return str(PubSub.Actions.CHECK_IN.value)
+        build = image.get('nested_build') or {}
+        phase = build.get('phase')
+        # A dead invocation can strand `finalizing`; once stale, Check In finalizes again instead of 409 forever.
+        if is_stale_finalize(build):
+            return str(PubSub.Actions.NESTED_FINALIZE.value)
+        if phase in ('provisioning', 'building', 'finalizing'):
+            raise Conflict(f'Nested image {name} cannot be checked in while its build phase is {phase}.')
+        # A failed finalize keeps its nonce, so Check In retries the finalize rather than imaging unfinalized guests.
+        if phase in ('ready', 'finalized') or (phase == 'failed' and build.get('finalize_nonce')):
+            return str(PubSub.Actions.NESTED_FINALIZE.value)
+        return str(PubSub.Actions.CHECK_IN.value)
 
     def process_action_on_image(
         self,
@@ -379,7 +405,7 @@ class ComputeImage:
                 server_name = self._create_database_object(data)
             except (ValidationError, AgogeValidationError) as e:
                 raise BadRequest(message=f"Image create failed validation with errors {e}")
-            return self._check_out(server_name)
+            return self._check_out_new_record(server_name)
         elif str(action) == str(PubSub.Actions.SYNC.value) and requester.is_admin:
             self.logger.info(
                 f"Global image sync action called by user {requester.uid}",
@@ -455,7 +481,7 @@ class ComputeImage:
                         )
             try:
                 validated = AgogeImageModel(**image)
-                self.db.update(collection_name=self.collection, doc_id=image_name, data=validated.model_dump())
+                self.db.update(collection_name=self.collection, doc_id=image_name, data=validated.firestore_dump())
             except ValidationError as e:
                 raise AgogeValidationError(message=str(e))
         else:
@@ -467,15 +493,52 @@ class ComputeImage:
     def _check_out(
         self,
         server_name: str,
-    ) -> None:
+        extra_attrs: dict = None,
+    ) -> Future:
         msg_args = {
             self.pubsub_keys.HANDLER: str(PubSub.Handlers.CONTROL.value),
             self.pubsub_keys.ACTION: str(PubSub.Actions.CHECK_OUT.value),
             self.pubsub_keys.IMAGE_NAME: str(server_name),
             self.pubsub_keys.USER: str(self.user),
-            self.pubsub_keys.COURSE_OBJECT: str(PubSub.CourseObjects.TEMPLATE_SERVER.value)
+            self.pubsub_keys.COURSE_OBJECT: str(PubSub.CourseObjects.TEMPLATE_SERVER.value),
+            **(extra_attrs or {}),
         }
-        self.pubsub_manager.msg(**msg_args)
+        return self.pubsub_manager.msg(**msg_args)
+
+    def _check_out_new_record(
+        self,
+        server_name: str,
+        extra_attrs: dict = None,
+    ) -> None:
+        """Publish CHECK_OUT for a record this request just created, deleting the record if the publish fails.
+
+        Only this message will ever build the new record, so a lost one would strand it as CHECKED_OUT
+        with no server, and every retry with the same name would get 409.
+
+        Raises:
+            ServiceUnavailable: Pub/Sub did not accept the message within the timeout
+        """
+        try:
+            # publish() is asynchronous: most failures surface only on the future.
+            self._check_out(server_name, extra_attrs).result(timeout=self.CHECK_OUT_PUBLISH_TIMEOUT_SECONDS)
+            return
+        except Exception as exc:
+            # Never log extra_attrs: a nested create carries Windows product keys there.
+            self.logger.error(f"{self.class_name}:{server_name} - CHECK_OUT publish failed; removing the new record",
+                              image=server_name, error=str(exc))
+            publish_error = exc
+        try:
+            self.db.delete(collection_name=self.collection, doc_id=server_name)
+        except Exception as exc:
+            self.logger.error(f"{self.class_name}:{server_name} - Could not remove the unbuilt record",
+                              image=server_name, error=str(exc))
+            raise ServiceUnavailable(
+                f'Could not queue the build for {server_name}, and its record could not be removed. '
+                f'Delete the template before trying again.'
+            ) from publish_error
+        raise ServiceUnavailable(
+            f'Could not queue the build for {server_name}. No template was created; try again.'
+        ) from publish_error
 
     def _create_database_object(
         self,

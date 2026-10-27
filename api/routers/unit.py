@@ -156,7 +156,12 @@ async def get_all_data(
     }
     try:
         unit_full = Unit(env_dict=env_dict).get_all_data(build_id, requester=current_user)
-        rubric_support = env_dict.get("rubric_support", False)
+        # Rubric tools are a per-lab opt-in copied onto the unit at build; the old
+        # deployment-wide env flag must not enable them (docs/troubleshooting/rubric-generation.md).
+        unit = unit_full['unit']
+        rubric_support = (
+            unit.get('rubric_support') if isinstance(unit, dict) else unit.rubric_support
+        ) is True
         return AgogeResponse(
             data=UnitFullResponse(
                 **unit_full,

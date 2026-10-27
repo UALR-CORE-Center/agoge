@@ -9,9 +9,27 @@ from google.cloud.compute_v1 import (
 from googleapiclient.discovery import Resource
 
 from common.constants.google import ResourceType, ClientType
+from common.constants.nested import (
+    NESTED_MACHINE_FAMILIES,
+    NESTED_MAX_MACHINE_MEMORY_MB,
+    STANDARD_MAX_MACHINE_MEMORY_MB
+)
 from common.models.google import MachineTypeModel
 from common.utilities.gcp.cloud_logger import LoggerNames
 from .base_compute_api import BaseComputeAPI
+
+
+def is_allowed_machine_type(name: str, memory_mb: int, nested: bool = False) -> bool:
+    """Whether a machine type may be offered for a server build.
+
+    Standard servers may use N1, N2, or E2 types up to 17000 MB. Nested hosts
+    need nested virtualization, so only N1 and N2 types qualify, up to
+    NESTED_MAX_MACHINE_MEMORY_MB.
+    """
+    family = name.split('-')[0]
+    if nested:
+        return family in NESTED_MACHINE_FAMILIES and memory_mb <= NESTED_MAX_MACHINE_MEMORY_MB
+    return family in BaseComputeAPI.ALLOWED_GOOGLE_MACHINE_TYPES and memory_mb <= STANDARD_MAX_MACHINE_MEMORY_MB
 
 
 class ComputeMachineTypesAPI(BaseComputeAPI):
@@ -47,6 +65,7 @@ class ComputeMachineTypesAPI(BaseComputeAPI):
         self,
         project: str = None,
         zone: str = None,
+        nested: bool = False,
     ) -> List[MachineTypeModel]:
         """Retrieve list of allowed machine types in the project.
 
@@ -56,6 +75,8 @@ class ComputeMachineTypesAPI(BaseComputeAPI):
         Args:
             project (str, optional): Name of project to get machine types
             zone (str, optional): Name of zone to get machine types
+            nested (bool, optional): List the N1/N2 types allowed for nested
+                hosts instead of the standard list
 
         Returns:
             List(MachineTypeModel)
@@ -77,7 +98,7 @@ class ComputeMachineTypesAPI(BaseComputeAPI):
 
         valid_m_types = []
         for m_type in m_types:
-            if cleaned_m_type := self._machine_type_object(m_type):
+            if cleaned_m_type := self._machine_type_object(m_type, nested=nested):
                 valid_m_types.append(cleaned_m_type)
 
         return valid_m_types
@@ -90,7 +111,9 @@ class ComputeMachineTypesAPI(BaseComputeAPI):
         **kwargs
     ) -> Any:
         """Retrieves a Compute Engine machine type from a specific project.
-        If the machine type is not allowed, method returns nothing.
+        If the machine type is not allowed, method returns nothing. N1 and N2
+        types resolve up to the nested cap so nested hosts can use them; E2
+        types keep the standard cap.
 
         Args:
             resource (str): The name of the machine type to retrieve.
@@ -106,7 +129,10 @@ class ComputeMachineTypesAPI(BaseComputeAPI):
         Raises:
             NotFound: If the requested machine type could not be found.
         """
-        return self._machine_type_object(self.get_resource(resource, project=project, zone=zone))
+        m_type = self.get_resource(resource, project=project, zone=zone)
+        if not m_type:
+            return None
+        return self._machine_type_object(m_type, nested=True) or self._machine_type_object(m_type)
 
     def get_resource(self, resource: str, project: str = None, zone: str = None) -> MachineType:
         """Read complete machine metadata without dropping its architecture."""
@@ -143,11 +169,11 @@ class ComputeMachineTypesAPI(BaseComputeAPI):
 
     def _machine_type_object(
         self,
-        m_type: MachineType
+        m_type: MachineType,
+        nested: bool = False
     ) -> Union[MachineTypeModel, None]:
         name = m_type.name
-        if (name.split("-")[0] in self.ALLOWED_GOOGLE_MACHINE_TYPES
-                and m_type.memory_mb <= 17000):
+        if is_allowed_machine_type(name, m_type.memory_mb, nested=nested):
             return MachineTypeModel(
                 id=name,
                 name=name,

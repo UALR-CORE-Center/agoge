@@ -1,0 +1,15 @@
+[Unit]
+Description=Agoge nested lab host runtime (guest isolation, alias exposure, ordered guest start)
+Wants=network-online.target
+After=network-online.target libvirtd.service
+Requires=libvirtd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Guest start delays add up to as much as 8 x 600 s.
+TimeoutStartSec=infinity
+ExecStart=@@RUNTIME_PATH@@
+
+[Install]
+WantedBy=multi-user.target
