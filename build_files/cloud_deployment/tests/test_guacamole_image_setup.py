@@ -1,7 +1,9 @@
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import yaml
 from google.api_core.exceptions import NotFound, PermissionDenied
 from google.cloud import compute_v1
 
@@ -203,3 +205,12 @@ def test_unreadable_serial_output_falls_back_to_the_deadline(setup):
     manager, _ = setup
     manager.instances.get_serial_port_output.side_effect = PermissionDenied('denied')
     assert manager._startup_script_failure() is None
+
+
+def test_baked_compose_restarts_every_service_after_a_clean_exit():
+    # A VM stop can end a task with exit 0; 'on-failure' left it Complete (0/1) after boot.
+    compose = Path(__file__).resolve().parents[2] / 'server_config/guacamole/configs/docker-compose.yml'
+    services = yaml.safe_load(compose.read_text())['services']
+    assert set(services) == {'db', 'guacd', 'guacamole', 'nginx'}
+    for service in services.values():
+        assert service['deploy']['restart_policy']['condition'] == 'any'
