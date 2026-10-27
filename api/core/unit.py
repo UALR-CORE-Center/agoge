@@ -186,6 +186,8 @@ class Unit:
             if active and not expired:
                 current_ts = Timestamps.get_current_timestamp_utc()
                 ds_filter.add('workspace_settings.expires', ops.GREATER_THAN, current_ts)
+                # A deleted Unit is not active, even before its expiration.
+                ds_filter.add('state', ops.NOT_EQUAL, UnitStates.DELETED.value)
             if expired and not active:
                 current_ts = Timestamps.get_current_timestamp_utc()
                 ds_filter.add('workspace_settings.expires', ops.LESS_THAN, current_ts)
@@ -580,7 +582,9 @@ class Unit:
             instructor_units = {'active': [], 'expired': []}
             current_ts = Timestamps.get_current_timestamp_utc()
             for unit in units:
-                if int(unit['workspace_settings']['expires']) > current_ts:
+                # A deleted Unit is listed with expired labs, even before its expiration.
+                if (int(unit['workspace_settings']['expires']) > current_ts
+                        and unit.get('state') != UnitStates.DELETED.value):
                     instructor_units['active'].append(unit)
                 else:
                     instructor_units['expired'].append(unit)

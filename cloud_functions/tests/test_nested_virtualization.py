@@ -157,3 +157,19 @@ def test_lab_load_sets_nested_host_from_image_record(monkeypatch, image, record,
         )
     else:
         manager.db.get.assert_not_called()
+
+
+@pytest.mark.parametrize('image, doc_id', [
+    ('image-kali-2026', 'kali-2026'),
+    ('kali-2026', 'kali-2026'),
+    ('projects/test-dev-787001/global/images/image-guac-test-dev-787001', 'guac-test-dev-787001'),
+    ('https://www.googleapis.com/compute/v1/projects/test-dev-787001/global/images/image-kali-2026', 'kali-2026'),
+    ('projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64', 'ubuntu-2404-lts-amd64'),
+])
+def test_image_is_nested_looks_up_a_valid_document_id(image, doc_id):
+    # A Compute path used as-is is an odd-length Firestore path and raises ValueError.
+    manager = object.__new__(LabServerManager)
+    manager.db = Mock()
+    manager.db.get.return_value = {'nested': True}
+    assert manager._image_is_nested(image) is True
+    manager.db.get.assert_called_once_with(collection_name=DbCollections.IMAGE, doc_id=doc_id)

@@ -106,7 +106,9 @@ class LabServerManager(BaseComputeManager):
         """Returns True when the server's image record is a nested lab host."""
         if not image:
             return False
-        _, image_doc_id = self._extract_image_and_server_names(image)
+        # Specs may carry a full Compute reference (projects/.../images/x, a
+        # self_link URL, or an image family); a '/' is not a valid document ID.
+        _, image_doc_id = self._extract_image_and_server_names(image.rstrip('/').rsplit('/', 1)[-1])
         image_record = self.db.get(collection_name=DbCollections.IMAGE, doc_id=image_doc_id)
         return bool(image_record and image_record.get('nested'))
 

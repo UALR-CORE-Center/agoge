@@ -13,5 +13,6 @@ export const absoluteUrl = (routePath: string) => {
     if (typeof window === "undefined") return routePath;
 
     const clean = routePath.startsWith("/") ? routePath : `/${routePath}`;
-    return `${window.location.origin}${BASENAME}${clean}`;
+    // BASENAME is "/" without a project prefix; don't double the slash.
+    return `${window.location.origin}${BASENAME.replace(/\/$/, "")}${clean}`;
 };
