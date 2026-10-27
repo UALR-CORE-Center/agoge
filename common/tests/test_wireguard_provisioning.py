@@ -287,3 +287,19 @@ def test_direct_unit_call_cannot_inject_kit_document_paths(context, kit_id):
     with pytest.raises(BadRequest):
         context.service.get_authorized_kit(kit_id, context.instructor)
     assert not context.secrets.payloads
+
+
+def test_extend_lease_follows_unit_expiration_so_restart_after_extension_works(context):
+    target = unit(context)
+    context.service.reserve(target, 'kit-one', context.instructor)
+    assert context.service.extend_lease(target.id, 5000) is True
+    assert context.service.get_lease(target.id).expires == 5000
+
+
+def test_extend_lease_does_not_revive_released_or_missing_leases(context):
+    target = unit(context)
+    context.service.reserve(target, 'kit-one', context.instructor)
+    context.service.release(target.id)
+    assert context.service.extend_lease(target.id, 5000) is False
+    assert context.service.get_lease(target.id).expires == 2000
+    assert context.service.extend_lease('missingunit', 5000) is False

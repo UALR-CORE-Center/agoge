@@ -242,6 +242,17 @@ class WireGuardProvisioningService:
 
     get_gateway_lease = get_lease
 
+    def extend_lease(self, unit_id, expires):
+        """Keep the lease expiry in step with its Unit's expiration; returns False if there is no live lease."""
+        document = self._doc(DbCollections.WIREGUARD_LEASE, unit_id)
+        def extend(transaction):
+            snapshot = document.get(transaction=transaction)
+            if not snapshot.exists or snapshot.to_dict().get('status') == 'released':
+                return False
+            transaction.set(document, {'expires': expires}, merge=True)
+            return True
+        return self.db.transaction(extend)
+
     def gateway_secret(self, unit_id):
         lease = self.get_lease(unit_id)
         if lease.status == 'released':

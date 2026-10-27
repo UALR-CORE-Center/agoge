@@ -534,8 +534,14 @@ class Unit:
 
             # Update Unit
             unit['workspace_settings']['expires'] = expires_ts
+            if unit.get('wireguard_lease'):
+                unit['wireguard_lease']['expires'] = expires_ts
             self._validate(unit, collection=self.collection, action=DbOperationTypes.UPDATE)
             self.db.update(collection_name=self.collection, doc_id=build_id, data=unit)
+
+            # The gateway refuses to start once its lease expires, so the lease must follow the Unit
+            if unit.get('wireguard_lease'):
+                WireGuardProvisioningService(self.env_dict, db=self.db).extend_lease(build_id, expires_ts)
 
             # Update any Unit Workouts
             workouts = self._get_unit_workouts(build_id)
