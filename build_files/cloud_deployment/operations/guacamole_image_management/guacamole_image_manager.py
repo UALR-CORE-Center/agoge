@@ -23,7 +23,9 @@ class GuacamoleImageManager:
     """
     Manages the creation and synchronization of Guacamole images and startup configurations.
     """
+    BASE_IMAGE = 'image-guac-base'
     CERTIFICATE_WAIT_SECONDS = 15 * 60
+    STARTUP_FAILURE_HINTS = ('error', 'too many', 'retry after', 'denied', 'unauthorized', 'failed')
     COPY_GUAC_BASE = (
         "gcloud compute --project={dst_project} images create image-guac-{dst_project} "
         "--source-image=image-guac-base --source-image-project={src_project}"
@@ -36,7 +38,10 @@ class GuacamoleImageManager:
         "machine_type": "e2-standard-2",
         "description": "Guacamole proxy server image used for building lab guacamole proxies.",
         "tags": ["http-server"],
-        "image": "image-guac-base",
+        # The capture target. The VM boots from `self_link` (the shared base);
+        # naming the base here made the record look like that shared image, so
+        # check-out was refused and check-in would have replaced image-guac-base.
+        "image": "image-guac-{project}",
         "os": "linux",
         "add_disk": "50",
         "human_interaction": [],
@@ -179,6 +184,13 @@ class GuacamoleImageManager:
         print("🔍 Waiting for the Guacamole server's wildcard SSL certificate...")
         deadline = time.monotonic() + self.CERTIFICATE_WAIT_SECONDS
         while not self._verify_certificate_operation():
+            # The startup script stops at the first failed command (usually
+            # certbot), so waiting out the deadline after that only hides why.
+            if (failure := self._startup_script_failure()) is not None:
+                print(f"❌ The Guacamole server's startup script failed:\n{failure}\n"
+                      f"The server '{server_name}' stays checked out and was NOT captured; fix the cause "
+                      "and rerun this option.")
+                return False
             if time.monotonic() >= deadline:
                 print(f"❌ No valid wildcard certificate after {self.CERTIFICATE_WAIT_SECONDS // 60} minutes. "
                       f"The server '{server_name}' stays checked out and was NOT captured; inspect it with "
@@ -198,7 +210,7 @@ class GuacamoleImageManager:
             or self.env.parent_project
             or self.env.project
         )
-        image_name = self.GUAC_PROJECT_SERVER['image']
+        image_name = self.BASE_IMAGE
         resource = f'projects/{source_project}/global/images/{image_name}'
         try:
             image = compute_v1.ImagesClient().get(project=source_project, image=image_name)
@@ -220,7 +232,8 @@ class GuacamoleImageManager:
 
     def _verify_certificate_operation(self) -> bool:
         """True once the server presents a trusted certificate that also covers lab proxy hosts."""
-        dns_entry = self.image_manager.dns_record
+        # Template DNS names are fully qualified (trailing dot); TLS name checks are not.
+        dns_entry = self.image_manager.dns_record.rstrip('.')
         wildcard = '*.' + (self.env.parent_dns_suffix or self.env.dns_suffix).strip('.')
         try:
             context = ssl.create_default_context()
@@ -235,6 +248,27 @@ class GuacamoleImageManager:
             return False
         print("✅ SSL certificate verified successfully.")
         return True
+
+    def _startup_script_failure(self) -> str | None:
+        """Certbot's explanation once the current boot's startup script has failed, else None."""
+        try:
+            output = compute_v1.InstancesClient().get_serial_port_output(
+                project=self.env.project, zone=self.env.zone, instance=self.image_manager.server_name
+            ).contents
+        except Exception:
+            # Serial output is a diagnostic; without it, fall back to the deadline.
+            return None
+        # A rerun can reuse the instance, so only the latest boot counts.
+        boot = output.rsplit('Starting startup scripts', 1)[-1]
+        if 'Script "startup-script" failed' not in boot:
+            return None
+        # Each line appears twice (console and journal); the script never echoes its secrets.
+        lines = list(dict.fromkeys(
+            line.split('startup-script: ', 1)[1].strip()
+            for line in boot.splitlines() if 'startup-script: ' in line
+        ))
+        reasons = [line for line in lines if any(hint in line.lower() for hint in self.STARTUP_FAILURE_HINTS)]
+        return '\n'.join(f'   {line}' for line in (reasons or lines[-5:]))
 
     def _get_guac_startup_script(self) -> str:
         """

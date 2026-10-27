@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -141,6 +142,14 @@ server {
 """.replace('GUAC_HOST', host).replace('GUAC_DOMAIN', domain)
 
 
+def certificate_usable(certificate):
+    """Present and valid for at least another day; images can outlive their certificate."""
+    if not (certificate / 'fullchain.pem').is_file() or not (certificate / 'privkey.pem').is_file():
+        return False
+    return command(['openssl', 'x509', '-checkend', '86400', '-noout',
+                    '-in', str(certificate / 'fullchain.pem')], check=False).returncode == 0
+
+
 def configure():
     host = (ROOT / 'host').read_text().strip()
     domain = (ROOT / 'domain').read_text().strip()
@@ -149,20 +158,6 @@ def configure():
             or not host.endswith('.' + domain)):
         raise ValueError('Invalid proxy DNS configuration')
     key = signing_key()
-    certificate = Path('/etc/letsencrypt/live') / domain
-    if not (certificate / 'fullchain.pem').is_file() or not (certificate / 'privkey.pem').is_file():
-        # The project image should carry a wildcard certificate. Without one,
-        # issue a certificate for this host only (HTTP-01 on port 80), stored
-        # under the same lineage name so the nginx paths do not change.
-        if not shutil.which('certbot'):
-            raise ValueError('The shared proxy TLS certificate is unavailable and certbot is not installed')
-        result = command(['certbot', 'certonly', '--standalone', '--preferred-challenges', 'http',
-                          '--non-interactive', '--agree-tos', '--register-unsafely-without-email',
-                          '--cert-name', domain, '-d', host], check=False)
-        if result.returncode != 0:
-            raise ValueError('The shared proxy TLS certificate is unavailable; certbot could not issue one for '
-                             + host + ' (is its DNS record published yet?)')
-        print('Issued a host certificate for ' + host + ' because the image has no wildcard certificate.')
     command(['systemctl', 'stop', 'guacamole.service'], check=False)
     command(['systemctl', 'start', 'docker'])
     address = request(METADATA + 'instance/network-interfaces/0/ip',
@@ -175,6 +170,36 @@ def configure():
         if swarm.get('LocalNodeState') != 'inactive':
             command(['docker', 'swarm', 'leave', '--force'])
         command(['docker', 'swarm', 'init', '--advertise-addr', address])
+    certificate = Path('/etc/letsencrypt/live') / domain
+    if not certificate_usable(certificate):
+        # The project image should carry a valid wildcard certificate. Without one,
+        # issue a certificate for this host only (HTTP-01 on port 80), stored
+        # under the same lineage name so the nginx paths do not change. This
+        # runs after the swarm reset so no baked stack still holds port 80.
+        if not shutil.which('certbot'):
+            raise ValueError('The shared proxy TLS certificate is unavailable and certbot is not installed')
+        # Let's Encrypt allows few failed validations per host per hour; do not
+        # spend one before the proxy's DNS record points at this VM.
+        external = request(METADATA + 'instance/network-interfaces/0/access-configs/0/external-ip',
+                           {'Metadata-Flavor': 'Google'}).decode().strip()
+        try:
+            resolved = {info[4][0] for info in socket.getaddrinfo(host, 80, socket.AF_INET)}
+        except OSError:
+            resolved = set()
+        if external not in resolved:
+            raise ValueError('The shared proxy TLS certificate is unavailable; ' + host
+                             + ' does not resolve to this VM yet')
+        if certificate.exists():
+            # An expired wildcard lineage of the same name would otherwise make
+            # certbot ask whether to change its domains.
+            command(['certbot', 'delete', '--non-interactive', '--cert-name', domain], check=False)
+        result = command(['certbot', 'certonly', '--standalone', '--preferred-challenges', 'http',
+                          '--non-interactive', '--agree-tos', '--register-unsafely-without-email',
+                          '--cert-name', domain, '-d', host], check=False)
+        if result.returncode != 0:
+            raise ValueError('The shared proxy TLS certificate is unavailable; certbot could not issue one for '
+                             + host)
+        print('Issued a host certificate for ' + host + ' because the image has no wildcard certificate.')
     atomic_write(APP / 'docker-compose.yml', json.dumps(compose(key, host, domain)))
     atomic_write(APP / '.env', 'GUAC_HOST=' + host + '\nGUAC_DOMAIN=' + domain + '\n')
     atomic_write(APP / 'nginx/conf.d/guacamole.conf', nginx_configuration(host, domain), 0o644)
@@ -202,7 +227,7 @@ WantedBy=multi-user.target
 def failure_reason(error):
     # Only messages and command names this script controls are printed; Docker
     # output and exception bodies can carry the signing key.
-    if isinstance(error, ValueError):
+    if type(error) is ValueError:
         return str(error)
     if isinstance(error, subprocess.CalledProcessError):
         return ' '.join(error.cmd[:3]) + ' exited with ' + str(error.returncode)

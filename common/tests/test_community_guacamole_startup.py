@@ -108,7 +108,8 @@ def test_boot_replaces_baked_stack_and_only_reinitializes_stale_swarm(tmp_path, 
         return Path(value)
 
     def run(args, check=True):
-        return SimpleNamespace(stdout=json.dumps(swarm).encode() if args[:2] == ['docker', 'info'] else b'')
+        return SimpleNamespace(returncode=0,
+                               stdout=json.dumps(swarm).encode() if args[:2] == ['docker', 'info'] else b'')
 
     namespace['Path'] = local_path
     namespace['command'] = MagicMock(side_effect=run)
@@ -126,6 +127,8 @@ def test_boot_replaces_baked_stack_and_only_reinitializes_stale_swarm(tmp_path, 
     assert (['docker', 'swarm', 'leave', '--force'] in commands) == (
         expected_reset and swarm['LocalNodeState'] != 'inactive')
     assert commands[-1] == ['systemctl', 'enable', '--now', 'guacamole.service']
+    # A valid baked certificate is used as-is.
+    assert not any(args[0] == 'certbot' for args in commands)
     assert KEY not in capsys.readouterr().out
 
 
@@ -140,7 +143,8 @@ def test_forged_unit_secret_is_rejected():
         render_community_guacamole_startup(SECRET.replace(UNIT, 'klmnopqrst'), UNIT, DOMAIN)
 
 
-def _configure_without_certificate(tmp_path, certbot_rc, certbot_path='/usr/bin/certbot'):
+def _configure_without_certificate(tmp_path, certbot_rc, certbot_path='/usr/bin/certbot',
+                                   resolved='10.0.0.20', swarm_state='error', expired_certificate=False):
     namespace = agent()
     root, app = tmp_path / 'private', tmp_path / 'app'
     root.mkdir()
@@ -150,6 +154,10 @@ def _configure_without_certificate(tmp_path, certbot_rc, certbot_path='/usr/bin/
     (root / 'domain').write_text(DOMAIN)
     certificates = tmp_path / 'certificates'
     certificates.mkdir()
+    if expired_certificate:
+        (certificates / DOMAIN).mkdir()
+        for name in ('privkey.pem', 'fullchain.pem'):
+            (certificates / DOMAIN / name).write_text('expired wildcard')
 
     def local_path(value):
         if str(value) == '/etc/letsencrypt/live':
@@ -161,11 +169,19 @@ def _configure_without_certificate(tmp_path, certbot_rc, certbot_path='/usr/bin/
     def run(args, check=True):
         if args[0] == 'certbot':
             return SimpleNamespace(returncode=certbot_rc, stdout=b'')
-        swarm = {'LocalNodeState': 'active', 'NodeAddr': '10.0.0.20'}
+        if args[0] == 'openssl':
+            return SimpleNamespace(returncode=1 if expired_certificate else 0, stdout=b'')
+        swarm = {'LocalNodeState': swarm_state, 'NodeAddr': '10.128.0.56'}
         return SimpleNamespace(returncode=0, stdout=json.dumps(swarm).encode() if args[:2] == ['docker', 'info'] else b'')
 
     namespace['Path'] = local_path
     namespace['shutil'] = SimpleNamespace(which=lambda name: certbot_path)
+
+    def getaddrinfo(name, port, family):
+        if name != HOST or resolved is None:
+            raise OSError('not found')
+        return [(family, 1, 6, '', (resolved, port))]
+    namespace['socket'] = SimpleNamespace(AF_INET=2, getaddrinfo=getaddrinfo)
     namespace['command'] = MagicMock(side_effect=run)
     namespace['signing_key'] = MagicMock(return_value=KEY)
     namespace['request'] = MagicMock(return_value=b'10.0.0.20')
@@ -180,7 +196,10 @@ def test_missing_wildcard_certificate_issues_a_host_certificate_under_the_domain
     assert certbot[certbot.index('--cert-name') + 1] == DOMAIN
     assert certbot[certbot.index('-d') + 1] == HOST
     assert '--standalone' in certbot and '--dns-google' not in certbot
-    # The certificate is in place before the stack (and nginx on port 80) starts.
+    # Port 80 must be free for certbot: after the old service stops and any baked
+    # swarm (and its published ports) is gone, and before the new stack starts.
+    assert commands.index(['systemctl', 'stop', 'guacamole.service']) < commands.index(certbot)
+    assert commands.index(['docker', 'swarm', 'leave', '--force']) < commands.index(certbot)
     assert commands.index(certbot) < commands.index(['systemctl', 'enable', '--now', 'guacamole.service'])
 
 
@@ -193,6 +212,27 @@ def test_missing_certificate_that_cannot_be_issued_stops_before_deploying(tmp_pa
     assert ['systemctl', 'enable', '--now', 'guacamole.service'] not in commands
 
 
+def test_expired_wildcard_certificate_is_replaced_by_a_host_certificate(tmp_path):
+    # Project images outlive their 90-day certificate (agoge-ualr's expired 2026-03-23).
+    namespace = _configure_without_certificate(tmp_path, certbot_rc=0, expired_certificate=True)
+    namespace['configure']()
+    commands = [call.args[0] for call in namespace['command'].call_args_list]
+    delete = ['certbot', 'delete', '--non-interactive', '--cert-name', DOMAIN]
+    issue = next(args for args in commands if args[:2] == ['certbot', 'certonly'])
+    assert commands.index(delete) < commands.index(issue)
+    assert issue[issue.index('-d') + 1] == HOST
+
+
+@pytest.mark.parametrize('resolved', [None, '203.0.113.9'])
+def test_host_certificate_is_not_requested_until_dns_points_at_this_vm(tmp_path, resolved):
+    # A failed HTTP-01 validation counts against Let's Encrypt's hourly limit.
+    namespace = _configure_without_certificate(tmp_path, certbot_rc=0, resolved=resolved)
+    with pytest.raises(ValueError, match='does not resolve to this VM yet'):
+        namespace['configure']()
+    commands = [call.args[0] for call in namespace['command'].call_args_list]
+    assert not any(args[0] == 'certbot' for args in commands)
+
+
 def test_failure_reason_names_the_step_without_command_output():
     namespace = agent()
     error = subprocess.CalledProcessError(1, ['docker', 'swarm', 'init', '--advertise-addr', '10.0.0.20'],
@@ -201,3 +241,5 @@ def test_failure_reason_names_the_step_without_command_output():
     assert namespace['failure_reason'](ValueError('Invalid proxy DNS configuration')) == \
         'Invalid proxy DNS configuration'
     assert namespace['failure_reason'](KeyError(KEY)) == 'KeyError'
+    # ValueError subclasses carry messages this script did not write.
+    assert namespace['failure_reason'](json.JSONDecodeError(KEY, KEY, 0)) == 'JSONDecodeError'
