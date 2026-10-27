@@ -63,6 +63,11 @@ class _CollectionReference:
     def document(self, doc_id):
         return _DocumentReference(self.database, doc_id)
 
+    def where(self, *, filter):
+        return SimpleNamespace(get=lambda transaction=None: [
+            _Snapshot(value) for value in self.database.records.values()
+            if value.get(filter.field_path) == filter.value])
+
 
 class _TransactionalDatabase(_RecordingDatabase):
     """Small serialized transaction fake for shared-start race tests."""
@@ -597,6 +602,159 @@ def test_shared_gateway_only_follows_boundary_workout_using_persisted_state_valu
     assert servers == ['workout-current-kali']
 
 
+def test_last_stop_keeps_gateway_for_a_sibling_still_starting():
+    workout = object.__new__(CommunityWorkout)
+    workout.workout_id, workout.unit_id = 'workout-current', 'unit-12345'
+    workout.workout = SimpleNamespace(parent_id=workout.unit_id)
+    workout.unit_model = SimpleNamespace(servers=[
+        SimpleNamespace(name='kali', community_server=False),
+        SimpleNamespace(name='wireguard', community_server=True),
+    ])
+    workout.db_queries = SimpleNamespace(get_children=Mock(return_value=[
+        {'id': 'workout-other', 'state': WorkoutStates.STARTING.value}]))
+
+    servers, boundary = workout._CommunityWorkout__get_servers_for_action(PubSub.Actions.STOP)
+
+    assert boundary is False
+    assert servers == ['workout-current-kali']
+
+
+def test_two_students_automatically_start_and_stop_only_the_shared_gateway_boundaries():
+    unit_id, gateway_name = 'unit-12345', 'unit-12345-wireguard'
+    records = {
+        gateway_name: {'state': ServerStates.STOPPED.value},
+        'student-a-kali': {'state': ServerStates.RUNNING.value},
+        'student-b-kali': {'state': ServerStates.RUNNING.value},
+        'student-a': {'id': 'student-a', 'parent_id': unit_id, 'state': WorkoutStates.READY.value},
+        'student-b': {'id': 'student-b', 'parent_id': unit_id, 'state': WorkoutStates.READY.value},
+    }
+    database = _TransactionalDatabase(records=records)
+    cloud_actions = []
+
+    class State(_StateManager):
+        def __init__(self, identifier):
+            super().__init__(WorkoutStates.READY.value)
+            self.identifier = identifier
+
+        def state_transition(self, new_state):
+            super().state_transition(new_state)
+            database.records[self.identifier]['state'] = new_state.value
+
+        def are_servers_started(self):
+            return database.records[f'{self.identifier}-kali']['state'] == ServerStates.RUNNING.value
+
+        def are_servers_stopped(self):
+            return database.records[f'{self.identifier}-kali']['state'] == ServerStates.STOPPED.value
+
+    class Compute:
+        def load(self, server_name):
+            self.name = server_name
+
+        def start(self, **kwargs):
+            cloud_actions.append(('start', self.name))
+            database.records[self.name]['state'] = ServerStates.RUNNING.value
+
+        def stop(self, **kwargs):
+            cloud_actions.append(('stop', self.name))
+            database.records[self.name]['state'] = ServerStates.STOPPED.value
+            if kwargs.get('community_stop_claim'):
+                database.records[self.name]['community_stop_claim']['completed'] = True
+
+    def make(identifier):
+        workout = object.__new__(CommunityWorkout)
+        workout.workout_id, workout.unit_id = identifier, unit_id
+        workout.workout = SimpleNamespace(parent_id=unit_id, shutoff_timestamp=None)
+        workout.unit_model = SimpleNamespace(servers=[
+            SimpleNamespace(name='kali', community_server=False),
+            SimpleNamespace(name='wireguard', community_server=True, wireguard_gateway=True,
+                            wireguard_managed=True),
+        ])
+        workout.db = database
+        workout.db_queries = SimpleNamespace(get_children=lambda **kwargs: [
+            database.records['student-a'], database.records['student-b']])
+        workout.s, workout.state_manager = WorkoutStates, State(identifier)
+        workout._add_build_action = Mock()
+        workout.packet_mirroring = SimpleNamespace(start=Mock(), stop=Mock())
+        workout.compute_manager, workout.debug, workout.logger = Compute(), True, Mock()
+        workout.duration_seconds = 3600
+        workout.get_record = lambda: SimpleNamespace(parent_id=unit_id, shutoff_timestamp=None)
+        workout.update_record = Mock()
+        return workout
+
+    first, second = make('student-a'), make('student-b')
+    first.start()
+    assert records[gateway_name]['state'] == ServerStates.RUNNING.value
+    assert first.state_manager.get_state() == WorkoutStates.RUNNING.value
+    second.start()
+    assert records[gateway_name]['state'] == ServerStates.RUNNING.value
+    first.stop()
+    assert records[gateway_name]['state'] == ServerStates.RUNNING.value
+    second.stop()
+    assert records[gateway_name]['state'] == ServerStates.STOPPED.value
+    assert second.state_manager.get_state() == WorkoutStates.READY.value
+    assert [action for action in cloud_actions if action[1] == gateway_name] == [
+        ('start', gateway_name), ('stop', gateway_name)]
+
+
+@pytest.mark.parametrize('workout_state', [WorkoutStates.RUNNING, WorkoutStates.STARTING])
+def test_idle_gateway_parking_never_stops_a_gateway_with_active_students(workout_state):
+    unit = object.__new__(CommunityUnit)
+    unit.unit_id = 'unit-12345'
+    unit.unit_model = SimpleNamespace(servers=[SimpleNamespace(
+        name='wireguard', community_server=True, wireguard_gateway=True, wireguard_managed=True)])
+    unit.db_queries = SimpleNamespace(get_children=Mock(return_value=[{'state': workout_state.value}]))
+    unit.compute_manager = Mock()
+
+    assert unit._stop_idle_managed_wireguard() is False
+
+    unit.compute_manager.load.assert_not_called()
+
+
+def test_managed_idle_gateway_stop_failure_is_not_a_successful_build():
+    unit = object.__new__(CommunityUnit)
+    unit.unit_id = 'unit-12345'
+    unit.unit_model = SimpleNamespace(servers=[SimpleNamespace(
+        name='wireguard', community_server=True, wireguard_gateway=True, wireguard_managed=True)])
+    unit.db_queries = SimpleNamespace(get_children=Mock(return_value=[]))
+    unit.db = _RecordingDatabase(records={'unit-12345-wireguard': {'state': ServerStates.BROKEN.value}})
+    unit.compute_manager, unit.debug = Mock(), True
+
+    with pytest.raises(TimeoutError, match='Could not confirm idle WireGuard gateway stopped'):
+        unit._stop_idle_managed_wireguard()
+
+
+@pytest.mark.parametrize('expected,pending', [
+    (ServerStates.RUNNING, ServerStates.STARTING),
+    (ServerStates.STOPPED, ServerStates.STOPPING),
+])
+def test_student_lifecycle_waits_for_shared_gateway_cloud_completion(expected, pending):
+    workout = object.__new__(CommunityWorkout)
+    workout.unit_id = 'unit-12345'
+    workout.unit_model = SimpleNamespace(servers=[SimpleNamespace(
+        name='wireguard', community_server=True, wireguard_gateway=True, wireguard_managed=True)])
+    workout.db = Mock()
+    workout.db.get.side_effect = [{'state': pending.value}, {'state': expected.value}]
+    workout.workout_id = 'student-current'
+    workout.db_queries = SimpleNamespace(get_children=Mock(return_value=[]))
+
+    with patch('cloud_functions.cloud_fn_utilities.course_objects.workout.community_workout.time.sleep') as sleep:
+        assert workout._managed_gateways_reached(expected) is True
+
+    sleep.assert_called_once_with(workout.MANAGED_GATEWAY_POLL_SECONDS)
+    assert workout.db.get.call_count == 2
+
+
+def test_failed_shared_gateway_cannot_complete_a_student_start():
+    workout = object.__new__(CommunityWorkout)
+    workout.unit_id = 'unit-12345'
+    workout.unit_model = SimpleNamespace(servers=[SimpleNamespace(
+        name='wireguard', community_server=True, wireguard_gateway=True, wireguard_managed=True)])
+    workout.db = Mock()
+    workout.db.get.return_value = {'state': ServerStates.BROKEN.value}
+
+    assert workout._managed_gateways_reached(ServerStates.RUNNING) is False
+
+
 def test_community_workout_duplicate_delete_is_noop_after_deleted():
     workout = object.__new__(CommunityWorkout)
     workout.s = WorkoutStates
@@ -708,6 +866,196 @@ def test_shared_server_start_claim_is_idempotent_for_owning_workout_retry():
     assert workout._CommunityWorkout__claim_shared_server_start(server_name)
     assert workout._CommunityWorkout__claim_shared_server_start(server_name)
     assert database.records[server_name]['community_start_claim']['owner'] == 'workout-a'
+
+
+def _gateway_claim_workout(database, identifier):
+    workout = object.__new__(CommunityWorkout)
+    workout.workout_id, workout.unit_id = identifier, 'unit-12345'
+    workout.workout = SimpleNamespace(parent_id=workout.unit_id)
+    workout.unit_model = SimpleNamespace(servers=[SimpleNamespace(
+        name='wireguard', community_server=True, wireguard_gateway=True, wireguard_managed=True)])
+    workout.db = database
+    workout.db_queries = SimpleNamespace(get_children=lambda **kwargs: [
+        value for value in database.records.values() if value.get('parent_id') == workout.unit_id])
+    return workout
+
+
+def test_stop_transaction_rechecks_a_new_start_after_last_student_selection():
+    name = 'unit-12345-wireguard'
+    database = _TransactionalDatabase(records={
+        name: {'state': ServerStates.RUNNING.value},
+        'student-a': {'id': 'student-a', 'parent_id': 'unit-12345', 'state': WorkoutStates.STOPPING.value},
+        'student-b': {'id': 'student-b', 'parent_id': 'unit-12345', 'state': WorkoutStates.READY.value},
+    })
+    departing = _gateway_claim_workout(database, 'student-a')
+    selected, last = departing._CommunityWorkout__get_servers_for_action(PubSub.Actions.STOP)
+    assert selected == [name] and last
+    database.records['student-b']['state'] = WorkoutStates.STARTING.value
+
+    assert departing._CommunityWorkout__claim_shared_server_stop(name) is None
+
+    assert database.records[name]['state'] == ServerStates.RUNNING.value
+    assert 'community_stop_claim' not in database.records[name]
+
+
+@pytest.mark.parametrize('pending', [ServerStates.STOPPING, ServerStates.STOPPED])
+def test_new_first_student_waits_for_claimed_stop_then_obsoletes_queued_stop(pending):
+    from cloud_functions.cloud_fn_utilities.course_objects.compute.lab_server_manager import LabServerManager
+
+    name = 'unit-12345-wireguard'
+    database = _TransactionalDatabase(records={
+        name: {'state': ServerStates.RUNNING.value},
+        'student-a': {'id': 'student-a', 'parent_id': 'unit-12345', 'state': WorkoutStates.STOPPING.value},
+        'student-b': {'id': 'student-b', 'parent_id': 'unit-12345', 'state': WorkoutStates.READY.value},
+    })
+    departing = _gateway_claim_workout(database, 'student-a')
+    arriving = _gateway_claim_workout(database, 'student-b')
+    stop_token = departing._CommunityWorkout__claim_shared_server_stop(name)
+    assert stop_token and database.records[name]['state'] == ServerStates.STOPPING.value
+    database.records[name]['state'] = pending.value
+    database.records['student-b']['state'] = WorkoutStates.STARTING.value
+
+    def finish_stop(_):
+        database.records[name]['state'] = ServerStates.STOPPED.value
+        database.records[name]['community_stop_claim']['completed'] = True
+
+    with patch('cloud_functions.cloud_fn_utilities.course_objects.workout.community_workout.time.sleep',
+               side_effect=finish_stop) as sleep:
+        start_token = arriving._CommunityWorkout__claim_shared_server_start(name)
+
+    sleep.assert_called_once_with(arriving.MANAGED_GATEWAY_POLL_SECONDS)
+    assert start_token and start_token != stop_token
+    assert database.records[name]['state'] == ServerStates.STARTING.value
+    gateway = object.__new__(LabServerManager)
+    gateway.db, gateway.server_name, gateway.logger = database, name, Mock()
+    gateway._stop_server = Mock()
+    gateway.stop(community_stop_claim=stop_token)
+    gateway._stop_server.assert_not_called()
+    assert gateway._community_claim_is_current('start', start_token)
+    # The departing student's completion must not wait for the gateway to
+    # become idle again now that another student legitimately needs it.
+    assert departing._managed_gateways_reached(ServerStates.STOPPED)
+
+
+def test_queued_start_is_ignored_after_an_idle_stop_claim_replaces_it():
+    from cloud_functions.cloud_fn_utilities.course_objects.compute.lab_server_manager import LabServerManager
+
+    name = 'unit-12345-wireguard'
+    database = _TransactionalDatabase(records={name: {'state': ServerStates.STOPPED.value}})
+    workout = _gateway_claim_workout(database, 'student-a')
+    start_token = workout._CommunityWorkout__claim_shared_server_start(name)
+    def finish_start(_):
+        database.records[name]['state'] = ServerStates.RUNNING.value
+    with patch('cloud_functions.cloud_fn_utilities.course_objects.workout.community_workout.time.sleep',
+               side_effect=finish_start) as sleep:
+        stop_token = workout._CommunityWorkout__claim_shared_server_stop(name)
+    sleep.assert_called_once_with(workout.MANAGED_GATEWAY_POLL_SECONDS)
+    assert stop_token and database.records[name]['state'] == ServerStates.STOPPING.value
+    gateway = object.__new__(LabServerManager)
+    gateway.db, gateway.server_name, gateway.logger = database, name, Mock()
+    gateway._start_server = Mock()
+
+    gateway.start(community_start_claim=start_token)
+
+    gateway._start_server.assert_not_called()
+
+
+def test_instructor_stop_remains_unconditional_without_an_automatic_claim():
+    from cloud_functions.cloud_fn_utilities.course_objects.compute.lab_server_manager import LabServerManager
+
+    gateway = object.__new__(LabServerManager)
+    gateway._managed_wireguard = Mock(return_value=False)
+    gateway._wireguard_endpoint_id = Mock(return_value=None)
+    gateway._stop_server = Mock()
+
+    gateway.stop()
+
+    gateway._stop_server.assert_called_once_with()
+
+
+def test_automatic_stop_waits_for_gcp_before_completing_its_claim():
+    from cloud_functions.cloud_fn_utilities.course_objects.compute.lab_server_manager import LabServerManager
+
+    name, token = 'unit-12345-wireguard', 'current-stop'
+    database = _TransactionalDatabase(records={name: {
+        'state': ServerStates.STOPPING.value,
+        'community_stop_claim': {'token': token, 'owner': 'student-a', 'completed': False},
+    }})
+    gateway = object.__new__(LabServerManager)
+    gateway.db, gateway.server_name, gateway.logger = database, name, Mock()
+    gateway._managed_wireguard = Mock(return_value=False)
+    gateway._wireguard_endpoint_id = Mock(return_value=None)
+    gateway._stop_server = Mock(side_effect=lambda: database.records[name].update(
+        state=ServerStates.STOPPED.value))
+    gateway._get_instance_status = Mock(side_effect=['STOPPING', 'TERMINATED'])
+
+    with patch('cloud_functions.cloud_fn_utilities.course_objects.compute.lab_server_manager.time.sleep') as sleep:
+        gateway.stop(community_stop_claim=token)
+
+    sleep.assert_called_once_with(5)
+    assert database.records[name]['community_stop_claim']['completed'] is True
+
+
+def test_automatic_stop_retries_dns_cleanup_after_gcp_already_stopped():
+    from cloud_functions.cloud_fn_utilities.course_objects.compute.lab_server_manager import LabServerManager
+    from common.exceptions import BaseAgogeException
+
+    name, token = 'unit-12345-wireguard', 'unfinished-stop'
+    database = _TransactionalDatabase(records={name: {
+        'state': ServerStates.STOPPING.value,
+        'community_stop_claim': {'token': token, 'owner': 'student-a', 'completed': False},
+    }})
+    gateway = object.__new__(LabServerManager)
+    gateway.db, gateway.server_name, gateway.parent_build_id = database, name, 'unit-12345'
+    gateway.logger, gateway.s = Mock(), ServerStates
+    gateway.state_manager = SimpleNamespace(get_state=lambda: database.records[name]['state'])
+    gateway._managed_wireguard = Mock(return_value=True)
+    gateway._wireguard_endpoint_id = Mock(return_value='10000')
+    gateway._require_wireguard_provisionable = Mock()
+    gateway.wireguard_registry = Mock()
+    gateway.wireguard_registry.get.return_value = SimpleNamespace(
+        id='10000', hostname='wg10000.example.edu', public_ip='203.0.113.10')
+    gateway._wireguard_provisioning = Mock()
+    gateway.dns_manager = SimpleNamespace(delete_dns=Mock(side_effect=[False, True]))
+    rpc_stop = Mock()
+
+    def stop_server():
+        if database.records[name]['state'] != ServerStates.STOPPED.value:
+            rpc_stop()
+            database.records[name]['state'] = ServerStates.STOPPED.value
+
+    gateway._stop_server = stop_server
+    gateway._get_instance_status = Mock(return_value='TERMINATED')
+    with pytest.raises(BaseAgogeException, match='DNS removal failed'):
+        gateway.stop(community_stop_claim=token)
+    assert database.records[name]['state'] == ServerStates.STOPPED.value
+    assert database.records[name]['community_stop_claim']['completed'] is False
+
+    gateway.stop(community_stop_claim=token)
+
+    rpc_stop.assert_called_once_with()
+    assert gateway.dns_manager.delete_dns.call_count == 2
+    assert database.records[name]['community_stop_claim']['completed'] is True
+    # A later duplicate of the completed claim must not restart cleanup.
+    gateway.stop(community_stop_claim=token)
+    assert gateway.dns_manager.delete_dns.call_count == 2
+
+
+@pytest.mark.parametrize('action,state,claim', [
+    ('start', ServerStates.STOPPING, {'community_stop_claim': {'token': 'pending-stop', 'completed': False}}),
+    ('stop', ServerStates.STARTING, {'community_start_claim': {'token': 'pending-start'}}),
+])
+def test_opposite_automatic_operation_wait_is_bounded_without_overwriting_it(action, state, claim):
+    name = 'unit-12345-wireguard'
+    original = {'state': state.value, **claim}
+    database = _TransactionalDatabase(records={name: copy.deepcopy(original)})
+    workout = _gateway_claim_workout(database, 'student-a')
+
+    with patch('cloud_functions.cloud_fn_utilities.course_objects.workout.community_workout.time.monotonic',
+               side_effect=[0, 1000]), pytest.raises(TimeoutError):
+        getattr(workout, f'_CommunityWorkout__claim_shared_server_{action}')(name)
+
+    assert database.records[name] == original
 
 
 @pytest.mark.parametrize(

@@ -20,6 +20,18 @@ describe("WireGuard lab readiness", () => {
         expect(wireGuardReadiness("active", {...lease, status: "released"}, 1010).service).toBe(false);
     });
 
+    it("separates lifecycle availability from optional service and tunnel telemetry", () => {
+        for (const health_timestamp of [undefined, 800, 1020]) {
+            expect(wireGuardReadiness("active", {health_timestamp}, 1010)).toMatchObject({
+                available: true, telemetry: false, service: false, tunnel: false,
+            });
+        }
+        expect(wireGuardReadiness("active", null, 1010).available).toBe(true);
+        expect(wireGuardReadiness("reserved", null, 1010).available).toBe(false);
+        expect(wireGuardReadiness("active", {status: "released"}, 1010).available).toBe(false);
+        expect(wireGuardReadiness("active", {expires: 1000}, 1010).available).toBe(false);
+    });
+
     it("derives the full tenant DNS suffix while handling absolute names", () => {
         expect(wireGuardDnsSuffix("wg10000.agoge-class-a.vpn.example.edu.")).toBe("agoge-class-a.vpn.example.edu");
     });

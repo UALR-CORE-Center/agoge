@@ -43,6 +43,7 @@ export const
     URL_STUDENT_GUACAMOLE_TUNNEL: string = `${URL_STUDENT_WORKOUT}/{BUILD_ID}/guacamole/{SERVER_IDX}/session?token={TOKEN}`,
 
     // Docs Routes
+    URL_HELP: string = '/help',
     URL_DOCS_BASE: string = '/documents',
     URL_DOCS_EDITOR: string = `/${URL_DOCS_BASE}/edit/:file_uid`,
     URL_DOCS_VIEWER: string = `/${URL_DOCS_BASE}/:file_uid`,

@@ -17,7 +17,7 @@ def _loggable(attributes: dict) -> dict:
     return attributes
 
 
-def agoge_cloud_function(event, context, debug_mode: bool = False):
+def agoge_cloud_function(event, context, debug_mode: bool = False, *, env_dict: dict = None):
     """
     Responds to a Pub/Sub event from other cloud functions to build servers.
 
@@ -29,6 +29,7 @@ def agoge_cloud_function(event, context, debug_mode: bool = False):
          metadata. The `event_id` field contains the Pub/Sub message ID. The
          `timestamp` field contains the publish time.
          debug_mode (bool): Whether to run functions directly or use PubSub
+         env_dict (dict): Optional environment supplied by a local debug runner.
 
     Returns:
         A success status
@@ -41,12 +42,20 @@ def agoge_cloud_function(event, context, debug_mode: bool = False):
         "attributes": _loggable(attributes)
     })
 
-    bm = BudgetManager()
-    if not bm.check_budget():
+    # Cleanup must remain available when a budget block prevents new work.
+    # Limit the exception to the normal delete route; other control actions
+    # (including starts and rebuilds) retain the budget check.
+    deleting = (isinstance(attributes, dict)
+                and attributes.get(PubSub.EventAttributes.HANDLER) == PubSub.Handlers.CONTROL.value
+                and attributes.get(PubSub.EventAttributes.ACTION) == str(PubSub.Actions.DELETE.value))
+    bm = BudgetManager() if not deleting else None
+    if bm is not None and not bm.check_budget():
         logger.error(
             "BUDGET ALERT: Budget exceeded. Cloud Function execution halted.",
             extra={"event_id": context.event_id, "attributes": _loggable(attributes)}
         )
+        if debug_mode:
+            raise RuntimeError('Budget exceeded; the local Cloud Function did not run')
         return
 
     if not attributes:
@@ -69,12 +78,13 @@ def agoge_cloud_function(event, context, debug_mode: bool = False):
     })
 
     try:
+        environment = {'env_dict': env_dict} if env_dict is not None else {}
         if handler == PubSub.Handlers.BUILD:
-            BuildHandler(event['attributes'], debug_mode=debug_mode).route()
+            BuildHandler(event['attributes'], debug_mode=debug_mode, **environment).route()
         elif handler == PubSub.Handlers.CONTROL:
-            ControlHandler(event['attributes'], debug=debug_mode).route()
+            ControlHandler(event['attributes'], debug=debug_mode, **environment).route()
         elif handler == PubSub.Handlers.MAINTENANCE:
-            MaintenanceHandler(debug=debug_mode).route()
+            MaintenanceHandler(debug=debug_mode, **environment).route()
         elif handler == PubSub.Handlers.CTF:
             CtfHandler(event['attributes'], debug=debug_mode).route()
         elif handler == PubSub.Handlers.AGENCY:

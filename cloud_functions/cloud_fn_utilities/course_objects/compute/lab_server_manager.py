@@ -1,3 +1,4 @@
+import math
 import time
 from typing import Optional
 
@@ -37,8 +38,6 @@ from common.utilities.wireguard_firewall import has_public_wireguard_ingress
 
 
 class LabServerManager(BaseComputeManager):
-    _WIREGUARD_READY_ATTEMPTS = 60
-    _WIREGUARD_READY_SECONDS = 5
     # BUILD must never resurrect a VM that an older lifecycle already stopped
     # or retired. START is valid from STOPPED, but not while teardown is in
     # progress or after the server reached a terminal state.
@@ -141,8 +140,9 @@ class LabServerManager(BaseComputeManager):
             self._stage_wireguard_endpoint()
             self._ensure_dns_record()
             self._build_routes()
-            if self._managed_wireguard():
-                self._wait_for_wireguard_service()
+            # Compute Engine completion and the cloud dependencies determine
+            # lifecycle success. Guest telemetry and peer handshakes can arrive
+            # later and must not keep a successfully created lab in BUILDING.
             # Keep a freshly built gateway unpublished until its parent Unit has
             # installed the ingress firewall rules. The Unit promotes it to
             # active only after that final dependency succeeds.
@@ -152,7 +152,9 @@ class LabServerManager(BaseComputeManager):
             self._mark_wireguard_endpoint_error()
             raise
 
-    def start(self) -> None:
+    def start(self, *, community_start_claim=None) -> None:
+        if community_start_claim is not None and not self._community_claim_is_current('start', community_start_claim):
+            return
         # A retry after DNS publication failed must not issue another start for
         # an instance that is already running. Reuse the VM and retry only the
         # public endpoint dependencies.
@@ -185,8 +187,6 @@ class LabServerManager(BaseComputeManager):
                 # intentionally skips WireGuard DNS so this check happens first.
                 self._stage_wireguard_endpoint()
                 self._ensure_dns_record()
-                if self._managed_wireguard():
-                    self._wait_for_wireguard_service()
                 self._activate_wireguard_endpoint()
                 if managed_started:
                     self.state_manager.state_transition(self.s.RUNNING)
@@ -196,7 +196,9 @@ class LabServerManager(BaseComputeManager):
                 self._mark_wireguard_endpoint_error()
                 raise
 
-    def stop(self) -> None:
+    def stop(self, *, community_stop_claim=None) -> None:
+        if community_stop_claim is not None and not self._community_claim_is_current('stop', community_stop_claim):
+            return
         endpoint = None
         if self._managed_wireguard():
             self._require_wireguard_provisionable()
@@ -221,6 +223,45 @@ class LabServerManager(BaseComputeManager):
                     record_name=endpoint.hostname, ip_address=endpoint.public_ip,
                 ):
                     raise BaseAgogeException('WireGuard stopped, but DNS removal failed; retry stop')
+        if community_stop_claim is not None:
+            # A duplicate stop RPC can observe the first RPC still STOPPING.
+            # Do not release a waiting first-student start until GCP and this
+            # stop's endpoint/DNS cleanup have both finished.
+            deadline = time.monotonic() + 300
+            while self._get_instance_status() != 'TERMINATED':
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f'Automatic stop was not confirmed by GCP for {self.server_name}')
+                time.sleep(5)
+            self._complete_community_stop(community_stop_claim)
+
+    def _complete_community_stop(self, token):
+        reference = self.db.db.collection(DbCollections.SERVER.value).document(self.server_name)
+
+        def complete(transaction):
+            snapshot = reference.get(transaction=transaction)
+            record = snapshot.to_dict() if snapshot.exists else {}
+            claim = record.get('community_stop_claim') or {}
+            if claim.get('token') == token and record.get('state') == ServerStates.STOPPED.value:
+                transaction.set(reference, {'community_stop_claim': {**claim, 'completed': True}}, merge=True)
+
+        self.db.transaction(complete)
+
+    def _community_claim_is_current(self, action, token):
+        record = self.db.get(collection_name=DbCollections.SERVER, doc_id=self.server_name) or {}
+        claim = record.get(f'community_{action}_claim') or {}
+        if action == 'stop':
+            # GCP can finish before endpoint/DNS cleanup fails. Keep that exact
+            # unfinished claim retryable from STOPPED, while completed claims
+            # and claims replaced by a later start remain harmless redeliveries.
+            expected_state = record.get('state') in (ServerStates.STOPPING.value, ServerStates.STOPPED.value)
+            expected_state = expected_state and claim.get('completed') is not True
+        else:
+            expected_state = record.get('state') == ServerStates.STARTING.value
+        current = (isinstance(token, str) and bool(token) and claim.get('token') == token
+                   and expected_state)
+        if not current:
+            self.logger.info(f'Ignoring obsolete automatic community {action} for {self.server_name}')
+        return current
 
     def delete(
         self,
@@ -369,6 +410,10 @@ class LabServerManager(BaseComputeManager):
         self.server_spec.disks = disks
 
     def _add_metadata(self):
+        if getattr(self.server_spec, 'community_proxy', False):
+            # Generated shared proxies carry only the repository-owned bootstrap.
+            # Assessment scripts must never run under the signing-key identity.
+            return
         if self._managed_wireguard():
             # Managed gateways run only the repository bootstrap. Catalog or
             # assessment scripts must not replace its security policy.
@@ -549,7 +594,7 @@ class LabServerManager(BaseComputeManager):
                 self.server_name,
                 ip_address=self.primary_external_ip,
             )
-            if self._wireguard_endpoint_id() and not success:
+            if (self._wireguard_endpoint_id() or getattr(self.server_spec, 'community_proxy', False)) and not success:
                 raise BaseAgogeException(f'Unable to publish DNS record {dns_record}')
 
     def _delete_routes(self) -> None:
@@ -578,8 +623,9 @@ class LabServerManager(BaseComputeManager):
                 )
             if self._managed_wireguard():
                 lease = self._wireguard_provisioning().get_lease(self.parent_build_id)
-                if not lease.is_ready(time.time()):
-                    raise BadRequest('WireGuard guest service is not ready; inspect its bootstrap status')
+                if (lease.status != 'reserved' or not math.isfinite(lease.expires) or lease.expires <= time.time()
+                        or lease.unit_id != self.parent_build_id or lease.endpoint_id != endpoint_id):
+                    raise BadRequest('The WireGuard lab lease is expired, released, or no longer owns this endpoint')
             self.wireguard_registry.activate(
                 endpoint_id,
                 unit_id=self.parent_build_id,
@@ -594,17 +640,22 @@ class LabServerManager(BaseComputeManager):
             )
 
     def _wireguard_action_is_blocked(self, action: str, current_state: int) -> bool:
-        if not self._wireguard_endpoint_id():
+        shared_proxy = getattr(self.server_spec, 'community_proxy', False)
+        if not self._wireguard_endpoint_id() and not shared_proxy:
             return False
         blocked_states = (
             self._WIREGUARD_BUILD_BLOCKED_STATES
             if action == "BUILD"
             else self._WIREGUARD_START_BLOCKED_STATES
         )
-        if current_state not in blocked_states:
+        # A community proxy enters STARTING only after the initial build, when
+        # a student or instructor starts the parked service. Delayed BUILD
+        # deliveries must not race that separate runtime operation.
+        if current_state not in blocked_states and not (
+                shared_proxy and action == 'BUILD' and current_state == self.s.STARTING.value):
             return False
         self.logger.warning(
-            f'{self.class_name}:{self.server_name} - Ignoring stale WireGuard {action} '
+            f'{self.class_name}:{self.server_name} - Ignoring stale shared-service {action} '
             f'event while server is in state {self.s(current_state).name}'
         )
         return True
@@ -679,7 +730,8 @@ class LabServerManager(BaseComputeManager):
     def _prepare_wireguard_bootstrap(self, for_start: bool = False) -> None:
         service = self._wireguard_provisioning()
         lease = service.get_lease(self.parent_build_id)
-        if lease.status == 'released' or lease.expires <= time.time():
+        if (lease.status != 'reserved' or not math.isfinite(lease.expires) or lease.expires <= time.time()
+                or lease.unit_id != self.parent_build_id or lease.endpoint_id != self._wireguard_endpoint_id()):
             raise BadRequest('The WireGuard lab lease is expired or released')
         identity = WireGuardGatewayIdentity(self.env.project)
         email = identity.ensure(self.parent_build_id)
@@ -704,9 +756,15 @@ class LabServerManager(BaseComputeManager):
                   for item in items}
         if existing:
             accounts = self._resource_field(existing, 'service_accounts', []) or []
+            status = str(self._resource_field(existing, 'status', '')).upper()
+            prior_configurations = [getattr(lease, 'previous_secret_version_name', None),
+                                    *(getattr(lease, 'secret_history', None) or [])]
+            saved_change = (for_start and status == 'TERMINATED' and getattr(lease, 'configuration_pending', False)
+                            and bool(fields.get(SECRET_METADATA_KEY))
+                            and fields.get(SECRET_METADATA_KEY) in prior_configurations)
             if (
                 not any(self._resource_field(account, 'email') == email for account in accounts)
-                or fields.get(SECRET_METADATA_KEY) != lease.secret_version_name
+                or (fields.get(SECRET_METADATA_KEY) != lease.secret_version_name and not saved_change)
             ):
                 raise BadRequest('Existing gateway identity or configuration differs; rebuild the lab')
 
@@ -721,6 +779,9 @@ class LabServerManager(BaseComputeManager):
         metadata = managed_metadata(lease.secret_version_name, nonce)
         self._managed_wireguard_metadata = metadata
         if for_start and existing and not running:
+            if getattr(lease, 'configuration_pending', False):
+                from cloud_fn_utilities.server_specific.wireguard_configuration import apply_saved_wireguard_network
+                apply_saved_wireguard_network(self, lease)
             # Fingerprint prevents overwriting concurrent metadata changes.
             metadata['fingerprint'] = self._resource_field(current_metadata, 'fingerprint')
             preserved = [
@@ -733,6 +794,8 @@ class LabServerManager(BaseComputeManager):
             metadata['items'] = preserved + metadata['items']
             if not self.compute_instance.replace_metadata(self.server_name, metadata, wait=True):
                 raise BaseAgogeException('Unable to update WireGuard startup configuration; retry start')
+            if getattr(lease, 'configuration_pending', False):
+                service.configuration_applied(self.parent_build_id, lease.configuration_revision)
 
     def _refresh_wireguard_external_ip(self) -> None:
         instance = self.compute_instance.get(resource_name=self.server_name)
@@ -743,17 +806,3 @@ class LabServerManager(BaseComputeManager):
                     self.primary_external_ip = address
                     return
         raise BaseAgogeException('The WireGuard gateway has no public IPv4 address')
-
-    def _wait_for_wireguard_service(self) -> None:
-        service = self._wireguard_provisioning()
-        for attempt in range(self._WIREGUARD_READY_ATTEMPTS):
-            lease = service.get_lease(self.parent_build_id)
-            if lease.is_ready(time.time()):
-                return
-            if attempt + 1 < self._WIREGUARD_READY_ATTEMPTS:
-                time.sleep(self._WIREGUARD_READY_SECONDS)
-        raise TimeoutError(
-            'WireGuard did not report a healthy service within five minutes. '
-            'Check outbound Ubuntu package/Secret Manager/API access and '
-            'journalctl -u google-startup-scripts -u wg-quick@wg0 -u agoge-wireguard-health.'
-        )

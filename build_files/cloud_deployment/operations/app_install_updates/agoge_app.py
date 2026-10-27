@@ -2,6 +2,7 @@ import threading
 from googleapiclient import discovery
 from pathlib import Path
 import shutil
+import tempfile
 
 
 from common.utilities.gcp.cloud_env import CloudEnv
@@ -265,11 +266,30 @@ class AgogeApp:
             self._remove_staging(staging)
 
     def _deploy_react(self, wait_for=None):
-        return self._deploy_cloud_run(
-            app_type=self.commands.AppType.REACT,
-            target_dir=self.commands.AppDirectories.REACT,
-            wait_for=wait_for,
-        )
+        # Cloud Build receives frontend/ as its Docker context. Stage the same
+        # Markdown used by local builds inside that context, then restore it so
+        # generated content never becomes a second editable documentation tree.
+        docs = Path('docs')
+        staged_docs = Path(self.commands.AppDirectories.REACT) / '.help-docs'
+        if not (docs / 'README.md').is_file():
+            raise AgogeValidationError('The repository docs/ directory is required to build the frontend help app.')
+        with tempfile.TemporaryDirectory(prefix='agoge-help-') as temporary:
+            backup = Path(temporary) / 'previous'
+            if staged_docs.exists():
+                shutil.copytree(staged_docs, backup)
+                shutil.rmtree(staged_docs)
+            try:
+                shutil.copytree(docs, staged_docs)
+                return self._deploy_cloud_run(
+                    app_type=self.commands.AppType.REACT,
+                    target_dir=self.commands.AppDirectories.REACT,
+                    wait_for=wait_for,
+                )
+            finally:
+                if staged_docs.exists():
+                    shutil.rmtree(staged_docs)
+                if backup.exists():
+                    shutil.copytree(backup, staged_docs)
 
     def _stage_build(self, app_type: str) -> Path:
         """

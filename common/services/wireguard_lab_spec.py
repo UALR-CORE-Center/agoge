@@ -1,8 +1,9 @@
-"""Server-side topology for the enrolled, one-kit Community Lab."""
+"""Server-side topology for a Community Lab with one registered remote peer."""
 from ipaddress import ip_network
 
 from common.exceptions import BadRequest
 from common.models.agoge import FirewallRuleModel, NetworkModel, NicModel, RouteModel
+from common.services.community_proxy_spec import COMMUNITY_PROXY_NAME
 
 
 UBUNTU_GATEWAY_IMAGE = "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64"
@@ -13,8 +14,8 @@ def default_wireguard_spec(student_image: str, connections: list) -> dict:
     """No instance-specific keys, addresses, or credentials belong in a catalog."""
     return {
         "version": "1.1", "build_type": "unit", "unit_type": "community",
-        "summary": {"name": "WireGuard Factory Lab", "author": "Agoge",
-                    "description": "A shared Ubuntu WireGuard gateway connects student workstations to one enrolled factory kit."},
+        "summary": {"name": "WireGuard Remote Lab", "author": "Agoge",
+                    "description": "A shared Ubuntu WireGuard gateway connects student workstations to a registered remote peer and its private LAN."},
         "networks": [], "servers": [
             {"name": "wireguard", "image": UBUNTU_GATEWAY_IMAGE,
              "machine_type": "e2-medium", "community_server": True,
@@ -26,7 +27,7 @@ def default_wireguard_spec(student_image: str, connections: list) -> dict:
 
 
 def configure_kit_topology(unit, equipment_subnet: str, port: int) -> None:
-    """Derive routes/firewalls from the enrolled kit, never from a browser CIDR.
+    """Derive routes/firewalls from the registered remote peer, never a browser CIDR.
 
     Each Unit gets its own VPC; only selected student VMs use the equipment
     route. Legacy arbitrary routes, NICs, and startup scripts cannot broaden a
@@ -34,22 +35,27 @@ def configure_kit_topology(unit, equipment_subnet: str, port: int) -> None:
     """
     remote = ip_network(equipment_subnet, strict=True)
     if remote.version != 4 or remote.prefixlen == 0:
-        raise BadRequest("The registered kit must have an explicit IPv4 equipment subnet")
+        raise BadRequest("The registered remote peer must have an explicit IPv4 remote LAN")
     tunnel = ip_network("10.254.254.0/30")
     if remote.overlaps(tunnel):
-        raise BadRequest("The kit equipment subnet overlaps the WireGuard tunnel subnet")
+        raise BadRequest("The remote LAN overlaps the WireGuard tunnel subnet")
     subnet = next((ip_network(cidr) for cidr in
                    ("10.20.0.0/24", "10.21.0.0/24", "172.20.0.0/24")
                    if not ip_network(cidr).overlaps(remote)), None)
     if subnet is None:
-        raise BadRequest("Cannot select a student subnet outside the kit equipment network")
+        raise BadRequest("Cannot select a student subnet outside the remote LAN")
     gateways = [server for server in unit.servers or [] if server.wireguard_gateway]
     students = [server for server in unit.servers or [] if not server.community_server
                 and not server.wireguard_gateway]
     if unit.unit_type != "community" or len(gateways) != 1 or not students:
         raise BadRequest("A managed WireGuard Lab needs one shared gateway and at least one student server")
-    if any(server.community_server and server not in gateways for server in unit.servers or []):
-        raise BadRequest("A one-kit WireGuard Lab supports only its gateway as a shared server")
+    if any(server.community_server and server not in gateways
+           and not (getattr(server, 'community_proxy', False) and server.name == COMMUNITY_PROXY_NAME)
+           for server in unit.servers or []):
+        raise BadRequest("A WireGuard remote lab supports only its gateway as a shared server")
+    # Shared display services are generated again from trusted code after this
+    # topology is selected; catalog startup scripts and NICs are never reused.
+    unit.servers = [server for server in unit.servers or [] if not getattr(server, 'community_proxy', False)]
     gateway = gateways[0]
     gateway_ip = str(subnet.network_address + 10)
     unit.networks = [NetworkModel(name="external", subnets=[
@@ -81,7 +87,7 @@ def configure_kit_topology(unit, equipment_subnet: str, port: int) -> None:
         dest_range=str(remote), next_hop_instance=gateway.name, tags=["wireguard-client"])]
     # Managed labs deliberately do not inherit the catalog's allow-all-local
     # rule. Student access is via the Guacamole proxy; equipment access is
-    # restricted to this kit's source range and selected student VMs.
+    # restricted to this remote LAN's source range and selected student VMs.
     unit.firewall_rules = [FirewallRuleModel(**rule) for rule in [
         {"name": "allow-wireguard-ingress", "network": "external", "action": "allow",
          "target_tags": ["wireguard-gateway"], "ports": [f"udp/{port}"],

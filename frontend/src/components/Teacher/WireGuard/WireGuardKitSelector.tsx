@@ -1,16 +1,17 @@
 import React, {useEffect, useState} from "react";
 import {Alert, Box, Button, FormControl, FormHelperText, InputLabel, MenuItem, Select, Typography} from "@mui/material";
-import {WireGuardKit, wireguardService} from "../../../services/WireGuard/wireguard.service";
+import {WireGuardRemotePeer, wireguardService} from "../../../services/WireGuard/wireguard.service";
 
 interface Props {
     open: boolean;
     value: string;
     onChange: (id: string) => void;
     onAvailabilityChange: (available: boolean) => void;
+    onPeerChange?: (peer: WireGuardRemotePeer | undefined) => void;
 }
 
-export const WireGuardKitSelector: React.FC<Props> = ({open, value, onChange, onAvailabilityChange}) => {
-    const [kits, setKits] = useState<WireGuardKit[]>([]);
+export const WireGuardRemotePeerSelector: React.FC<Props> = ({open, value, onChange, onAvailabilityChange, onPeerChange}) => {
+    const [remotePeers, setRemotePeers] = useState<WireGuardRemotePeer[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [retry, setRetry] = useState(0);
@@ -21,14 +22,17 @@ export const WireGuardKitSelector: React.FC<Props> = ({open, value, onChange, on
         setLoading(true);
         setError(null);
         onAvailabilityChange(false);
-        wireguardService.listKits().then(items => {
+        wireguardService.listRemotePeers().then(items => {
             if (!current) return;
-            const available = items.filter(kit => kit.enabled && !kit.assigned_unit_id);
-            setKits(available);
-            if (!available.some(kit => kit.id === value)) onChange("");
+            const available = items.filter(peer => peer.enabled && !peer.assigned_unit_id);
+            setRemotePeers(available);
+            if (!available.some(peer => peer.id === value)) {
+                onChange("");
+                onPeerChange?.(undefined);
+            }
             onAvailabilityChange(available.length > 0);
         }).catch(err => {
-            if (current) setError(err instanceof Error ? err.message : "Could not load registered kits.");
+            if (current) setError(err instanceof Error ? err.message : "Could not load registered remote peers.");
         }).finally(() => {
             if (current) setLoading(false);
         });
@@ -37,31 +41,36 @@ export const WireGuardKitSelector: React.FC<Props> = ({open, value, onChange, on
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open, retry]);
 
-    const selectedKit = kits.find(kit => kit.id === value);
+    const selectedPeer = remotePeers.find(peer => peer.id === value);
     return <Box sx={{my: 2}}>
-        <Typography variant="subtitle1" component="h3">Assigned factory kit</Typography>
+        <Typography variant="subtitle1" component="h3">Remote lab connection</Typography>
         <Typography variant="body2" sx={{mb: 1}}>
-            One registered kit is assigned exclusively to this lab. The Ubuntu gateway,
-            WireGuard configuration, and student routes are set up automatically.
+            Select the remote peer whose private LAN the students will access. It is assigned exclusively
+            to this Agoge lab; the gateway, WireGuard configuration, and remote LAN routes are set up automatically.
         </Typography>
         {error && <Alert severity="error" action={<Button color="inherit" onClick={() => setRetry(n => n + 1)}>Retry</Button>}>
             {error}
         </Alert>}
-        {!loading && !error && kits.length === 0 && <Alert severity="info">
-            No available kits are assigned to your account. Ask an administrator to register a kit
-            or release its previous lab before building.
+        {!loading && !error && remotePeers.length === 0 && <Alert severity="info">
+            No available remote peers are authorized for your account. Ask an administrator to register
+            or authorize a remote peer, or release its previous lab before building.
         </Alert>}
-        <FormControl fullWidth required margin="normal" disabled={loading || !!error || kits.length === 0}>
-            <InputLabel id="wireguard-kit-label">Registered kit</InputLabel>
-            <Select labelId="wireguard-kit-label" label="Registered kit" value={selectedKit ? value : ""}
-                onChange={event => onChange(event.target.value)}>
-                {kits.map(kit => <MenuItem key={kit.id} value={kit.id}>
-                    {kit.id} — {kit.device_id} ({kit.equipment_subnet})
+        <FormControl fullWidth required margin="normal" disabled={loading || !!error || remotePeers.length === 0}>
+            <InputLabel id="wireguard-remote-peer-label">Remote peer</InputLabel>
+            <Select labelId="wireguard-remote-peer-label" label="Remote peer" value={selectedPeer ? value : ""}
+                onChange={event => {
+                    onChange(event.target.value);
+                    onPeerChange?.(remotePeers.find(peer => peer.id === event.target.value));
+                }}>
+                {remotePeers.map(peer => <MenuItem key={peer.id} value={peer.id}>
+                    {peer.name ? `${peer.name} — ` : ""}{peer.id} — {peer.device_id} ({peer.remote_network_cidr})
                 </MenuItem>)}
             </Select>
-            <FormHelperText>{loading ? "Loading authorized kits…" : selectedKit
-                ? `Equipment network: ${selectedKit.equipment_subnet}. Only this kit's routes will be permitted.`
-                : "Choose the kit whose factory the students will access."}</FormHelperText>
+            <FormHelperText>{loading ? "Loading authorized remote peers…" : selectedPeer
+                ? `Remote LAN (IPv4 CIDR): ${selectedPeer.remote_network_cidr}. Student access is limited to this remote lab network.`
+                : "Choose the remote peer for the lab the students will access."}</FormHelperText>
         </FormControl>
     </Box>;
 };
+
+export {WireGuardRemotePeerSelector as WireGuardKitSelector};

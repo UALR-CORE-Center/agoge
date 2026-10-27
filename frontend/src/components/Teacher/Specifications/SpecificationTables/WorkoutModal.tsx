@@ -15,6 +15,7 @@ import {
     Divider,
     useMediaQuery,
     useTheme,
+    TextField,
 } from '@mui/material';
 import Alert from "@mui/material/Alert";
 import DialogActions from "@mui/material/DialogActions";
@@ -27,7 +28,7 @@ import { SafeAgogeUser, UserCourses } from "../../../../services/User/user.model
 import { userService } from '../../../../services/User/user.service';
 import NumberInputField from '../../../Common/FormInputs/NumberInputField';
 import { TagChip } from "../TagChips";
-import {WireGuardKitSelector} from "../../WireGuard/WireGuardKitSelector";
+import {WireGuardRemotePeerSelector} from "../../WireGuard/WireGuardKitSelector";
 import {isWireGuardLab} from "../../../../services/WireGuard/wireguard.utils";
 import {WireGuardStudentImageSelector} from "../../WireGuard/WireGuardStudentImageSelector";
 
@@ -49,8 +50,9 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
     const [courses, setCourses] = useState<UserCourses>({});
     const [displayedCourses, setDisplayedCourses] = useState([{ value: '', label: '-- Select a LMS --' }]);
     const [displayedCodes, setDisplayedCodes] = useState([{ value: '', label: '-- Select a Course Code --' }]);
-    const [kitId, setKitId] = useState("");
-    const [kitsAvailable, setKitsAvailable] = useState(false);
+    const [remotePeerId, setRemotePeerId] = useState("");
+    const [remoteNetworkCidr, setRemoteNetworkCidr] = useState("");
+    const [remotePeersAvailable, setRemotePeersAvailable] = useState(false);
     const [studentImage, setStudentImage] = useState("");
     const [studentImagesAvailable, setStudentImagesAvailable] = useState(false);
     const wireguardLab = isWireGuardLab(selectedRow);
@@ -167,7 +169,8 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
         e.preventDefault();
         if (validateForm()) {
             setErrorMessage(null);
-            onSubmit(wireguardLab ? {...formData, kit_id: kitId,
+            onSubmit(wireguardLab ? {...formData, remote_peer_id: remotePeerId,
+                ...(remoteNetworkCidr.trim() ? {remote_network_cidr: remoteNetworkCidr.trim()} : {}),
                 ...(managedWireguardLab ? {student_image: studentImage} : {})} : formData);
         } else {
             setErrorMessage("Please fill out all required fields.");
@@ -176,7 +179,7 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
 
     const validateForm = () => {
         let valid = true;
-        if (wireguardLab && (!kitId || !kitsAvailable)) valid = false;
+        if (wireguardLab && (!remotePeerId || !remotePeersAvailable)) valid = false;
         if (managedWireguardLab && (!studentImage || !studentImagesAvailable)) valid = false;
         if (!formData.expires || formData.expires.toUTCString() === "Invalid Date") {
             valid = false;
@@ -230,8 +233,13 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
                     display={"flex"}
                     flexDirection={"column"}
                 >
-                    {wireguardLab && <WireGuardKitSelector open={open} value={kitId}
-                        onChange={setKitId} onAvailabilityChange={setKitsAvailable} />}
+                    {wireguardLab && <WireGuardRemotePeerSelector open={open} value={remotePeerId}
+                        onChange={setRemotePeerId} onAvailabilityChange={setRemotePeersAvailable}
+                        onPeerChange={peer => setRemoteNetworkCidr(peer?.remote_network_cidr || "")} />}
+                    {wireguardLab && <TextField label="Remote LAN for this lab (IPv4 CIDR)"
+                        value={remoteNetworkCidr} disabled={!remotePeerId} margin="normal"
+                        onChange={event => setRemoteNetworkCidr(event.target.value)}
+                        helperText="Defaults to the remote lab's registered LAN. Changing this value affects this Agoge lab only; the server checks network overlap." />}
                     {managedWireguardLab && <WireGuardStudentImageSelector open={open} value={studentImage}
                         onChange={setStudentImage} onAvailabilityChange={setStudentImagesAvailable} />}
                     <FormControl margin={"normal"} required={true}>
@@ -320,7 +328,7 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
                             type="submit"
                             variant="contained"
                             color="primary"
-                            disabled={(wireguardLab && (!kitId || !kitsAvailable))
+                            disabled={(wireguardLab && (!remotePeerId || !remotePeersAvailable))
                                 || (managedWireguardLab && (!studentImage || !studentImagesAvailable))}
                         >
                             Build Lab

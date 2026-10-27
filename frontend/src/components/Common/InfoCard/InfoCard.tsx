@@ -7,6 +7,7 @@ interface InfoCardProps {
     buildType: "unit" | "workout";
     data: any;
     isLoading?: boolean;
+    onRemoteLabSettingsSaved?: () => void | Promise<void>;
 }
 
 export const InfoCard: React.FC<InfoCardProps> = (props) => {
@@ -15,6 +16,8 @@ export const InfoCard: React.FC<InfoCardProps> = (props) => {
             <UnitInfoCard
                 data={props.data}
                 isLoading={props.isLoading}
+                buildId={props.buildId}
+                onRemoteLabSettingsSaved={props.onRemoteLabSettingsSaved}
             />
         )
     } else if (props.buildType == 'workout') {

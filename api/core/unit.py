@@ -29,7 +29,7 @@ from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.utilities.id_generator import IdGenerator
 from common.services.wireguard_endpoint import WireGuardEndpointRegistry
 from common.services.wireguard_lab_spec import configure_kit_topology
-from common.services.wireguard_provisioning import WireGuardProvisioningService
+from common.services.wireguard_provisioning import WireGuardProvisioningService, resolve_remote_peer_id
 from common.utilities.timestamps import Timestamps
 
 from utilities.lms.lms_canvas import LMSSpecCanvas
@@ -262,16 +262,19 @@ class Unit:
             try:
                 gateways = [server for server in unit.servers or [] if server.wireguard_gateway]
                 if gateways:
-                    kit_id = data.get('kit_id')
-                    if not isinstance(kit_id, str) or not kit_id:
-                        raise BadRequest('Select a registered factory kit for this WireGuard Lab')
+                    kit_id = resolve_remote_peer_id(data)
                     provisioning = WireGuardProvisioningService(self.env_dict, db=self.db)
                     kit = provisioning.get_authorized_kit(kit_id, requester)
                     equipment_subnet = (kit.get('equipment_subnet') if isinstance(kit, dict)
                                         else kit.equipment_subnet)
+                    if data.get('remote_network_cidr') is not None:
+                        equipment_subnet = provisioning.validate_remote_network(data['remote_network_cidr'])
                     configure_kit_topology(unit, equipment_subnet, int(self.env_dict.get('wireguard_port') or 51820))
                     endpoint_registry = self._allocate_wireguard_endpoint(unit)
-                    provisioning.reserve(unit, kit_id, requester)
+                    if data.get('remote_network_cidr') is not None:
+                        provisioning.reserve(unit, kit_id, requester, remote_network_cidr=equipment_subnet)
+                    else:
+                        provisioning.reserve(unit, kit_id, requester)
                     gateways[0].wireguard_managed = True
                 if lms_integration:
                     build_spec = self._lms_integrate(requester=requester, build_spec=unit, data=data)

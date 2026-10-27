@@ -109,6 +109,7 @@ class WireGuardEndpointRegistry:
             timestamp = self._timestamp()
             registration = WireGuardEndpointRecordModel(
                 id=peer_id,
+                connection_id=self._connection_id(unit_id),
                 hostname=self._hostname(peer_id),
                 unit_id=unit_id,
                 server_name=server_name,
@@ -158,7 +159,7 @@ class WireGuardEndpointRegistry:
                     claimed = self._endpoint_document(claimed_id).get(transaction=transaction)
                     if not claimed.exists:
                         raise BadRequest("WireGuard endpoint claim is missing its endpoint")
-                    endpoint = WireGuardEndpointRecordModel(**claimed.to_dict())
+                    endpoint = self._record(claimed.to_dict())
                     self._verify_claim_owner(endpoint, unit_id)
                     self._verify_claimable(endpoint)
                     return endpoint
@@ -183,6 +184,7 @@ class WireGuardEndpointRegistry:
                     timestamp = self._timestamp()
                     endpoint = WireGuardEndpointRecordModel(
                         id=peer_id,
+                        connection_id=self._connection_id(unit_id),
                         hostname=self._hostname(peer_id),
                         unit_id=unit_id,
                         server_name=server_name,
@@ -228,7 +230,7 @@ class WireGuardEndpointRegistry:
                 claimed = self._endpoint_document(claimed_id).get(transaction=transaction)
                 if not claimed.exists:
                     raise BadRequest("WireGuard endpoint claim is missing its endpoint")
-                endpoint = WireGuardEndpointRecordModel(**claimed.to_dict())
+                endpoint = self._record(claimed.to_dict())
                 self._verify_claim_owner(endpoint, unit_id)
                 self._verify_claimable(endpoint)
                 return endpoint
@@ -236,7 +238,7 @@ class WireGuardEndpointRegistry:
             endpoint_snapshot = legacy_endpoint.get(transaction=transaction)
             if not endpoint_snapshot.exists:
                 raise NotFound("WireGuard endpoint not found")
-            endpoint = WireGuardEndpointRecordModel(**endpoint_snapshot.to_dict())
+            endpoint = self._record(endpoint_snapshot.to_dict())
             self._verify_claim_owner(endpoint, unit_id)
             self._verify_claimable(endpoint)
             transaction.set(claim, self._claim_data(unit_id, endpoint.id))
@@ -262,7 +264,7 @@ class WireGuardEndpointRegistry:
                 claimed = self._endpoint_document(claimed_id).get(transaction=transaction)
                 if not claimed.exists:
                     raise BadRequest("WireGuard endpoint claim is missing its endpoint")
-                endpoint = WireGuardEndpointRecordModel(**claimed.to_dict())
+                endpoint = self._record(claimed.to_dict())
                 self._verify_claim_owner(endpoint, registration.unit_id)
                 self._verify_claimable(endpoint)
                 return endpoint
@@ -289,7 +291,7 @@ class WireGuardEndpointRegistry:
         if not data:
             raise NotFound("WireGuard endpoint not found")
 
-        endpoint = WireGuardEndpointRecordModel(**data)
+        endpoint = self._record(data)
         if public_only and endpoint.status not in self.PUBLIC_STATUSES:
             raise NotFound("WireGuard endpoint not found")
         return endpoint
@@ -426,7 +428,7 @@ class WireGuardEndpointRegistry:
             snapshot = document.get(transaction=transaction)
             if not snapshot.exists:
                 raise NotFound("WireGuard endpoint not found")
-            endpoint = WireGuardEndpointRecordModel(**snapshot.to_dict())
+            endpoint = self._record(snapshot.to_dict())
             if endpoint.unit_id != unit_id:
                 raise BadRequest("WireGuard endpoint does not belong to the requested Unit")
             if endpoint.status not in allowed_sources:
@@ -444,6 +446,7 @@ class WireGuardEndpointRegistry:
 
             update = {
                 "status": status,
+                "connection_id": endpoint.connection_id,
                 "updated_timestamp": timestamp,
                 **(extra_update or {}),
             }
@@ -496,7 +499,7 @@ class WireGuardEndpointRegistry:
             snapshot = document.get(transaction=transaction)
             if not snapshot.exists:
                 raise NotFound("WireGuard endpoint not found")
-            endpoint = WireGuardEndpointRecordModel(**snapshot.to_dict())
+            endpoint = self._record(snapshot.to_dict())
             if unit_id and endpoint.unit_id != unit_id:
                 raise BadRequest("WireGuard endpoint does not belong to the requested Unit")
             claim = self._claim_document(endpoint.unit_id)
@@ -563,6 +566,23 @@ class WireGuardEndpointRegistry:
             ).hostname
         except ValidationError as error:
             raise BadRequest(f"Invalid WireGuard DNS configuration: {error}") from error
+
+    def _connection_id(self, unit_id: str) -> str:
+        """Identify the lab across projects, independent of recycled numbers."""
+        project = str(self.env_dict.get('project') or '').strip()
+        if not re.fullmatch(r'[a-z][a-z0-9-]{4,28}[a-z0-9]', project):
+            raise BadRequest('An immutable GCP project ID is required for a remote lab connection ID')
+        if not unit_id or any(character in unit_id for character in ('/', ':')):
+            raise BadRequest('A valid lab ID is required for a remote lab connection ID')
+        return f'{project}:{unit_id}'
+
+    def _record(self, data: dict) -> WireGuardEndpointRecordModel:
+        """Enrich old records using their authoritative owner, preserving DNS."""
+        endpoint = WireGuardEndpointRecordModel(**data)
+        # The namespace and registry owner are authoritative, including when a
+        # copied/stale record already carries another lab's display ID.
+        endpoint.connection_id = self._connection_id(endpoint.unit_id)
+        return endpoint
 
     def _port(self) -> int:
         configured = self.env_dict.get("wireguard_port", 51820)

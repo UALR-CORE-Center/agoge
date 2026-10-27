@@ -592,6 +592,121 @@ class WireGuardEndpointRegistryTest(unittest.TestCase):
                         number_min=bounds[0], number_max=bounds[1],
                     )
 
+    def test_new_connection_id_is_persisted_with_project_and_unit_identity(self):
+        for supplied_candidate in (True, False):
+            with self.subTest(supplied_candidate=supplied_candidate):
+                self.db = _FakeDatabase()
+                registry = self.registry(['12345']) if supplied_candidate else self.circular_registry()
+                endpoint = registry.allocate('abcdefghij', 'abcdefghij-wireguard')
+
+                self.assertEqual(endpoint.connection_id, 'agoge-class-a:abcdefghij')
+                self.assertEqual(
+                    self.db.records[endpoint.id]['connection_id'],
+                    'agoge-class-a:abcdefghij',
+                )
+                self.assertEqual(registry.get(endpoint.id).connection_id, endpoint.connection_id)
+
+    def test_connection_id_and_dns_survive_stop_start_with_changed_public_address(self):
+        registry = self.circular_registry()
+        endpoint = registry.allocate('abcdefghij', 'abcdefghij-wireguard')
+        registry.stage(endpoint.id, unit_id='abcdefghij', public_ip='203.0.113.10')
+        first_start = registry.activate(endpoint.id, unit_id='abcdefghij')
+        stopped = registry.mark_reserved(endpoint.id, unit_id='abcdefghij')
+        # Existing allocations retain their DNS even if settings for future labs
+        # change. An ephemeral IP is allowed to change on the next start.
+        self.env['wireguard_dns_suffix'] = '.new-gateways.example.edu'
+        registry.stage(endpoint.id, unit_id='abcdefghij', public_ip='203.0.113.20')
+        restarted = registry.activate(endpoint.id, unit_id='abcdefghij')
+
+        for observed in (first_start, stopped, restarted):
+            self.assertEqual(observed.connection_id, 'agoge-class-a:abcdefghij')
+            self.assertEqual(observed.id, endpoint.id)
+            self.assertEqual(observed.hostname, endpoint.hostname)
+        self.assertEqual(restarted.public_ip, '203.0.113.20')
+
+    def test_connection_ids_are_distinct_across_projects_with_same_local_numbers(self):
+        first = self.registry(['12345']).allocate('abcdefghij', 'abcdefghij-wireguard')
+        second = WireGuardEndpointRegistry(
+            env_dict=dict(self.env, project='agoge-class-b'),
+            db=_FakeDatabase(),
+            peer_id_factory=lambda: '12345',
+            timestamp_factory=lambda: self.now,
+        ).allocate('abcdefghij', 'abcdefghij-wireguard')
+
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(first.connection_id, 'agoge-class-a:abcdefghij')
+        self.assertEqual(second.connection_id, 'agoge-class-b:abcdefghij')
+        self.assertNotEqual(first.connection_id, second.connection_id)
+
+    def test_recycled_number_cannot_reuse_a_deleted_labs_connection_id(self):
+        registry = self.circular_registry(number_max=10000)
+        old = registry.allocate('oldunitxxx', 'oldunitxxx-wireguard')
+        registry.release(old.id, unit_id='oldunitxxx')
+        registry.purge(old.id, now=self.now + registry.TOMBSTONE_RETENTION_SECONDS)
+        new = registry.allocate('newunitxxx', 'newunitxxx-wireguard')
+
+        self.assertEqual(old.id, new.id)
+        self.assertEqual(old.hostname, new.hostname)
+        self.assertNotEqual(old.connection_id, new.connection_id)
+        self.assertEqual(new.connection_id, 'agoge-class-a:newunitxxx')
+
+    def test_legacy_read_derives_connection_id_from_authoritative_record_owner(self):
+        registry = self.registry(['12345'])
+        endpoint = registry.allocate('abcdefghij', 'abcdefghij-wireguard')
+        self.db.records[endpoint.id].pop('connection_id', None)
+        legacy_hostname = 'wg-12345.vpn.example.edu.'
+        self.db.records[endpoint.id]['hostname'] = legacy_hostname
+
+        hydrated = registry.get(endpoint.id)
+
+        self.assertEqual(hydrated.connection_id, 'agoge-class-a:abcdefghij')
+        self.assertEqual(hydrated.public_endpoint().connection_id, 'agoge-class-a:abcdefghij')
+        self.assertEqual(hydrated.hostname, legacy_hostname)
+        self.assertEqual(self.db.records[endpoint.id]['hostname'], legacy_hostname)
+        self.assertEqual(hydrated.unit_id, 'abcdefghij')
+
+    def test_legacy_allocation_claims_return_same_enriched_connection_id(self):
+        for existing_claim in (True, False):
+            with self.subTest(existing_claim=existing_claim):
+                self.db = _FakeDatabase()
+                endpoint = self.registry(['12345']).allocate('abcdefghij', 'abcdefghij-wireguard')
+                self.db.records[endpoint.id].pop('connection_id', None)
+                if existing_claim:
+                    # A stale empty query exercises the transactional claim path.
+                    self.db.hide_query_results = True
+                else:
+                    # Older allocations have no Unit claim; allocation migrates
+                    # that legacy record without creating another endpoint.
+                    self.db.claims.clear()
+
+                reused = self.circular_registry().allocate('abcdefghij', 'ignored-name')
+
+                self.assertEqual(reused.id, endpoint.id)
+                self.assertEqual(reused.hostname, endpoint.hostname)
+                self.assertEqual(reused.connection_id, 'agoge-class-a:abcdefghij')
+                self.assertEqual(len(self.db.records), 1)
+
+    def test_connection_id_is_canonicalized_from_current_project_and_record_owner(self):
+        registry = self.registry(['12345'])
+        endpoint = registry.allocate('abcdefghij', 'abcdefghij-wireguard')
+        self.db.records[endpoint.id]['connection_id'] = 'different-project:anotherlab'
+
+        hydrated = registry.get(endpoint.id)
+        self.assertEqual(hydrated.connection_id, 'agoge-class-a:abcdefghij')
+        activated = registry.activate(endpoint.id, unit_id='abcdefghij', public_ip='203.0.113.10')
+        self.assertEqual(activated.connection_id, 'agoge-class-a:abcdefghij')
+        self.assertEqual(self.db.records[endpoint.id]['connection_id'], 'agoge-class-a:abcdefghij')
+
+        # A copied Firestore record belongs to the current GCP project's
+        # namespace; never trust the old connection ID embedded in the copy.
+        copied = WireGuardEndpointRegistry(
+            env_dict=dict(self.env, project='agoge-class-b'),
+            db=self.db,
+            timestamp_factory=lambda: self.now,
+        ).get(endpoint.id)
+        self.assertEqual(copied.connection_id, 'agoge-class-b:abcdefghij')
+        self.assertEqual(copied.hostname, endpoint.hostname)
+
 
 if __name__ == "__main__":
     unittest.main()

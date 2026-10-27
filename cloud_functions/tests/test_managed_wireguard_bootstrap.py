@@ -40,8 +40,9 @@ def manager():
     value.primary_external_ip = None
     value._wireguard_provisioning = MagicMock()
     lease = SimpleNamespace(secret_version_name=SECRET, boot_id=NONCE, health_error=None,
-                            status='reserved', expires=10_000_000_000)
-    lease.is_ready = MagicMock(return_value=True)
+                            status='reserved', expires=10_000_000_000, unit_id=UNIT, endpoint_id='10000',
+                            service_ready=False, tunnel_ready=False, health_timestamp=None, latest_handshake=0)
+    lease.is_ready = MagicMock(side_effect=AssertionError('Guest health must not gate lifecycle'))
     value._wireguard_provisioning.return_value.get_lease.return_value = lease
     value._wireguard_provisioning.return_value.prepare_boot.return_value = NONCE
     return value
@@ -139,46 +140,38 @@ def test_existing_foreign_or_stale_vm_does_not_get_new_configuration(change):
     value.compute_instance.replace_metadata.assert_not_called()
 
 
-def test_build_waits_for_guest_service_before_reporting_running():
+def test_build_finishes_cloud_dependencies_without_guest_health_before_reporting_running():
     value = manager()
     events = []
     value.state_manager.get_state.return_value = ServerStates.READY.value
     value.state_manager.state_transition.side_effect = lambda state: events.append(state)
     for name in ['_require_wireguard_provisionable', '_prepare_wireguard_bootstrap',
                  '_refresh_wireguard_external_ip', '_stage_wireguard_endpoint',
-                 '_ensure_dns_record', '_build_routes', '_wait_for_wireguard_service']:
+                 '_ensure_dns_record', '_build_routes']:
         setattr(value, name, lambda name=name: events.append(name))
     value._build_server = lambda finalize_state: events.append('vm')
     value.build()
-    assert events[-2:] == ['_wait_for_wireguard_service', ServerStates.RUNNING]
+    assert events[-2:] == ['_build_routes', ServerStates.RUNNING]
     assert events.index('_prepare_wireguard_bootstrap') < events.index('vm')
     assert events.index('vm') < events.index('_refresh_wireguard_external_ip')
+    value._wireguard_provisioning.return_value.report_health.assert_not_called()
+    value._wireguard_provisioning.return_value.get_lease.return_value.is_ready.assert_not_called()
 
 
-def test_unhealthy_guest_never_reports_running_and_hides_endpoint():
+@pytest.mark.parametrize('failed_step', ['_build_server', '_ensure_dns_record', '_build_routes'])
+def test_failed_cloud_dependency_never_reports_running_and_hides_endpoint(failed_step):
     value = manager()
     value.state_manager.get_state.return_value = ServerStates.READY.value
     for name in ['_require_wireguard_provisionable', '_prepare_wireguard_bootstrap',
                  '_build_server', '_refresh_wireguard_external_ip', '_stage_wireguard_endpoint',
                  '_ensure_dns_record', '_build_routes']:
         setattr(value, name, MagicMock())
-    value._wait_for_wireguard_service = MagicMock(side_effect=TimeoutError('bootstrap failed'))
+    getattr(value, failed_step).side_effect = TimeoutError('cloud operation failed')
     value._mark_wireguard_endpoint_error = MagicMock()
     with pytest.raises(TimeoutError):
         value.build()
     value.state_manager.state_transition.assert_called_once_with(ServerStates.BROKEN)
     value._mark_wireguard_endpoint_error.assert_called_once()
-
-
-def test_health_wait_tolerates_initial_configuration_and_requires_current_ready():
-    value = manager()
-    value._WIREGUARD_READY_ATTEMPTS = 2
-    stale = SimpleNamespace(is_ready=lambda now: False, health_error='wireguard_service_unready')
-    ready = SimpleNamespace(is_ready=lambda now: True, health_error=None)
-    value._wireguard_provisioning.return_value.get_lease.side_effect = [stale, ready]
-    with patch.object(module.time, 'sleep') as sleep:
-        value._wait_for_wireguard_service()
-    sleep.assert_called_once_with(5)
 
 
 def test_ephemeral_address_is_read_from_current_instance():
@@ -273,7 +266,7 @@ def test_isolated_student_insert_has_no_default_service_account_or_oauth_scope()
     assert list(request.service_accounts) == []
 
 
-def test_managed_start_finishes_guest_dependencies_before_running_state():
+def test_managed_start_finishes_cloud_dependencies_without_guest_health_before_running_state():
     value = manager()
     events = []
     value.state_manager.get_state.return_value = ServerStates.STOPPED.value
@@ -281,13 +274,32 @@ def test_managed_start_finishes_guest_dependencies_before_running_state():
     value._prepare_wireguard_bootstrap = lambda for_start: events.append('metadata')
     value._start_server = lambda finalize_state: events.append(('start', finalize_state)) or True
     for name in ['_refresh_wireguard_external_ip', '_stage_wireguard_endpoint',
-                 '_ensure_dns_record', '_wait_for_wireguard_service', '_activate_wireguard_endpoint']:
+                 '_ensure_dns_record', '_activate_wireguard_endpoint']:
         setattr(value, name, lambda name=name: events.append(name))
     value.state_manager.state_transition.side_effect = lambda state: events.append(state)
     value.start()
     assert events == ['metadata', ('start', False), '_refresh_wireguard_external_ip',
                       '_stage_wireguard_endpoint', '_ensure_dns_record',
-                      '_wait_for_wireguard_service', '_activate_wireguard_endpoint', ServerStates.RUNNING]
+                      '_activate_wireguard_endpoint', ServerStates.RUNNING]
+    value._wireguard_provisioning.return_value.report_health.assert_not_called()
+    value._wireguard_provisioning.return_value.get_lease.return_value.is_ready.assert_not_called()
+
+
+def test_unsuccessful_compute_start_cannot_publish_or_report_running():
+    value = manager()
+    value.state_manager.get_state.return_value = ServerStates.STOPPED.value
+    value.server_spec.delayed_start = False
+    value._require_wireguard_provisionable = MagicMock()
+    value._prepare_wireguard_bootstrap = MagicMock()
+    value._activate_wireguard_endpoint = MagicMock()
+    value.compute_instance.start.return_value = False
+
+    value.start()
+
+    assert value.compute_instance.start.call_count == 5
+    value._activate_wireguard_endpoint.assert_not_called()
+    assert [call.args[0] for call in value.state_manager.state_transition.call_args_list] == [
+        ServerStates.STARTING, ServerStates.BROKEN]
 
 
 def test_warm_process_managers_do_not_share_gateway_identity_or_metadata():

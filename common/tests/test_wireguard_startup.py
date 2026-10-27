@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import types
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,6 +29,7 @@ def payload():
         'equipment_subnet': '172.30.0.0/24',
         'student_subnets': ['10.20.0.0/24'],
         'listen_port': 51820,
+        'health_reporting_enabled': True,
         'callback_token': 'one-time-generated-callback-token',
         'health_url': 'https://api.example.edu/site/wireguard/gateways/abcdefghij/health/',
         'unit_id': 'abcdefghij',
@@ -35,6 +37,56 @@ def payload():
 
 
 class StartupRendererTests(unittest.TestCase):
+    @staticmethod
+    def package_loop():
+        script = render_wireguard_startup(
+            'projects/test-project/secrets/wg-abcdefghij/versions/1', 'a' * 32)
+        start = script.index('for attempt in 1 2 3 4 5; do')
+        end = script.index('\ndone\n', start) + len('\ndone\n')
+        return script[start:end]
+
+    def test_interrupted_package_configuration_recovers_before_retrying_install(self):
+        # Execute the actual rendered loop with shell-only package commands.
+        # No apt/dpkg commands, sleeps, cloud calls, or privileged writes run.
+        setup = '''set -euo pipefail
+interrupted=1
+apt_get_calls=0
+apt-get() {
+    apt_get_calls=$((apt_get_calls + 1))
+    if [[ " $* " == *" install "* ]] && [ "$interrupted" = 1 ]; then
+        echo 'install:interrupted'
+        return 100
+    fi
+    echo 'apt:success'
+}
+dpkg() {
+    echo "recovery:$*"
+    interrupted=0
+}
+sleep() { :; }
+'''
+        result = subprocess.run(['bash'], input=setup + self.package_loop() +
+                                'echo "done:$interrupted:$apt_get_calls"\n',
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('install:interrupted\nrecovery:--force-confdef --force-confold --configure -a',
+                      result.stdout)
+        self.assertTrue(result.stdout.endswith('done:0:4\n'))
+
+    def test_package_recovery_does_not_hide_persistent_install_or_lock_failure(self):
+        setup = '''set -euo pipefail
+apt-get() { echo 'apt:failed'; return 100; }
+dpkg() { echo 'recovery:locked'; return 2; }
+sleep() { :; }
+'''
+        result = subprocess.run(['bash'], input=setup + self.package_loop() + 'echo unexpected-success\n',
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout.count('apt:failed'), 5)
+        self.assertEqual(result.stdout.count('recovery:locked'), 4)
+        self.assertIn('Agoge WireGuard package installation failed.', result.stderr)
+        self.assertNotIn('unexpected-success', result.stdout)
+
     def test_bash_and_embedded_python_parse_without_network_or_cloud_sdk(self):
         script = render_wireguard_startup(
             'projects/test-project/secrets/wg-abcdefghij/versions/1', 'a' * 32)
@@ -42,7 +94,12 @@ class StartupRendererTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         embedded = script.split("<<'AGOGE_WIREGUARD_AGENT'\n", 1)[1].split('\nAGOGE_WIREGUARD_AGENT', 1)[0]
         compile(embedded, '<embedded guest>', 'exec')
-        self.assertIn('systemctl enable --now agoge-wireguard-health.timer', script)
+        self.assertNotIn('systemctl enable --now agoge-wireguard-health.timer', script)
+        self.assertNotIn("<<'AGOGE_HEALTH_SERVICE'", script)
+        self.assertNotIn("<<'AGOGE_HEALTH_TIMER'", script)
+        self.assertIn('systemctl disable --now agoge-wireguard-health.timer', script)
+        self.assertLess(script.index('systemctl disable --now agoge-wireguard-health.timer'),
+                        script.index('if apt-get'))
         self.assertIn('wg-quick@wg0.service.d/agoge-guard.conf', script)
         self.assertIn('ExecStartPre=/usr/bin/python3 /usr/local/lib/agoge-wireguard/agent.py guard', script)
         self.assertNotIn(payload()['private_key'], script)
@@ -141,7 +198,7 @@ class GuestConfigurationTests(unittest.TestCase):
         with patch.object(self.agent, 'Path', return_value=fake_target), \
              patch.object(self.agent, 'atomic_write') as write, \
              patch.object(self.agent, 'configure_forwarding'), \
-             patch.object(self.agent, 'report'), \
+             patch.object(self.agent, 'configure_telemetry'), \
              patch.object(self.agent, 'command') as command:
             self.agent.configure(config)
         self.assertEqual(write.call_args.args[1], desired)
@@ -237,9 +294,9 @@ class GuestConfigurationTests(unittest.TestCase):
              patch.object(self.agent, 'command', side_effect=lambda args: events.append(args[1])), \
              patch.object(self.agent, 'configure_forwarding', side_effect=lambda _: events.append('policy')), \
              patch.object(self.agent, 'remove_boot_guard', side_effect=lambda: events.append('unguard')), \
-             patch.object(self.agent, 'report', side_effect=lambda _: events.append('report')):
+             patch.object(self.agent, 'configure_telemetry', side_effect=lambda _: events.append('telemetry')):
             self.agent.configure(config)
-        self.assertEqual(events, ['guard', 'enable', 'restart', 'policy', 'unguard', 'report'])
+        self.assertEqual(events, ['guard', 'enable', 'restart', 'policy', 'unguard', 'telemetry'])
 
     def test_secret_failure_keeps_cached_configuration_guarded_and_redacts_errors(self):
         events = []
@@ -286,6 +343,198 @@ class GuestConfigurationTests(unittest.TestCase):
         self.assertFalse(body['tunnel_ready'])
         self.assertEqual(body['error'], 'wireguard_service_unready')
         self.assertNotIn(config['private_key'], json.dumps(body))
+
+
+class GuestDiagnosticTests(unittest.TestCase):
+    def setUp(self):
+        self.agent = guest_module()
+
+    def failures(self, output):
+        return [json.loads(line.split('Agoge WireGuard diagnostic: ', 1)[1])
+                for line in output.splitlines() if 'Agoge WireGuard diagnostic: ' in line]
+
+    def test_secret_http_rejection_identifies_stage_and_status_without_credentials(self):
+        config = payload()
+        secret = config['private_key'] + config['callback_token']
+        failure = urllib.error.HTTPError('https://secret.invalid/?token=' + secret,
+                                         403, secret, {'Authorization': secret}, io.BytesIO(secret.encode()))
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            self.agent.ROOT = Path(directory)
+            (self.agent.ROOT / 'secret-version').write_text('projects/p/secrets/s/versions/1')
+            with patch.object(self.agent.sys, 'argv', ['agent.py', 'configure']), \
+                 patch.object(self.agent, 'install_boot_guard'), \
+                 patch.object(self.agent, 'request_json', side_effect=[{'access_token': secret}, failure]), \
+                 patch.object(self.agent, 'report') as report, \
+                 contextlib.redirect_stderr(stderr):
+                self.assertEqual(self.agent.main(), 1)
+        report.assert_not_called()
+        self.assertEqual(self.failures(stderr.getvalue()), [{
+            'stage': 'secret_access', 'context': 'operation', 'error': 'http_error', 'http_status': 403,
+        }])
+        self.assertNotIn(secret, stderr.getvalue())
+        self.assertNotIn('secret.invalid', stderr.getvalue())
+
+    def test_health_http_rejection_keeps_original_failure_and_labels_fallback(self):
+        config = payload()
+        secret = config['callback_token']
+        failure = urllib.error.HTTPError('https://api.invalid/' + secret, 404, secret, {}, io.BytesIO(secret.encode()))
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            self.agent.ROOT = Path(directory)
+            (self.agent.ROOT / 'boot-id').write_text('cloud-nonce')
+            with patch.object(self.agent.sys, 'argv', ['agent.py', 'report']), \
+                 patch.object(self.agent, 'secret_payload', return_value=config), \
+                 patch.object(self.agent, 'service_ready', return_value=False), \
+                 patch.object(self.agent, 'request_json', side_effect=failure), \
+                 contextlib.redirect_stderr(stderr):
+                self.assertEqual(self.agent.main(), 1)
+        errors = self.failures(stderr.getvalue())
+        self.assertEqual([item['context'] for item in errors], ['operation', 'failure_report'])
+        self.assertTrue(all(item['stage'] == 'health_callback' and item['http_status'] == 404 for item in errors))
+        self.assertNotIn(secret, stderr.getvalue())
+        self.assertNotIn('api.invalid', stderr.getvalue())
+
+    def test_command_failure_emits_stage_and_exit_code_but_never_arguments_or_output(self):
+        config = payload()
+        secret = config['private_key'] + config['callback_token']
+        failure = subprocess.CalledProcessError(2, ['wg', secret], output=secret, stderr=secret)
+        stderr = io.StringIO()
+        with patch.object(self.agent.sys, 'argv', ['agent.py', 'guard']), \
+             patch.object(self.agent, 'command', side_effect=failure), \
+             contextlib.redirect_stderr(stderr):
+            self.assertEqual(self.agent.main(), 1)
+        self.assertEqual(self.failures(stderr.getvalue()), [{
+            'stage': 'boot_guard', 'context': 'operation', 'error': 'command_failed', 'exit_code': 2,
+        }])
+        self.assertNotIn(secret, stderr.getvalue())
+
+    def test_service_check_failure_is_logged_but_still_reports_unready_health(self):
+        config = payload()
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            self.agent.ROOT = Path(directory)
+            (self.agent.ROOT / 'boot-id').write_text('cloud-nonce')
+            with patch.object(self.agent, 'service_ready', side_effect=RuntimeError(config['private_key'])), \
+                 patch.object(self.agent, 'request_json') as request, \
+                 contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
+                self.agent.report(config)
+        self.assertEqual(self.failures(stderr.getvalue())[0]['stage'], 'service_check')
+        self.assertEqual(json.loads(request.call_args.args[2])['error'], 'wireguard_service_unready')
+        self.assertIn('Agoge WireGuard health accepted:', stdout.getvalue())
+        self.assertNotIn(config['private_key'], stderr.getvalue() + stdout.getvalue())
+
+    def test_diagnostic_classification_never_stringifies_arbitrary_exception(self):
+        secret = payload()['private_key']
+        failures = [
+            (urllib.error.URLError(secret), 'network_error'),
+            (subprocess.TimeoutExpired(['wg', secret], 30, output=secret, stderr=secret), 'timeout'),
+            (TimeoutError(secret), 'timeout'),
+            (json.JSONDecodeError(secret, secret, 0), 'invalid_json'),
+            (ValueError(secret), 'invalid_data'),
+            (PermissionError(secret), 'os_error'),
+            (RuntimeError(secret), 'unexpected_error'),
+        ]
+        for failure, expected in failures:
+            stderr = io.StringIO()
+            with self.subTest(expected=expected), contextlib.redirect_stderr(stderr):
+                self.agent.stage('health_callback')
+                self.agent.diagnostic(failure)
+            self.assertEqual(self.failures(stderr.getvalue())[0]['error'], expected)
+            self.assertNotIn(secret, stderr.getvalue())
+
+
+class OptionalTelemetryTests(unittest.TestCase):
+    def setUp(self):
+        self.agent = guest_module()
+
+    def test_config_without_api_credentials_defaults_to_no_reporting(self):
+        config = payload()
+        for field in ('health_reporting_enabled', 'health_url', 'callback_token'):
+            config.pop(field)
+
+        validated = self.agent.validate(config)
+
+        self.assertIs(validated['health_reporting_enabled'], False)
+        with patch.object(self.agent, 'request_json') as request, \
+             patch.object(self.agent, 'service_ready') as service:
+            self.agent.report(validated)
+        request.assert_not_called()
+        service.assert_not_called()
+
+    def test_legacy_secret_with_callback_credentials_does_not_opt_in(self):
+        config = payload()
+        config.pop('health_reporting_enabled')
+        config['health_url'] = 'obsolete callback ignored while reporting is disabled'
+        config['callback_token'] = None
+
+        validated = self.agent.validate(config)
+        with patch.object(self.agent, 'request_json') as request:
+            self.agent.report(validated, error='bootstrap_failed')
+        self.assertIs(validated['health_reporting_enabled'], False)
+        request.assert_not_called()
+
+    def test_reporting_flag_requires_an_explicit_boolean(self):
+        for value in ('true', 'false', 1, 0, None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.agent.validate({**payload(), 'health_reporting_enabled': value})
+
+    def test_default_configuration_disables_old_timer_and_does_not_install_health_units(self):
+        config = payload()
+        config.pop('health_reporting_enabled')
+        config = self.agent.validate(config)
+        target = types.SimpleNamespace(exists=lambda: False)
+        with patch.object(self.agent, 'Path', return_value=target), \
+             patch.object(self.agent, 'atomic_write') as write, \
+             patch.object(self.agent, 'install_boot_guard'), \
+             patch.object(self.agent, 'configure_forwarding'), \
+             patch.object(self.agent, 'remove_boot_guard'), \
+             patch.object(self.agent, 'command') as command, \
+             patch.object(self.agent, 'request_json') as request:
+            self.agent.configure(config)
+
+        self.assertEqual(write.call_count, 1)
+        commands = [call.args[0] for call in command.call_args_list]
+        self.assertIn(['systemctl', 'disable', '--now', 'agoge-wireguard-health.timer'], commands)
+        self.assertIn(['systemctl', 'stop', 'agoge-wireguard-health.service'], commands)
+        self.assertNotIn(['systemctl', 'enable', '--now', 'agoge-wireguard-health.timer'], commands)
+        request.assert_not_called()
+
+    def test_opted_in_http_404_does_not_fail_bootstrap_or_reconfigure_network(self):
+        config = self.agent.validate(payload())
+        secret = config['private_key'] + config['callback_token']
+        failure = urllib.error.HTTPError('https://api.invalid/' + secret, 404, secret, {}, io.BytesIO(secret.encode()))
+        target = types.SimpleNamespace(exists=lambda: False)
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            self.agent.ROOT = Path(directory)
+            (self.agent.ROOT / 'boot-id').write_text('current-boot')
+            with patch.object(self.agent.sys, 'argv', ['agent.py', 'configure']), \
+                 patch.object(self.agent, 'secret_payload', return_value=config), \
+                 patch.object(self.agent, 'Path', return_value=target), \
+                 patch.object(self.agent, 'atomic_write') as write, \
+                 patch.object(self.agent, 'install_boot_guard'), \
+                 patch.object(self.agent, 'configure_forwarding') as forwarding, \
+                 patch.object(self.agent, 'remove_boot_guard') as unguard, \
+                 patch.object(self.agent, 'command') as command, \
+                 patch.object(self.agent, 'service_ready', return_value=False), \
+                 patch.object(self.agent, 'request_json', side_effect=failure) as request, \
+                 contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
+                self.assertEqual(self.agent.main(), 0)
+
+        forwarding.assert_called_once_with(config)
+        unguard.assert_called_once()
+        request.assert_called_once()
+        self.assertEqual(write.call_count, 3)
+        commands = [call.args[0] for call in command.call_args_list]
+        self.assertIn(['systemctl', 'enable', '--now', 'agoge-wireguard-health.timer'], commands)
+        self.assertIn('"context": "telemetry"', stderr.getvalue())
+        self.assertIn('"http_status": 404', stderr.getvalue())
+        self.assertIn('Agoge WireGuard configuration completed.', stdout.getvalue())
+        self.assertNotIn('bootstrap failed', stderr.getvalue())
+        self.assertNotIn(secret, stderr.getvalue() + stdout.getvalue())
 
 
 if __name__ == '__main__':

@@ -1,22 +1,28 @@
 import {CopyAll, OpenInNew} from "@mui/icons-material";
-import {Box, Button, Divider, IconButton, Link, Paper, Tooltip, Typography} from "@mui/material";
+import {Alert, Box, Button, Divider, IconButton, Link, Paper, Tooltip, Typography} from "@mui/material";
 import Chip from "@mui/material/Chip";
-import React from "react";
+import React, {useState} from "react";
 import {useClipboard} from "../../../hooks/useClipboard";
 import {URL_STUDENT_JOIN} from "../../../router/urls";
 import {absoluteUrl} from "../../../utilities/appContext";
 import {WireGuardLabStatus} from "../../Teacher/WireGuard/WireGuardLabStatus";
+import {WireGuardLabSettingsDialog} from "../../Teacher/WireGuard/WireGuardLabSettingsDialog";
 
 interface UnitInfoCardProps {
     data: any;
     isLoading?: boolean;
+    buildId?: string;
+    onRemoteLabSettingsSaved?: () => void | Promise<void>;
 }
 
 export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
     const {copy} = useClipboard();
+    const [editingRemoteLab, setEditingRemoteLab] = useState(false);
+    const [settingsSaved, setSettingsSaved] = useState(false);
     const {summary, workspace_settings, join_code, roster, wireguard_endpoint, wireguard_lease} = props.data;
     const totalCapacity = workspace_settings ? workspace_settings.count : 0;
     const joinUrl = absoluteUrl(URL_STUDENT_JOIN);
+    const unitId = props.buildId || props.data.id;
     return (
         <>
             <Paper
@@ -154,26 +160,27 @@ export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
                             sx={{ fontWeight: 800 }}
                             gutterBottom
                         >
-                            WireGuard Gateway
+                            Remote lab connection
                         </Typography>
 
                         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mb: 1 }}>
                             <Typography component="p" sx={{ fontWeight: 800, m: 0 }}>
-                                Lab number:
+                                Connection ID:
                             </Typography>
                             <Paper
                                 variant="outlined"
                                 sx={{ display: 'flex', alignItems: 'center', px: 1, minWidth: 0, maxWidth: '100%' }}
-                                aria-label="WireGuard endpoint ID container"
+                                aria-label="Remote lab connection ID container"
                             >
                                 <Typography component="span" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere', minWidth: 0 }}>
-                                    {wireguard_endpoint.id}
+                                    {wireguard_endpoint.connection_id || "Pending"}
                                 </Typography>
-                                <Tooltip title="Copy WireGuard Endpoint ID" leaveDelay={200} arrow describeChild>
+                                <Tooltip title="Copy remote lab connection ID" leaveDelay={200} arrow describeChild>
                                     <span>
                                         <IconButton
-                                            aria-label="Copy WireGuard endpoint ID"
-                                            onClick={() => copy(wireguard_endpoint.id)}
+                                            aria-label="Copy remote lab connection ID"
+                                            disabled={!wireguard_endpoint.connection_id}
+                                            onClick={() => copy(wireguard_endpoint.connection_id)}
                                         >
                                             <CopyAll />
                                         </IconButton>
@@ -186,25 +193,42 @@ export const UnitInfoCard: React.FC<UnitInfoCardProps> = (props) => {
                             />
                         </Box>
 
+                        <Typography variant="body2" sx={{mb: 1}}>
+                            Gateway number: {wireguard_endpoint.id}
+                        </Typography>
+
                         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1 }}>
                             <Typography component="p" sx={{ fontWeight: 800, m: 0 }}>
-                                Endpoint:
+                                Gateway DNS:
                             </Typography>
                             <Typography component="span" sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere', minWidth: 0 }}>
-                                {wireguard_endpoint.hostname}:{wireguard_endpoint.port}
+                                {wireguard_endpoint.hostname.replace(/\.$/, "")}:{wireguard_endpoint.port}
                             </Typography>
-                            <Tooltip title="Copy WireGuard Endpoint" leaveDelay={200} arrow describeChild>
+                            <Tooltip title="Copy gateway DNS and port" leaveDelay={200} arrow describeChild>
                                 <span>
                                     <IconButton
-                                        aria-label="Copy WireGuard endpoint"
-                                        onClick={() => copy(`${wireguard_endpoint.hostname}:${wireguard_endpoint.port}`)}
+                                        aria-label="Copy gateway DNS and port"
+                                        onClick={() => copy(`${wireguard_endpoint.hostname.replace(/\.$/, "")}:${wireguard_endpoint.port}`)}
                                     >
                                         <CopyAll />
                                     </IconButton>
                                 </span>
                             </Tooltip>
                         </Box>
-                        <WireGuardLabStatus endpoint={wireguard_endpoint} lease={wireguard_lease} />
+                        <WireGuardLabStatus endpoint={wireguard_endpoint} lease={wireguard_lease} unitState={props.data.state} />
+                        {settingsSaved && <Alert severity="success" sx={{my: 1}}>
+                            Remote lab settings saved. They will be applied before the gateway next starts.
+                        </Alert>}
+                        {wireguard_lease && unitId && <>
+                            <Button variant="outlined" sx={{mt: 2}} onClick={() => {
+                                setSettingsSaved(false); setEditingRemoteLab(true);
+                            }}>Edit remote lab settings</Button>
+                            <WireGuardLabSettingsDialog open={editingRemoteLab} unitId={unitId}
+                                onClose={() => setEditingRemoteLab(false)} onSaved={async () => {
+                                    await props.onRemoteLabSettingsSaved?.();
+                                    setSettingsSaved(true);
+                                }} />
+                        </>}
                     </Box>
                 )}
             </Paper>

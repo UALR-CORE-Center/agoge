@@ -43,11 +43,13 @@ Only use an LMS provider that your deployment administrator has configured and t
 
 For Canvas, configure the **API Key (Canvas)** and **URL (Canvas)** under **Settings** before building the Lab. LMS-specific setup varies by institution, so do not include credentials in lab instructions or repository files.
 
-## Build a WireGuard factory Lab
+## Build a WireGuard remote Lab
 
-An administrator must first register the factory kit under **Admins → Build
-Manager → WireGuard Kits**, authorize your sign-in email, and configure the kit's authenticated Pi
-client. The kit must be enabled and unassigned. A student workstation image must
+An administrator must first register the remote lab under **Admins → Build
+Manager → Remote Labs**, authorize your sign-in email, and configure its authenticated
+remote peer, such as a Pi. Registration includes the **Remote LAN (IPv4 CIDR)**,
+for example `192.168.50.0/24`, which supplies the private network route
+automatically. The remote peer must be enabled and unassigned. A student workstation image must
 already be checked in with a working password-based SSH, RDP, or VNC display
 connection. Agoge uses an official Ubuntu image for the gateway and supplies its
 WireGuard startup code automatically.
@@ -58,22 +60,26 @@ Ask the deployment operator to run `python setup.py`, select your site's project
 then choose **Server Images & Build Specs → Upload WireGuard Community Lab
 Template**. The operator selects the student image, your instructor email, and a
 catalog ID; the default ID is `wireguard-factory-lab`. Uploading the template does
-not create a gateway or assign a kit.
+not create a gateway or assign a remote peer.
 
 1. Sign in to the correct site and open **Teachers → New Lab**. The heading is
    **Lab Catalog**. Refresh after the operator uploads the template.
-2. Select the checkbox for **WireGuard Factory Lab** and click **Build Lab**.
-3. Select your available **Registered kit**. The template already specifies the
-   student workstation image; the kit supplies the equipment network.
+2. Select the checkbox for the uploaded WireGuard template and click **Build
+   Lab**. Existing templates named **WireGuard Factory Lab** remain valid.
+3. Select your available **Remote peer**. The template already specifies the
+   student workstation image; the registration supplies the private LAN CIDR.
 4. Set **Expires** and **Max number of students**. For your first test, choose one
    student and a short future expiration. Leave **Build with LMS** disabled.
 5. Click the dialog's **Build Lab** button and wait for the lab detail page.
-6. Verify the assigned kit, lab number, hostname, DNS suffix, and UDP port. Wait
-   for **Gateway service ready** and, with the Pi online, **Factory tunnel
-   connected**. Read any reported error before proceeding.
+6. Verify the assigned remote peer, connection ID, private LAN CIDR, hostname, DNS
+   suffix, and UDP port. Each community Lab has one shared Guacamole proxy
+   for all students, with separate access to their own workstations. The
+   WireGuard gateway and Guacamole proxy stop when idle. The first student
+   session starts both automatically; the last student stop shuts both down. Optional service/tunnel telemetry does not determine lab
+   build completion.
 7. Copy the claim URL and join code, claim a test Workout, and open its browser
    workstation. Confirm access to the assigned equipment and isolation from
-   other kits before sharing the lab with learners.
+   other remote LANs before sharing the lab with learners.
 
 For the test site, the operator selects **`test-dev-787001`** in setup; with
 `project_path=test-dev`, instructors use `https://app.agoge-labs.com/test-dev/`.
@@ -83,15 +89,43 @@ The uploaded catalog record exists only in that selected project.
 
 1. Open **Teachers → New Lab**, then click **Build WireGuard Lab** without
    selecting a catalog row.
-2. Select an available **Registered kit** and a checked-in **Student workstation
+2. Select an available **Remote peer** and a checked-in **Student workstation
    image**. Confirm the Kali image selection if it is supplied by default.
 3. Set the student capacity and expiration, then click **Build Lab**.
 4. Complete the readiness and test-Workout checks above.
 
 Both paths provision the same managed gateway and assigned equipment routes;
 neither requires a custom gateway image or hand-edited network specification.
-See the [WireGuard deployment and kit setup guide](../operations/wireguard-provisioning.md)
-for setup prompts, kit enrollment, readiness checks, and troubleshooting.
+The **Connection ID**, such as `test-dev-787001:abcdefghij`, identifies this lab
+and stays the same when its gateway restarts. Lab details show its current
+hostname and DNS suffix separately. This ID is not an enrollment credential.
+A shared HMI lookup/polling API remains future work; use the displayed connection
+details for the current setup.
+See the [WireGuard deployment and remote peer setup guide](../operations/wireguard-provisioning.md)
+for setup prompts, private LAN registration, peer enrollment, readiness checks, and troubleshooting.
+
+### Change the remote lab for an existing Lab
+
+1. Stop every student Workout and wait for the shared gateway and Guacamole
+   proxy to stop. If an
+   instructor started the whole Lab manually, stop the Lab as well.
+2. On the Lab details card, open **Remote lab settings**.
+3. Select an authorized, available remote lab. Your Lab's current assignment is
+   also shown. Review or change **Remote LAN for this lab (IPv4 CIDR)**.
+4. Choose **Save remote lab settings**. The new assignment and network are saved
+   for this Lab; the administrator's registered defaults are unchanged.
+5. Start a student Workout. Agoge applies the saved gateway configuration and
+   routes before starting the gateway. The Lab's connection ID stays the same.
+
+The editor explains why settings cannot be changed while students or the gateway
+are active. Other instructors' Labs and remote peers already assigned elsewhere
+cannot be selected. Test access to the intended remote devices before resuming
+class use; changing a CIDR does not reconfigure devices on that physical LAN.
+
+Administrators add and maintain remote lab registrations under **Admins → Build
+Manager → Remote Labs**. A registration includes a name, description, private
+LAN, device identity, public key, and authorized instructors. Private keys stay
+on the remote device, and its enrollment token is shown only at registration.
 
 ## Distribute a join-code Lab
 

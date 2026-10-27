@@ -1,11 +1,15 @@
+import math
 import time
+from datetime import datetime, timezone
 
+from common.exceptions import BadRequest, NotFound
 from common.constants.build_constants import BuildConstants
 from common.constants.database import DbCollections
 from common.constants.pub_sub import PubSub
-from common.constants.states import ServerStates
+from common.constants.states import ServerStates, WorkoutStates
 from common.models.agoge import UnitModel, ServerModel
 from common.services.wireguard_endpoint import WireGuardEndpointRegistry
+from common.services.community_proxy_spec import community_proxy, ensure_community_proxy
 from common.utilities.wireguard_firewall import has_public_wireguard_ingress
 
 from ...gcp.vpc_manager import VpcManager
@@ -18,6 +22,9 @@ from .base_unit import BaseUnit
 
 
 class CommunityUnit(BaseUnit):
+    _IDLE_GATEWAY_WAIT_SECONDS = 300
+    _IDLE_GATEWAY_POLL_SECONDS = 5
+
     def __init__(self, unit_model: UnitModel, workout_id=None, form_data=None, debug=False, force=False,
                  env_dict=None):
         super().__init__(unit_model=unit_model, workout_id=workout_id, form_data=form_data, debug=debug, force=force,
@@ -74,10 +81,15 @@ class CommunityUnit(BaseUnit):
         """
         self.logger.info(f"{self.class_name}:{self.unit_id} - Beginning a community unit build for unit ID")
         current_state = self.state_manager.get_state()
+        if current_state == self.s.BROKEN.value:
+            self._resume_broken_initial_build()
+            current_state = self.state_manager.get_state()
         # Build deliveries are at-least-once. A delayed delivery must not rewind a
         # Unit that has already entered its runtime or teardown lifecycle.
         if current_state >= self.s.RUNNING.value:
             return
+
+        self._prepare_shared_display_proxy()
 
         # Re-run an incomplete phase. The GCP managers treat already-created
         # networks/firewall rules as success, which makes a phase safe to resume
@@ -121,9 +133,156 @@ class CommunityUnit(BaseUnit):
         if self.promiscuous_mode:
             self.packet_mirroring.create()
 
+        # Building an idle managed gateway verifies its GCP create operation,
+        # then parks it until the first student starts a Workout. Other shared
+        # servers retain their existing build behavior.
         self._activate_wireguard_endpoint()
+        self._stop_idle_managed_wireguard()
         self.state_manager.state_transition(self.s.READY)
         self.logger.info(f"Finished community unit build for {self.unit_id}!")
+
+    def _stop_idle_managed_wireguard(self):
+        gateways = [f'{self.unit_id}-{server.name}' for server in self.unit_model.servers or []
+                    if getattr(server, 'community_server', False)
+                    and (getattr(server, 'community_proxy', False)
+                         or (getattr(server, 'wireguard_gateway', False)
+                             and getattr(server, 'wireguard_managed', False)))]
+        if not gateways:
+            return False
+        workouts = self.db_queries.get_children(
+            parent_id=self.unit_id, child_collection=DbCollections.WORKOUT)
+        if any(workout.get('state') in (WorkoutStates.RUNNING.value, WorkoutStates.STARTING.value)
+               for workout in workouts):
+            return False
+        for name in gateways:
+            if self.debug:
+                self.compute_manager.load(server_name=name)
+                self.compute_manager.stop()
+            else:
+                self.pubsub_manager.msg(
+                    handler=str(PubSub.Handlers.CONTROL.value),
+                    action=str(PubSub.Actions.STOP.value), build_id=name,
+                    course_object=str(PubSub.CourseObjects.LAB_SERVER.value))
+        deadline = time.monotonic() + self._IDLE_GATEWAY_WAIT_SECONDS
+        while True:
+            records = [self.db.get(collection_name=DbCollections.SERVER, doc_id=name) or {}
+                       for name in gateways]
+            if all(record.get('state') == ServerStates.STOPPED.value for record in records):
+                self.logger.info(f'Parked idle community gateway and display services for Unit {self.unit_id}')
+                return True
+            if any(record.get('state') in (ServerStates.BROKEN.value, ServerStates.DELETED.value)
+                   for record in records) or time.monotonic() >= deadline:
+                raise TimeoutError(f'Could not confirm idle WireGuard gateway stopped for Unit {self.unit_id}')
+            time.sleep(self._IDLE_GATEWAY_POLL_SECONDS)
+
+    def _prepare_shared_display_proxy(self):
+        if not any(not getattr(server, 'community_server', False)
+                   and any(getattr(item, 'display', False) for item in getattr(server, 'human_interaction', None) or [])
+                   for server in getattr(self.unit_model, 'servers', None) or []):
+            return
+        proxy = ensure_community_proxy(self.unit_model, self.env.parent_dns_suffix, self.env_dict['project'])
+        if proxy is None:
+            return
+        from cloud_fn_utilities.server_specific.guacamole.community_proxy_bootstrap import prepare_community_proxy
+
+        # Record ownership before allocating cloud identities or signing material.
+        # A crash or failed later write must still leave a discoverable cleanup task.
+        self.unit_model.community_proxy_cleanup_pending = True
+        self.db.update(collection_name=DbCollections.UNIT, doc_id=self.unit_id, data={
+            'servers': [server.model_dump() for server in self.unit_model.servers or []],
+            'networks': [network.model_dump() for network in self.unit_model.networks or []],
+            'firewall_rules': [rule.model_dump() for rule in self.unit_model.firewall_rules or []],
+            'community_proxy_cleanup_pending': True,
+        })
+        bootstrap = prepare_community_proxy(self.unit_id, self.env_dict,
+            secret_version_name=proxy.guacamole_secret_version_name)
+        proxy.guacamole_secret_version_name = bootstrap['guacamole_secret_version_name']
+        proxy.metadata = bootstrap['metadata']
+        proxy.service_accounts = bootstrap.get('service_accounts') or bootstrap.get('serviceAccounts')
+        proxy.no_service_account = False
+        proxy.guacamole_startup_script = None
+        self.db.update(collection_name=DbCollections.UNIT, doc_id=self.unit_id, data={
+            'servers': [server.model_dump() for server in self.unit_model.servers or []],
+            'networks': [network.model_dump() for network in self.unit_model.networks or []],
+            'firewall_rules': [rule.model_dump() for rule in self.unit_model.firewall_rules or []],
+        })
+
+    def _resume_broken_initial_build(self):
+        """Resume an explicit local managed-gateway build, never a stale event.
+
+        BROKEN is numerically after every build checkpoint. Legacy records do
+        not retain the failed checkpoint, so infer only the completed network
+        phase from live resources, then retry the ordinary shared-server path.
+        """
+        if not self.debug:
+            raise BadRequest('A BROKEN community lab requires an explicit local debug build to resume')
+        gateways = [server for server in self.unit_model.servers or []
+                    if server.community_server and server.wireguard_gateway and server.wireguard_managed]
+        if not gateways or self.unit_model.wireguard_endpoint is None:
+            raise BadRequest('Cannot safely infer the initial build checkpoint for this BROKEN community lab')
+        endpoint_id = self.unit_model.wireguard_endpoint.id
+
+        def validate(unit, lease, endpoint):
+            now = time.time()
+            if unit.get('state') != self.s.BROKEN.value:
+                raise BadRequest('Lab state changed before recovery; the build was not resumed')
+            expires = (unit.get('workspace_settings') or {}).get('expires')
+            if (type(expires) not in (int, float) or not math.isfinite(expires) or expires <= now
+                    or type(lease.get('expires')) not in (int, float)
+                    or not math.isfinite(lease['expires']) or lease['expires'] <= now):
+                raise BadRequest('The retained lab or WireGuard lease has expired; delete it and create a new lab')
+            if (lease.get('unit_id') != self.unit_id or lease.get('status') != 'reserved'
+                    or lease.get('endpoint_id') != endpoint_id):
+                raise BadRequest('The WireGuard reservation is missing, released, or belongs to another lab')
+            if (endpoint.get('unit_id') != self.unit_id
+                    or endpoint.get('status') not in {'reserved', 'error'}):
+                raise BadRequest('The WireGuard endpoint is active, retired, or no longer belongs to this lab')
+
+        validate(self.db.get(DbCollections.UNIT, self.unit_id) or {},
+                 self.db.get(DbCollections.WIREGUARD_LEASE, self.unit_id) or {},
+                 self.db.get(DbCollections.WIREGUARD_ENDPOINT, endpoint_id) or {})
+        workouts = self.db_queries.get_children(parent_id=self.unit_id, child_collection=DbCollections.WORKOUT)
+        if any(workout.get('state') not in {WorkoutStates.NOT_BUILT.value, WorkoutStates.START.value}
+               for workout in workouts):
+            raise BadRequest('This BROKEN lab already entered a student workout lifecycle; initial build recovery is blocked')
+        blocked = {ServerStates.STOPPING.value, ServerStates.STOPPED.value,
+                   ServerStates.EXPIRED.value, ServerStates.MISFIT.value,
+                   ServerStates.DELETING.value, ServerStates.DELETED.value}
+        for record in self.db_queries.get_servers(parent_id=self.unit_id):
+            if record.get('state') in blocked:
+                raise BadRequest('A lab server was stopped or retired; initial build recovery is blocked')
+
+        # Completed networks must still exist. Do not recreate a network that
+        # could have been removed by a concurrent or earlier teardown.
+        try:
+            for network in self.unit_model.networks or []:
+                name = self.vpc_manager._network_name(self.unit_id, network)
+                self.vpc_manager.networks_client.get(resource=name)
+                for subnet in network.subnets or []:
+                    self.vpc_manager.subnetworks_client.get(
+                        resource=self.vpc_manager._subnet_name(name, subnet))
+        except NotFound:
+            raise BadRequest('A retained lab network is missing; delete the failed lab and create a new one') from None
+
+        unit_ref = self.db.db.collection(DbCollections.UNIT.value).document(self.unit_id)
+        lease_ref = self.db.db.collection(DbCollections.WIREGUARD_LEASE.value).document(self.unit_id)
+        endpoint_ref = self.db.db.collection(DbCollections.WIREGUARD_ENDPOINT.value).document(endpoint_id)
+
+        def recover(transaction):
+            unit_snapshot = unit_ref.get(transaction=transaction)
+            lease_snapshot = lease_ref.get(transaction=transaction)
+            endpoint_snapshot = endpoint_ref.get(transaction=transaction)
+            validate(unit_snapshot.to_dict() if unit_snapshot.exists else {},
+                     lease_snapshot.to_dict() if lease_snapshot.exists else {},
+                     endpoint_snapshot.to_dict() if endpoint_snapshot.exists else {})
+            transaction.set(unit_ref, {
+                'state': self.s.COMPLETED_NETWORKS.value,
+                'state_timestamp': datetime.now(timezone.utc).isoformat(),
+            }, merge=True)
+
+        self.db.transaction(recover)
+        self.state_manager.set_build_record(self.unit_id)
+        self.logger.info(f'Resuming local managed gateway build for {self.unit_id} after completed networks')
 
     def start(self):
         """
@@ -204,7 +363,8 @@ class CommunityUnit(BaseUnit):
         """
         Deletes the unit by deleting all servers, including workout servers, and then deleting the network objects
         """
-        if self.state_manager.get_state() == self.s.DELETED.value:
+        managed_cleanup_pending = self._managed_wireguard_cleanup_pending()
+        if self.state_manager.get_state() == self.s.DELETED.value and not managed_cleanup_pending:
             return
         self.logger.info(f"{self.class_name}:{self.unit_id} - Beginning to delete community unit")
         self.state_manager.state_transition(self.s.DELETING_SERVERS)
@@ -257,10 +417,19 @@ class CommunityUnit(BaseUnit):
         # Delete remaining servers
         for server_name in servers_to_delete:
             if server_name not in firewall_names:
+                recovered = self._recover_shared_proxy_delete_record(server_name)
+                if recovered is None:
+                    recovered = self._recover_gateway_delete_record(
+                        server_name, retry_deleted=managed_cleanup_pending)
                 if self.debug:
                     try:
-                        self.compute_manager.load(server_name=server_name)
-                        self.compute_manager.delete()
+                        self.compute_manager.load(
+                            server_name=server_name,
+                            **({'server_spec': recovered} if recovered else {}),
+                        )
+                        if self.compute_manager.delete() is False:
+                            self.state_manager.state_transition(self.s.BROKEN)
+                            raise ConnectionError(f'Server deletion was not confirmed for {server_name}')
                     except LookupError:
                         self.logger.error(f"{self.class_name}:{self.workout_id} - Could not find workout "
                                           f"server record for {server_name}. Marking Workout record as "
@@ -276,6 +445,7 @@ class CommunityUnit(BaseUnit):
         workouts_deleted = self.state_manager.are_workouts_deleted()
         servers_deleted = self.__are_servers_deleted(all_servers_to_wait_for)
         if workouts_deleted and servers_deleted:
+            self._cleanup_shared_display_proxy()
             # Firewall rules must be removed before their VPC networks.
             if not self.firewall_manager.delete(self.unit_id):
                 self.state_manager.state_transition(self.s.BROKEN)
@@ -300,6 +470,87 @@ class CommunityUnit(BaseUnit):
                 f"deletions to complete for community unit"
             )
 
+    def _recover_shared_proxy_delete_record(self, server_name):
+        proxy = next((server for server in self.unit_model.servers or []
+                      if getattr(server, 'community_proxy', False)
+                      and f'{self.unit_id}-{server.name}' == server_name), None)
+        if proxy is None:
+            return None
+        existing = self.db.get(collection_name=DbCollections.SERVER, doc_id=server_name) or {}
+        if existing and existing.get('state') != ServerStates.DELETED.value:
+            return None
+        # A missing/tombstoned document is not evidence that its VM vanished.
+        # Restore only deletion metadata and let the normal GCP delete verify it.
+        record = proxy.model_dump(exclude_none=True)
+        record.update(parent_id=self.unit_id, parent_build_type=self.unit_model.build_type,
+                      state=ServerStates.DELETING.value)
+        self.db.update(collection_name=DbCollections.SERVER, doc_id=server_name, data=record)
+        return record
+
+    def _cleanup_shared_display_proxy(self):
+        if (community_proxy(self.unit_model) is None
+                and not getattr(self.unit_model, 'community_proxy_cleanup_pending', False)):
+            return
+        # Called only after every named shared VM's ordinary delete completed.
+        from cloud_fn_utilities.server_specific.guacamole.community_proxy_bootstrap import delete_community_proxy
+        delete_community_proxy(self.unit_id, self.env_dict)
+        self.db.update(collection_name=DbCollections.UNIT, doc_id=self.unit_id,
+                       data={'community_proxy_cleanup_pending': False})
+        self.unit_model.community_proxy_cleanup_pending = False
+
+    def _managed_wireguard_cleanup_pending(self):
+        """Retry cloud resources left behind by a partial parent teardown."""
+        if getattr(self.unit_model, 'community_proxy_cleanup_pending', False):
+            return True
+        if not any(getattr(server, 'wireguard_gateway', False)
+                   and getattr(server, 'wireguard_managed', False)
+                   for server in getattr(self.unit_model, 'servers', None) or []):
+            return False
+        lease = self.db.get(collection_name=DbCollections.WIREGUARD_LEASE, doc_id=self.unit_id) or {}
+        return bool(lease and lease.get('status') != 'released')
+
+    def _recover_gateway_delete_record(self, server_name, *, retry_deleted=False):
+        """Restore only metadata needed by the ordinary managed gateway delete.
+
+        Peer reservation precedes the gateway server record. A process stopped
+        between those steps must still confirm VM absence and clean DNS/routes,
+        its identity, secret, and endpoint before the parent reports deletion.
+        This method never builds a VM or directly releases a reservation.
+        """
+        gateway = next((server for server in getattr(self.unit_model, 'servers', None) or []
+                        if getattr(server, 'community_server', False)
+                        and getattr(server, 'wireguard_gateway', False)
+                        and getattr(server, 'wireguard_managed', False)
+                        and f'{self.unit_id}-{server.name}' == server_name), None)
+        if gateway is None:
+            return None
+        existing = self.db.get(collection_name=DbCollections.SERVER, doc_id=server_name) or {}
+        if existing and not (retry_deleted and existing.get('state') == ServerStates.DELETED.value):
+            return None
+        endpoint = getattr(self.unit_model, 'wireguard_endpoint', None)
+        if endpoint is None or endpoint.server_name != server_name:
+            raise ValueError(f'Cannot recover gateway cleanup for {server_name}: endpoint ownership is missing')
+        server = gateway.model_copy(deep=True)
+        server.parent_id = self.unit_id
+        server.parent_build_type = self.unit_model.build_type
+        server.wireguard_endpoint_id = endpoint.id
+        server.hostname = endpoint.hostname
+        public_nic = next((nic for nic in server.nics or [] if nic.external_nat), None)
+        if public_nic is None:
+            raise ValueError(f'Cannot recover gateway cleanup for {server_name}: public interface is missing')
+        if endpoint.external_ip_name:
+            public_nic.external_ip_name = endpoint.external_ip_name
+        unit_routes = [route.model_copy(deep=True) for route in getattr(self.unit_model, 'routes', None) or []
+                       if route.next_hop_instance in {server.name, server_name}]
+        server.routes = list({route.name: route for route in [*(server.routes or []), *unit_routes]}.values())
+        record = server.model_dump(exclude_none=True)
+        # A previous DELETED server tombstone must not bypass the ordinary
+        # delete's resource checks when its managed lease is still reserved.
+        record['state'] = ServerStates.DELETING.value
+        self.db.update(collection_name=DbCollections.SERVER, doc_id=server_name, data=record)
+        self.logger.info(f'Recovered managed gateway metadata for cleanup: {server_name}')
+        return record
+
     def nuke(self):
         """
         Nukes the unit
@@ -322,8 +573,9 @@ class CommunityUnit(BaseUnit):
             from common.services.wireguard_provisioning import WireGuardProvisioningService
 
             lease = WireGuardProvisioningService(self.env_dict, db=self.db).get_lease(self.unit_id)
-            if not lease.is_ready(time.time()):
-                raise ValueError('WireGuard gateway service has not reported a healthy current boot')
+            if (lease.status != 'reserved' or not math.isfinite(lease.expires) or lease.expires <= time.time()
+                    or lease.unit_id != self.unit_id or lease.endpoint_id != endpoint.id):
+                raise ValueError('The WireGuard lab lease is expired, released, or no longer owns this endpoint')
         WireGuardEndpointRegistry(
             env_dict=self.env_dict,
             db=self.db,
@@ -403,6 +655,8 @@ class CommunityUnit(BaseUnit):
         # Omit template nulls so a retry cannot erase state written by the
         # asynchronous LabServer build. Firestore update() merges these fields.
         server_data = server.model_dump(exclude_none=True)
+        if getattr(server, 'community_proxy', False) and server.service_accounts is not None:
+            server_data['serviceAccounts'] = server.service_accounts
         for runtime_field in ('state', 'state_timestamp', 'shutoff_timestamp'):
             if runtime_field in existing_server:
                 server_data[runtime_field] = existing_server[runtime_field]
@@ -472,7 +726,8 @@ class CommunityUnit(BaseUnit):
         workouts = self.db_queries.get_children(parent_id=self.unit_id, child_collection=DbCollections.WORKOUT)
         workout_ids = []
         for workout in workouts:
-            workout_ids.append(workout['id'])
+            if workout.get('state') != WorkoutStates.DELETED.value:
+                workout_ids.append(workout['id'])
         return workout_ids
 
     def __set_promiscuous_mode(self, network=None):

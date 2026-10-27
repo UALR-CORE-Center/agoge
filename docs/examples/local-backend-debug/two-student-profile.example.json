@@ -1,0 +1,12 @@
+{
+  "project": "test-dev-787001",
+  "template": "wireguard-factory-lab",
+  "instructor": "pdhuff@ualr.edu",
+  "remote_peer_id": "remote-lab-01",
+  "count": 2,
+  "expires_hours": 2,
+  "student_emails": [
+    "wireguard-student-1@example.com",
+    "wireguard-student-2@example.com"
+  ]
+}

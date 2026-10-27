@@ -121,8 +121,9 @@ const CatalogTable: React.FC = () => {
         setWaitingModalOpen(true);
         try {
             const response = selectedRow?.managed_wireguard
-                ? await wireguardService.createLab({kit_id: formData.kit_id, build_count: formData.build_count,
-                    expires: formData.expires, student_image: formData.student_image})
+                ? await wireguardService.createLab({remote_peer_id: formData.remote_peer_id, build_count: formData.build_count,
+                    expires: formData.expires, student_image: formData.student_image,
+                    ...(formData.remote_network_cidr ? {remote_network_cidr: formData.remote_network_cidr} : {})})
                 : await unitService.create(formData);
             if (response?.build_id) {
                 navigate(`${URL_TEACHER_UNIT}/${response.build_id}`);
@@ -274,14 +275,14 @@ const CatalogTable: React.FC = () => {
                 icon: <Build />,
                 requiresSelection: false,
                 addTooltip: true,
-                tooltip: "Build a shared Ubuntu gateway and student machines for one registered factory kit",
+                tooltip: "Build a shared Ubuntu gateway and student machines for one registered remote peer and its private LAN",
                 onClick: () => {
                     setSelectedRow({
                         id: "managed-wireguard",
                         managed_wireguard: true,
                         summary: {
-                            name: "WireGuard Factory Lab",
-                            description: "Connect student workstations to one enrolled factory kit through a shared Ubuntu 24.04 WireGuard gateway.",
+                            name: "WireGuard Remote Lab",
+                            description: "Connect student workstations to one registered remote lab through a shared Ubuntu 24.04 WireGuard gateway.",
                         },
                         servers: [{wireguard_gateway: true}],
                     });

@@ -49,9 +49,12 @@
     "firebase": "$firebase"
   },
   "scripts": {
+    "prestart": "node scripts/build-help.mjs",
     "start": "vite --debug",
+    "prebuild": "node scripts/build-help.mjs",
     "build": "vite build",
-    "test": "vitest run --exclude \"tests/**\"",
+    "test:help-build": "node --test scripts/build-help.test.mjs",
+    "test": "vitest run --exclude \"tests/**\" --exclude \"scripts/**\"",
     "preview": "vite preview"
   },
   "eslintConfig": {

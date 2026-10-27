@@ -24,11 +24,16 @@ export const WireGuardStudentImageSelector: React.FC<Props> = ({open, value, onC
         onAvailabilityChange(false);
         imageService.list().then(items => {
             if (!current) return;
-            const available = items.filter(image => Number(image.status) === ImageStates.CHECKED_IN
+            const available = items.filter(image => {
+                // Legacy records may have one connection object instead of a list.
+                const connections = [image.human_interaction].flat().filter(Boolean);
+                return Number(image.status) === ImageStates.CHECKED_IN
                 && !!image.name
-                && image.image_exists !== false && image.architecture?.toUpperCase() !== "ARM64"
-                && image.human_interaction?.some(connection => connection.display && connection.username
-                    && connection.password && ["ssh", "rdp", "vnc"].includes(connection.protocol?.toLowerCase())));
+                && (image.image_exists !== false || image.is_shared === true)
+                && image.architecture?.toUpperCase() !== "ARM64"
+                && connections.some(connection => connection.display && connection.username
+                    && connection.password && ["ssh", "rdp", "vnc"].includes(connection.protocol?.trim().toLowerCase()));
+            });
             setImages(available);
             if (!available.some(image => image.name === value)) {
                 // Submit the Agoge record name. Its underlying Compute image can

@@ -1,5 +1,7 @@
 import copy
 import ipaddress
+import math
+import time
 import uuid
 from typing import List, Optional
 
@@ -25,6 +27,9 @@ class UnitDHCP:
     """
     LEASE_CLAIM_FIELD = 'dhcp_lease_claim_id'
     LEASE_RELEASED_FIELD = 'dhcp_leases_released'
+    # JSON credentials expire within 120 seconds. Keep a deleted student's IP
+    # unavailable longer so an already-issued token cannot target a new owner.
+    SHARED_PROXY_LEASE_QUARANTINE_SECONDS = 300
 
     def __init__(
         self,
@@ -239,7 +244,7 @@ class UnitDHCP:
                 internal_ip = existing_address
                 # Repair a legacy/incomplete Unit reservation while preserving the
                 # existing server as the authoritative owner of the lease.
-                if internal_ip not in reservations:
+                if internal_ip not in network['reservations']:
                     network['reservations'].append(internal_ip)
             else:
                 # Per-workout servers always receive a dynamic address. Ignore a
@@ -327,6 +332,8 @@ class UnitDHCP:
             released_any = released_any or (
                 len(network['reservations']) != len(existing_reservations)
             )
+            if not server.get('community_server') and server.get('parent_id') != self.unit_id:
+                self._quarantine_released_address(unit, network, address)
             self._get_reservations(unit, network_name, subnet_name)
 
         self._validate_unit(unit)
@@ -380,6 +387,8 @@ class UnitDHCP:
             for reserved_address in existing_reservations
             if reserved_address != address
         ]
+        if address in existing_reservations:
+            self._quarantine_released_address(unit, network, address)
         # This also repairs legacy null reservation arrays and preserves all
         # configured community-server addresses.
         self._get_reservations(unit, network_name, subnet_name)
@@ -423,6 +432,14 @@ class UnitDHCP:
     def _validate_unit(self, unit: dict) -> None:
         self.validator(UnitModel, log_location=LoggerNames.CLOUD_FN).load(data=unit)
 
+    @classmethod
+    def _quarantine_released_address(cls, unit: dict, network: dict, address: str) -> None:
+        if not any(server.get('community_proxy') is True for server in unit.get('servers') or []):
+            return
+        quarantines = dict(network.get('lease_quarantines') or {})
+        quarantines[address] = time.time() + cls.SHARED_PROXY_LEASE_QUARANTINE_SECONDS
+        network['lease_quarantines'] = quarantines
+
     @staticmethod
     def _get_reservations(
         unit: dict,
@@ -454,7 +471,20 @@ class UnitDHCP:
             *existing_reservations,
             *static_reservations,
         ]))
-        return network['reservations']
+        # Quarantines are separate from live leases. Prune expired entries as
+        # part of the same reservation transaction without making them permanent
+        # reservations or extending their lifetime on duplicate delete delivery.
+        quarantines = network.get('lease_quarantines') or {}
+        now = time.time()
+        active = {}
+        for address, expires in quarantines.items():
+            if type(expires) not in (int, float) or not math.isfinite(expires):
+                raise ValueError('A DHCP lease quarantine has an invalid expiration.')
+            if expires > now:
+                active[address] = expires
+        if quarantines or 'lease_quarantines' in network:
+            network['lease_quarantines'] = active
+        return list(dict.fromkeys([*network['reservations'], *active]))
 
     @staticmethod
     def _get_static_reservations(

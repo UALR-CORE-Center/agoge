@@ -47,3 +47,7 @@ CLAUDE.md
 .vscode/
 bugReport.md
 .claude/
+/.local/debug-lab/
+/debug.local.json
+/frontend/.help-docs/
+/frontend/public/help-content/

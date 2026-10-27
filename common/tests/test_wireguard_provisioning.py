@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from common.exceptions import BadRequest, Conflict, NotReady, Unauthorized
+from common.constants.states import UnitStates
 from common.models.wireguard_provisioning import WireGuardKitCreate, WireGuardHealthReport
 from common.services.wireguard_provisioning import WireGuardProvisioningService
 from common.tests.test_wireguard_endpoint_registry import _FakeDatabase
@@ -48,7 +49,8 @@ class Secrets:
 def context():
     db, secret_store = Database(), Secrets()
     service = WireGuardProvisioningService(
-        {'project': 'agoge-test', 'parent_dns_suffix': '.example.edu', 'project_path': 'ualr'},
+        {'project': 'agoge-test', 'parent_dns_suffix': '.example.edu', 'project_path': 'ualr',
+         'wireguard_health_reporting_enabled': True},
         db=db, secret_store=secret_store, clock=lambda: 1000)
     admin = SimpleNamespace(is_admin=True, email='admin@example.edu')
     instructor = SimpleNamespace(is_admin=False, email='teacher@example.edu')
@@ -82,7 +84,8 @@ def ready(context, target=None):
     service.report_health(target.id, token, {
         'boot_id': boot, 'service_ready': True, 'tunnel_ready': True, 'latest_handshake': 990})
     context.db.records[target.wireguard_endpoint.id]['status'] = 'active'
-    context.db.collections['unit'][target.id] = {'workspace_settings': {'expires': 2000}}
+    context.db.collections['unit'][target.id] = {'state': UnitStates.READY.value,
+                                               'workspace_settings': {'expires': 2000}}
     return target, boot, token
 
 
@@ -138,6 +141,37 @@ def test_reserve_is_idempotent_and_keeps_private_keys_out_of_firestore(context):
     assert payload['health_url'] == 'https://api.example.edu/ualr/wireguard/gateways/abcdefghij/health/'
 
 
+def test_default_reservation_needs_no_api_url_or_callback_credential(context):
+    context.service.env_dict = {'project': 'agoge-test'}
+    target = unit(context)
+    context.service.reserve(target, 'kit-one', context.instructor)
+    payload = context.secrets.payloads[target.id]
+    assert payload['health_reporting_enabled'] is False
+    assert 'health_url' not in payload and 'callback_token' not in payload
+    assert 'callback_token_digest' not in context.db.collections['wireguard-lease'][target.id]
+    with pytest.raises(Unauthorized):
+        context.service.report_health(target.id, 'not-enabled', {
+            'boot_id': 'boot-nonce-long-enough', 'service_ready': True})
+
+
+def test_explicit_guest_telemetry_opt_in_has_private_callback_credential(context):
+    target = unit(context)
+    context.service.reserve(target, 'kit-one', context.instructor)
+    payload = context.secrets.payloads[target.id]
+    assert payload['health_reporting_enabled'] is True
+    assert payload['callback_token']
+    assert payload['health_url'].endswith('/wireguard/gateways/abcdefghij/health/')
+    assert payload['callback_token'] not in str(context.db.collections)
+
+
+@pytest.mark.parametrize('value', ['true', 1, None])
+def test_guest_telemetry_opt_in_requires_a_boolean(context, value):
+    context.service.env_dict['wireguard_health_reporting_enabled'] = value
+    with pytest.raises(BadRequest, match='must be a boolean'):
+        context.service.reserve(unit(context), 'kit-one', context.instructor)
+    assert not context.secrets.payloads
+
+
 def test_concurrent_units_cannot_claim_same_kit(context):
     one, two = unit(context), unit(context, 'klmnopqrst', '10001')
     def reserve(target):
@@ -184,18 +218,33 @@ def test_pi_configuration_contains_only_its_public_config(context):
     assert config['unit_id'] == target.id
     assert config['allowed_ips'] == ['10.20.0.0/24', '10.254.254.1/32']
     assert config['equipment_subnet'] == '172.30.0.0/24'
+    assert config['gateway_ready'] is True
     assert config['service_ready'] and config['tunnel_ready']
     assert 'private_key' not in config and 'callback_token' not in config and 'token_digest' not in config
 
 
-@pytest.mark.parametrize('mutation', ['stopped', 'stale', 'expired', 'disabled', 'released', 'missing-unit'])
-def test_pi_rejects_stale_stopped_expired_or_disabled_leases(context, mutation):
+@pytest.mark.parametrize('changes', [
+    {'service_ready': False, 'tunnel_ready': False, 'health_timestamp': None},
+    {'service_ready': True, 'tunnel_ready': True, 'health_timestamp': 800},
+])
+def test_pi_gets_gcp_ready_configuration_without_fresh_guest_telemetry(context, changes):
+    target, _, _ = ready(context)
+    context.db.collections['wireguard-lease'][target.id].update(changes)
+    config = context.service.pi_configuration('kit-one', context.enrollment['enrollment_token'])
+    assert config['gateway_ready'] is True
+    assert config['service_ready'] is False and config['tunnel_ready'] is False
+
+
+@pytest.mark.parametrize('mutation', [
+    'stopped', 'expired', 'disabled', 'released', 'missing-unit', 'unit-starting',
+    'unit-stopping', 'unit-expired', 'unit-broken', 'unit-deleted', 'unit-expiration',
+    'missing-endpoint', 'foreign-endpoint', 'stale-assignment', 'changed-device', 'changed-key',
+])
+def test_pi_rejects_inactive_expired_or_stale_assignments(context, mutation):
     target, _, _ = ready(context)
     lease = context.db.collections['wireguard-lease'][target.id]
     if mutation == 'stopped':
         context.db.records[target.wireguard_endpoint.id]['status'] = 'reserved'
-    elif mutation == 'stale':
-        lease['health_timestamp'] = 800
     elif mutation == 'expired':
         lease['expires'] = 900
     elif mutation == 'disabled':
@@ -204,6 +253,25 @@ def test_pi_rejects_stale_stopped_expired_or_disabled_leases(context, mutation):
         context.service.release(target.id)
     elif mutation == 'missing-unit':
         context.db.collections['unit'].pop(target.id)
+    elif mutation.startswith('unit-') and mutation != 'unit-expiration':
+        context.db.collections['unit'][target.id]['state'] = {
+            'unit-starting': UnitStates.STARTING.value, 'unit-stopping': UnitStates.STOPPING.value,
+            'unit-expired': UnitStates.EXPIRED.value, 'unit-broken': UnitStates.BROKEN.value,
+            'unit-deleted': UnitStates.DELETED.value,
+        }[mutation]
+    elif mutation == 'unit-expiration':
+        context.db.collections['unit'][target.id]['workspace_settings']['expires'] = 900
+    elif mutation == 'missing-endpoint':
+        context.db.records.pop(target.wireguard_endpoint.id)
+    elif mutation == 'foreign-endpoint':
+        context.db.records[target.wireguard_endpoint.id]['unit_id'] = 'otherunitx'
+    elif mutation == 'stale-assignment':
+        context.db.collections['wireguard-lease']['klmnopqrst'] = dict(lease)
+        context.db.collections['wireguard-kit']['kit-one']['assigned_unit_id'] = 'klmnopqrst'
+    elif mutation == 'changed-device':
+        context.db.collections['wireguard-kit']['kit-one']['device_id'] = 'replaced-device'
+    elif mutation == 'changed-key':
+        context.db.collections['wireguard-kit']['kit-one']['peer_public_key'] = 'replaced-key'
     with pytest.raises(NotReady):
         context.service.pi_configuration('kit-one', context.enrollment['enrollment_token'])
 
@@ -303,3 +371,78 @@ def test_extend_lease_does_not_revive_released_or_missing_leases(context):
     assert context.service.extend_lease(target.id, 5000) is False
     assert context.service.get_lease(target.id).expires == 2000
     assert context.service.extend_lease('missingunit', 5000) is False
+
+
+def test_remote_peer_enrollment_uses_private_lan_alias_without_migrating_storage(context):
+    from common.models.wireguard_provisioning import WireGuardRemotePeerCreate
+    body = kit_data('remote-lab-two', key_number=2)
+    body['remote_network_cidr'] = body.pop('equipment_subnet')
+    result = context.service.enroll_remote_peer(WireGuardRemotePeerCreate(**body), context.admin)
+    public = result['remote_peer'].model_dump(by_alias=True)
+    assert public['remote_network_cidr'] == '172.30.0.0/24'
+    assert 'equipment_subnet' not in public and 'token_digest' not in public
+    stored = context.db.collections['wireguard-kit']['remote-lab-two']
+    assert stored['equipment_subnet'] == '172.30.0.0/24'
+    assert 'remote_network_cidr' not in stored
+    peers = context.service.list_remote_peers(context.instructor)
+    assert {peer.id for peer in peers} == {'kit-one', 'remote-lab-two'}
+    assert context.service.get_authorized_remote_peer('remote-lab-two', context.instructor).remote_network_cidr == '172.30.0.0/24'
+
+
+@pytest.mark.parametrize('canonical', [False, True])
+def test_remote_peer_model_accepts_legacy_network_field(context, canonical):
+    from common.models.wireguard_provisioning import WireGuardRemotePeerCreate
+    data = kit_data()
+    if canonical:
+        data['remote_network_cidr'] = data['equipment_subnet']
+    peer = WireGuardRemotePeerCreate(**data)
+    assert peer.remote_network_cidr == '172.30.0.0/24'
+
+
+def test_remote_peer_model_rejects_conflicting_network_aliases():
+    from common.models.wireguard_provisioning import WireGuardRemotePeerCreate
+    with pytest.raises(ValidationError, match='conflicts'):
+        WireGuardRemotePeerCreate(**kit_data(), remote_network_cidr='192.168.1.0/24')
+
+
+@pytest.mark.parametrize('network', ['192.0.2.0/24', '0.0.0.0/0', 'fd00::/64'])
+def test_remote_peer_model_requires_private_lan(network):
+    from common.models.wireguard_provisioning import WireGuardRemotePeerCreate
+    body = kit_data()
+    body['remote_network_cidr'] = network
+    body.pop('equipment_subnet')
+    with pytest.raises(ValidationError):
+        WireGuardRemotePeerCreate(**body)
+
+
+@pytest.mark.parametrize('data', [
+    {'remote_peer_id': 'remote-one'}, {'kit_id': 'remote-one'},
+    {'remote_peer_id': 'remote-one', 'kit_id': 'remote-one'},
+])
+def test_build_remote_peer_selection_accepts_canonical_and_equal_legacy(data):
+    from common.services.wireguard_provisioning import resolve_remote_peer_id
+    assert resolve_remote_peer_id(data) == 'remote-one'
+
+
+@pytest.mark.parametrize('data', [
+    {'remote_peer_id': 'remote-one', 'kit_id': 'remote-two'},
+    {'remote_peer_id': 'remote-one', 'kit_id': ''}, {'remote_peer_id': ''},
+    {'remote_peer_id': '../other'}, {'remote_peer_id': 12}, {},
+])
+def test_build_remote_peer_selection_rejects_conflicts_and_invalid_identifiers(data):
+    from common.services.wireguard_provisioning import resolve_remote_peer_id
+    with pytest.raises(BadRequest):
+        resolve_remote_peer_id(data)
+
+
+def test_legacy_lease_serializes_additive_remote_peer_aliases(context):
+    target = unit(context)
+    lease = context.service.reserve(target, 'kit-one', context.instructor)
+    public = lease.model_dump()
+    assert public['remote_peer_id'] == public['kit_id'] == 'kit-one'
+    assert public['remote_network_cidr'] == public['equipment_subnet'] == '172.30.0.0/24'
+    # Old stored documents deserialize without backfilling or rewriting identifiers.
+    public.pop('remote_peer_id')
+    public.pop('remote_network_cidr')
+    from common.models.wireguard_provisioning import WireGuardLeaseModel
+    assert WireGuardLeaseModel(**public).remote_peer_id == 'kit-one'

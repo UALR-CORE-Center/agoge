@@ -9,6 +9,23 @@ from cloud_functions.handlers.control_handler import ControlHandler
 from common.constants.pub_sub import PubSub
 
 
+@pytest.mark.parametrize('action,method,field', [
+    (PubSub.Actions.START, '_start', 'community_start_claim'),
+    (PubSub.Actions.STOP, '_stop', 'community_stop_claim'),
+])
+def test_automatic_community_claim_survives_queued_control_dispatch(action, method, field):
+    handler = object.__new__(ControlHandler)
+    handler.course_object = str(PubSub.CourseObjects.LAB_SERVER.value)
+    handler.build_id = 'abcdefghij-wireguard'
+    handler.env_dict = {'project': 'agoge-test-project'}
+    handler.event_attributes = {field: 'current-claim-token'}
+    compute = MagicMock()
+    with patch.object(control_handler_module.ComputeManagerFactory, 'create_manager_object', return_value=compute):
+        getattr(handler, method)()
+
+    getattr(compute, action.name.lower()).assert_called_once_with(**{field: 'current-claim-token'})
+
+
 @pytest.mark.parametrize('authorization,expected', [
     (None, False), ('false', False), ('true', True), ('1', False), (True, False),
 ])

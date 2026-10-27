@@ -1,14 +1,18 @@
 import time
 from datetime import datetime, timezone
+from uuid import uuid4
 
+from google.cloud.firestore_v1.base_query import FieldFilter
+
+from common.constants.build_constants import BuildConstants
 from common.constants.database import DbCollections
 from common.constants.pub_sub import PubSub
 from common.constants.states import ServerStates, WorkoutStates
+from common.exceptions import BadRequest
 from common.utilities.timestamps import Timestamps
-from common.models.agoge import WorkoutModel, UnitModel, ServerModel
+from common.models.agoge import WorkoutModel, UnitModel, ServerModel, ProxyConnectionModel
 
 from ..unit.unit_dhcp_service import UnitDHCP
-from ...server_specific.guacamole.display_proxy import DisplayProxy
 from .base_workout import BaseWorkout
 from ...gcp.packet_mirroring.packet_mirror_factory import PacketMirrorFactory
 
@@ -35,6 +39,8 @@ class CommunityWorkout(BaseWorkout):
         env_dict (dict, optional): Environment variables for compute instances. Defaults to None.
     """
     SHARED_START_CLAIM_SECONDS = 300
+    MANAGED_GATEWAY_WAIT_SECONDS = 300
+    MANAGED_GATEWAY_POLL_SECONDS = 5
 
     def __init__(
         self,
@@ -54,6 +60,7 @@ class CommunityWorkout(BaseWorkout):
             PacketMirrorFactory.create_packet_mirror_object(
                 build_id=self.unit_id,
                 build=self.unit_model.model_dump(),
+                build_type=BuildConstants.UnitType.COMMUNITY.value,
                 env_dict=self.env_dict,
                 debug=self.debug
             )
@@ -65,6 +72,11 @@ class CommunityWorkout(BaseWorkout):
         current_state = self.state_manager.get_state()
         if current_state >= self.s.RUNNING.value:
             return
+        displayed = any(any(getattr(connection, 'display', False)
+                            for connection in getattr(server, 'human_interaction', None) or [])
+                        for server in self.unit_model.servers or [] if not server.community_server)
+        if displayed and not self._uses_shared_display():
+            raise BadRequest('This community lab predates the shared display proxy; rebuild the lab before claiming new students')
 
         server_build_count = 0
         if current_state < self.s.COMPLETED_SERVERS.value:
@@ -83,15 +95,77 @@ class CommunityWorkout(BaseWorkout):
                 )
             self.state_manager.state_transition(self.s.COMPLETED_SERVERS)
 
-        if getattr(self.unit_model, 'wireguard_lease', None):
-            self._build_managed_display_proxy()
+        if self._uses_shared_display():
+            if current_state < self.s.COMPLETED_STUDENT_ENTRY.value:
+                self._prepare_community_connections()
+                # The shared proxy exists once per Unit. A claim saves only
+                # its own connection descriptors before parking its own VMs.
+                self.state_manager.state_transition(self.s.COMPLETED_STUDENT_ENTRY)
+            self._stop_initial_managed_servers()
 
         self.state_manager.state_transition(self.s.READY)
         self.logger.info(f"{self.class_name}:{self.workout_id} - Finished building {server_build_count} for "
                          f"workout ID")
 
-    def _build_managed_display_proxy(self) -> None:
-        """Give each student a proxy to only that Workout's assigned machines."""
+    def _stop_initial_managed_servers(self):
+        """Park only this newly claimed student's VMs before exposing READY."""
+        names = {f'{self.workout_id}-{server.name}' for server in self.unit_model.servers or []
+                 if not server.community_server}
+        # Include dynamically created student-owned resources, never the shared
+        # Unit gateway. Check parent ownership before sending any control RPC.
+        for record in self.db_queries.get_servers(parent_id=self.workout_id):
+            short_name = record.get('name')
+            if short_name:
+                names.add(short_name if short_name.startswith(f'{self.workout_id}-')
+                          else f'{self.workout_id}-{short_name}')
+        records = {name: self.db.get(collection_name=DbCollections.SERVER, doc_id=name) or {}
+                   for name in names}
+        if any(record.get('parent_id') != self.workout_id for record in records.values()):
+            raise LookupError(f'Student server ownership is missing for Workout {self.workout_id}')
+        for name, record in records.items():
+            if self.state_manager.get_state() != self.s.COMPLETED_STUDENT_ENTRY.value:
+                raise RuntimeError(f'Workout {self.workout_id} left its initial build; refusing to stop its servers')
+            if record.get('state') == ServerStates.STOPPED.value:
+                continue
+            if record.get('state') not in (ServerStates.RUNNING.value, ServerStates.STOPPING.value,
+                                           ServerStates.BROKEN.value):
+                raise RuntimeError(f'Student server {name} has not finished building')
+            if self.debug:
+                self.compute_manager.load(server_name=name, network_prefix=self.unit_id)
+                self.compute_manager.stop()
+            else:
+                self.pubsub_manager.msg(
+                    handler=str(PubSub.Handlers.CONTROL.value),
+                    action=str(PubSub.Actions.STOP.value), build_id=name,
+                    course_object=str(PubSub.CourseObjects.LAB_SERVER.value))
+        deadline = time.monotonic() + self.MANAGED_GATEWAY_WAIT_SECONDS
+        while True:
+            current = [self.db.get(collection_name=DbCollections.SERVER, doc_id=name) or {}
+                       for name in names]
+            if all(record.get('parent_id') == self.workout_id
+                   and record.get('state') == ServerStates.STOPPED.value for record in current):
+                break
+            if (any(record.get('state') in (ServerStates.BROKEN.value, ServerStates.DELETED.value)
+                    for record in current) or time.monotonic() >= deadline):
+                raise TimeoutError(f'Could not confirm initial student servers stopped for Workout {self.workout_id}')
+            time.sleep(self.MANAGED_GATEWAY_POLL_SECONDS)
+        # The normal stop path persists STOPPED after its GCP operation. Verify
+        # the provider too before declaring the initial student build ready.
+        for name in sorted(names):
+            self.compute_manager.load(server_name=name, network_prefix=self.unit_id)
+            if self.compute_manager._get_instance_status() != 'TERMINATED':
+                raise TimeoutError(f'GCP has not confirmed student server {name} stopped')
+        self.logger.info(f'Parked initial student servers for Workout {self.workout_id}')
+
+    def _uses_shared_display(self):
+        return any(getattr(server, 'community_proxy', False) for server in self.unit_model.servers or [])
+
+    def _prepare_community_connections(self) -> None:
+        """Save one student's display descriptors without creating another VM.
+
+        Guacamole JSON authentication is generated by the API from authoritative
+        records. Descriptors contain no Guacamole password or signing key.
+        """
         students = []
         for template in self.unit_model.servers or []:
             if template.community_server:
@@ -102,15 +176,21 @@ class CommunityWorkout(BaseWorkout):
                 raise LookupError(f'Student server {server_name} is missing its provisioned record')
             students.append(ServerModel(**record))
         self.workout.servers = students
-        # Guacamole API and the browser need the actual DHCP addresses, rather
-        # than the address-less templates copied from the Community Unit.
-        self.update_record(doc_id=self.workout_id, data=self.workout, update_keys=['servers'])
-        DisplayProxy(
-            build_id=self.workout_id,
-            build_spec=self.workout,
-            collection=DbCollections.WORKOUT,
-            env_dict=self.env_dict,
-        ).build()
+        connections = []
+        suffix = self.env.main_app_url.rstrip('/')
+        for server in sorted(students, key=lambda value: value.name):
+            if not any(connection.display for connection in server.human_interaction or []):
+                continue
+            address = next((nic.internal_ip for nic in server.nics or [] if nic.internal_ip), None)
+            if not address:
+                raise BadRequest(f'Student server {server.name} has no address for its display connection')
+            index = len(connections)
+            connections.append(ProxyConnectionModel(idx=index, server=server.name,
+                internal_ip_address=address, username=f'agoge-{self.workout_id}', password=None,
+                auth_type='json', url=f'{suffix}/student/workout/{self.workout_id}/guacamole/{index}'))
+        self.workout.proxy_connections = connections
+        self.update_record(doc_id=self.workout_id, data=self.workout,
+                           update_keys=['servers', 'proxy_connections'])
 
     def start(self):
         """
@@ -133,18 +213,20 @@ class CommunityWorkout(BaseWorkout):
             self.packet_mirroring.start()
 
         for server_name in servers_to_start:
+            claim = self._community_start_claims.get(server_name)
             if self.debug:
                 self.compute_manager.load(server_name=server_name)
-                self.compute_manager.start()
+                self.compute_manager.start(**({'community_start_claim': claim} if claim else {}))
             else:
                 self.pubsub_manager.msg(
                     handler=str(PubSub.Handlers.CONTROL.value),
                     action=str(PubSub.Actions.START.value),
                     build_id=server_name,
-                    course_object=str(PubSub.CourseObjects.LAB_SERVER.value)
+                    course_object=str(PubSub.CourseObjects.LAB_SERVER.value),
+                    **({'community_start_claim': claim} if claim else {})
                 )
         # Wait for server completion state
-        if not self.state_manager.are_servers_started():
+        if not self.state_manager.are_servers_started() or not self._managed_gateways_reached(ServerStates.RUNNING):
             self.state_manager.state_transition(self.s.BROKEN)
             self.logger.error(f"Workout {self.workout_id}: Timed out waiting for server builds to complete!")
         else:
@@ -180,17 +262,28 @@ class CommunityWorkout(BaseWorkout):
                 self.packet_mirroring.stop()
 
             for server_name in servers_to_stop:
+                claim = None
+                if self._is_managed_gateway(server_name):
+                    claim = self.__claim_shared_server_stop(server_name)
+                    if not claim:
+                        # A sibling may have begun starting since the boundary
+                        # query, or another stop already owns this transition.
+                        if self._has_active_sibling():
+                            last_one_out = False
+                        continue
                 if self.debug:
                     self.compute_manager.load(server_name=server_name)
-                    self.compute_manager.stop()
+                    self.compute_manager.stop(**({'community_stop_claim': claim} if claim else {}))
                 else:
                     self.pubsub_manager.msg(
                         handler=str(PubSub.Handlers.CONTROL.value),
                         action=str(PubSub.Actions.STOP.value),
                         build_id=server_name,
-                        course_object=str(PubSub.CourseObjects.LAB_SERVER.value)
+                        course_object=str(PubSub.CourseObjects.LAB_SERVER.value),
+                        **({'community_stop_claim': claim} if claim else {})
                     )
-            if not self.state_manager.are_servers_stopped():
+            if (not self.state_manager.are_servers_stopped()
+                    or (last_one_out and not self._managed_gateways_reached(ServerStates.STOPPED))):
                 self.state_manager.state_transition(self.s.BROKEN)
                 self.logger.error(f"Workout {self.workout_id}: Timed out waiting for server builds to stop!")
             else:
@@ -359,9 +452,14 @@ class CommunityWorkout(BaseWorkout):
             child_collection=DbCollections.WORKOUT,
             parent_id=self.workout.parent_id
         )
+        active_states = {WorkoutStates.RUNNING.value}
+        if action == PubSub.Actions.STOP:
+            # A student currently starting still needs the shared gateway.
+            # Stopping another student must not interrupt that pending start.
+            active_states.add(WorkoutStates.STARTING.value)
         boundary_workout = not any(
             workout.get('id') != self.workout_id
-            and workout.get('state') == WorkoutStates.RUNNING.value
+            and workout.get('state') in active_states
             for workout in workouts
         )
 
@@ -378,10 +476,38 @@ class CommunityWorkout(BaseWorkout):
             if not is_community_server or (is_community_server and boundary_workout):
                 servers.append(server_name)
 
-        if getattr(self.unit_model, 'wireguard_lease', None):
+        if getattr(self.unit_model, 'wireguard_lease', None) and not self._uses_shared_display():
             servers.append(f'{self.workout_id}-display-guacamole-server')
 
         return servers, boundary_workout
+
+    def _managed_gateways_reached(self, expected):
+        names = [f'{self.unit_id}-{server.name}' for server in self.unit_model.servers or []
+                 if getattr(server, 'community_server', False)
+                 and (getattr(server, 'community_proxy', False)
+                      or (getattr(server, 'wireguard_gateway', False)
+                          and getattr(server, 'wireguard_managed', False)))]
+        if not names:
+            return True
+        deadline = time.monotonic() + self.MANAGED_GATEWAY_WAIT_SECONDS
+        while True:
+            if expected == ServerStates.STOPPED and self._has_active_sibling():
+                # Another student can legitimately start again after the idle
+                # stop claim. Their start waits for that stop, then reopens the
+                # gateway; the departing student need only finish its own VMs.
+                return True
+            records = [self.db.get(collection_name=DbCollections.SERVER, doc_id=name) or {}
+                       for name in names]
+            if all(record.get('state') == expected.value
+                   and (expected != ServerStates.STOPPED
+                        or not (record.get('community_stop_claim') or {}).get('token')
+                        or (record.get('community_stop_claim') or {}).get('completed') is True)
+                   for record in records):
+                return True
+            if any(record.get('state') in (ServerStates.BROKEN.value, ServerStates.DELETED.value)
+                   for record in records) or time.monotonic() >= deadline:
+                return False
+            time.sleep(self.MANAGED_GATEWAY_POLL_SECONDS)
 
     def __claim_shared_servers_for_start(self, server_names: list[str]) -> list[str]:
         """Atomically select one publisher for each shared-server START action.
@@ -397,29 +523,36 @@ class CommunityWorkout(BaseWorkout):
             for server in (self.unit_model.servers or [])
             if server.community_server
         }
-        return [
-            server_name
-            for server_name in server_names
-            if (
-                server_name not in shared_server_names
-                or self.__claim_shared_server_start(server_name)
-            )
-        ]
+        self._community_start_claims = {}
+        selected = []
+        for server_name in server_names:
+            if server_name in shared_server_names:
+                claim = self.__claim_shared_server_start(server_name)
+                if not claim:
+                    continue
+                self._community_start_claims[server_name] = claim
+            selected.append(server_name)
+        return selected
 
-    def __claim_shared_server_start(self, server_name: str) -> bool:
-        now = Timestamps.get_current_timestamp_utc()
-        return self.db.transaction(
-            operation_func=self.__claim_shared_server_start_transaction,
-            server_name=server_name,
-            now=now,
-        )
+    def __claim_shared_server_start(self, server_name: str):
+        deadline = time.monotonic() + self.MANAGED_GATEWAY_WAIT_SECONDS
+        while True:
+            claim = self.db.transaction(
+                operation_func=self.__claim_shared_server_start_transaction,
+                server_name=server_name, now=Timestamps.get_current_timestamp_utc(),
+            )
+            if claim != 'await_automatic_stop':
+                return claim
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f'Shared server {server_name} did not finish its automatic stop')
+            time.sleep(self.MANAGED_GATEWAY_POLL_SECONDS)
 
     def __claim_shared_server_start_transaction(
         self,
         transaction,
         server_name: str,
         now: float,
-    ) -> bool:
+    ):
         doc_ref = self.db.db.collection(DbCollections.SERVER.value).document(server_name)
         snapshot = doc_ref.get(transaction=transaction)
         if not snapshot.exists:
@@ -429,6 +562,12 @@ class CommunityWorkout(BaseWorkout):
         state = server.get('state')
         if state == ServerStates.RUNNING.value:
             return False
+        stop = server.get('community_stop_claim') or {}
+        if (state == ServerStates.STOPPED.value and stop.get('token')
+                and stop.get('completed') is not True):
+            return 'await_automatic_stop'
+        if state == ServerStates.STOPPING.value and (server.get('community_stop_claim') or {}).get('token'):
+            return 'await_automatic_stop'
         if state in (
             ServerStates.STOPPING.value,
             ServerStates.EXPIRED.value,
@@ -452,6 +591,9 @@ class CommunityWorkout(BaseWorkout):
             if claim_owner != self.workout_id and claim_expires > now:
                 return False
 
+        token = claim.get('token') if claim.get('owner') == self.workout_id else None
+        token = token or uuid4().hex
+
         transaction.set(
             doc_ref,
             {
@@ -460,8 +602,69 @@ class CommunityWorkout(BaseWorkout):
                 'community_start_claim': {
                     'owner': self.workout_id,
                     'expires': now + self.SHARED_START_CLAIM_SECONDS,
+                    'token': token,
                 },
+                'community_stop_claim': None,
             },
             merge=True,
         )
-        return True
+        return token
+
+    def _is_managed_gateway(self, server_name):
+        return any(f'{self.unit_id}-{server.name}' == server_name
+                   and getattr(server, 'community_server', False)
+                   and (getattr(server, 'community_proxy', False)
+                        or (getattr(server, 'wireguard_gateway', False)
+                            and getattr(server, 'wireguard_managed', False)))
+                   for server in self.unit_model.servers or [])
+
+    def _has_active_sibling(self):
+        return any(workout.get('id') != self.workout_id
+                   and workout.get('state') in (WorkoutStates.RUNNING.value, WorkoutStates.STARTING.value)
+                   for workout in self.db_queries.get_children(
+                       child_collection=DbCollections.WORKOUT, parent_id=self.unit_id))
+
+    def __claim_shared_server_stop(self, server_name):
+        deadline = time.monotonic() + self.MANAGED_GATEWAY_WAIT_SECONDS
+        while True:
+            claim = self.db.transaction(
+                operation_func=self.__claim_shared_server_stop_transaction,
+                server_name=server_name, now=Timestamps.get_current_timestamp_utc())
+            if claim != 'await_shared_start':
+                return claim
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f'Shared server {server_name} did not finish its current start')
+            time.sleep(self.MANAGED_GATEWAY_POLL_SECONDS)
+
+    def __claim_shared_server_stop_transaction(self, transaction, server_name, now):
+        reference = self.db.db.collection(DbCollections.SERVER.value).document(server_name)
+        snapshot = reference.get(transaction=transaction)
+        if not snapshot.exists:
+            raise LookupError(f'Shared server {server_name} does not exist.')
+        server = snapshot.to_dict()
+        # Firestore tracks these query reads in the same transaction as the
+        # STOPPING claim. A concurrent student STARTING write retries the claim
+        # rather than allowing an obsolete last-student decision to commit.
+        query = self.db.db.collection(DbCollections.WORKOUT.value).where(
+            filter=FieldFilter('parent_id', '==', self.unit_id))
+        if any(item.to_dict().get('state') in (WorkoutStates.RUNNING.value, WorkoutStates.STARTING.value)
+               for item in query.get(transaction=transaction)):
+            return None
+        if server.get('state') == ServerStates.STARTING.value:
+            return 'await_shared_start'
+        if server.get('state') == ServerStates.STOPPED.value:
+            return None
+        existing = server.get('community_stop_claim') or {}
+        if server.get('state') == ServerStates.STOPPING.value:
+            return existing.get('token') if existing.get('owner') == self.workout_id else None
+        if server.get('state') not in (ServerStates.RUNNING.value, ServerStates.STARTING.value):
+            raise RuntimeError(f'Shared server {server_name} cannot be automatically stopped from its current state')
+        token = uuid4().hex
+        transaction.set(reference, {
+            'state': ServerStates.STOPPING.value,
+            'state_timestamp': datetime.now(timezone.utc).isoformat(),
+            'community_stop_claim': {'owner': self.workout_id, 'token': token,
+                                     'expires': now + self.SHARED_START_CLAIM_SECONDS, 'completed': False},
+            'community_start_claim': None,
+        }, merge=True)
+        return token

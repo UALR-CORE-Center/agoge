@@ -93,6 +93,7 @@ class BaseComputeManager:
         routes: Optional[list] = None
         wireguard_endpoint_id: Optional[str] = None
         wireguard_managed: bool = False
+        community_proxy: bool = False
 
     def __init__(
         self,
@@ -242,13 +243,14 @@ class BaseComputeManager:
         self.server_spec.parent_id = server_spec.get('parent_id', None)
         self.server_spec.service_accounts = (
             [] if server_spec.get('no_service_account') is True
-            else server_spec.get('serviceAccounts', None)
+            else server_spec.get('service_accounts', server_spec.get('serviceAccounts', None))
         )
         self.server_spec.disk_size = server_spec.get('disk_size', 10)
         self.server_spec.tags = server_spec.get('tags', [])
         self.server_spec.routes = server_spec.get('routes') or []
         self.server_spec.wireguard_endpoint_id = server_spec.get('wireguard_endpoint_id')
         self.server_spec.wireguard_managed = server_spec.get('wireguard_managed', False)
+        self.server_spec.community_proxy = server_spec.get('community_proxy', False)
 
         # Set additional class attributes
         self.parent_build_id = server_spec.get('parent_id', None)
@@ -564,7 +566,11 @@ class BaseComputeManager:
             # WireGuard DNS is handled after an ownership-checked endpoint stage
             # in LabServerManager.start().
             if not getattr(self.server_spec, 'wireguard_endpoint_id', None) and (dns_record := self._dns_record()):
-                self.dns_manager.add_dns_record(dns_record, self.server_name)
+                published = self.dns_manager.add_dns_record(dns_record, self.server_name)
+                if getattr(self.server_spec, 'community_proxy', False) and not published:
+                    # Keep STARTING so a delivery can reconcile the already
+                    # running VM and retry only its public DNS dependency.
+                    raise BaseAgogeException('Unable to publish the community display DNS record')
                 if self.server_spec.guacamole_startup_script:
                     self._wait_for_guacamole(dns_record[:-1])
 

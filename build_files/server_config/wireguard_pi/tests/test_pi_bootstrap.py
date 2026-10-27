@@ -29,7 +29,7 @@ def payload(**updates):
         "gateway_address": "10.254.254.1/30", "peer_address": "10.254.254.2/32",
         "equipment_subnet": "172.30.0.0/24", "student_subnets": ["10.20.0.0/24"],
         "allowed_ips": ["10.20.0.0/24", "10.254.254.1/32"],
-        "service_ready": True, "tunnel_ready": False,
+        "gateway_ready": True, "service_ready": False, "tunnel_ready": False,
     }
     data.update(updates)
     return data
@@ -41,7 +41,7 @@ def config():
 
 @pytest.mark.parametrize("updates", [
     {"kit_id": "factory-02"}, {"peer_public_key": GATEWAY_KEY},
-    {"service_ready": False}, {"student_subnets": ["0.0.0.0/0"]},
+    {"gateway_ready": False}, {"student_subnets": ["0.0.0.0/0"]},
     {"allowed_ips": ["0.0.0.0/0"]}, {"port": "51820; touch /tmp/pwn"},
     {"equipment_subnet": "10.20.0.0/24"}, {"equipment_subnet": "10.254.254.0/24"},
     {"hostname": "host\nPostUp=evil"}, {"unit_id": "../unit"},
@@ -51,6 +51,28 @@ def config():
 def test_rejects_wrong_identity_or_unscoped_configuration(updates):
     with pytest.raises((ValueError, pi.ConfigurationUnavailable)):
         pi.validate_configuration(payload(**updates), "factory-01", PUBLIC_KEY)
+
+
+def test_gcp_lifecycle_readiness_allows_configuration_without_guest_health_or_handshake():
+    assert pi.validate_configuration(payload(service_ready=False, tunnel_ready=False),
+                                     "factory-01", PUBLIC_KEY)["unit_id"] == "abcdefghij"
+
+
+def test_explicit_lifecycle_not_ready_cannot_be_overridden_by_delayed_guest_health():
+    with pytest.raises(pi.ConfigurationUnavailable):
+        pi.validate_configuration(payload(gateway_ready=False, service_ready=True),
+                                  "factory-01", PUBLIC_KEY)
+
+
+@pytest.mark.parametrize('legacy_ready', [False, True])
+def test_legacy_api_uses_its_original_service_ready_contract(legacy_ready):
+    data = payload(service_ready=legacy_ready)
+    data.pop('gateway_ready')
+    if legacy_ready:
+        assert pi.validate_configuration(data, "factory-01", PUBLIC_KEY)
+    else:
+        with pytest.raises(pi.ConfigurationUnavailable):
+            pi.validate_configuration(data, "factory-01", PUBLIC_KEY)
 
 
 def test_only_exact_lease_routes_are_rendered():

@@ -3,6 +3,7 @@ from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
+    Response,
 )
 from google.cloud.datastore import Entity
 
@@ -27,10 +28,12 @@ logger = Logger(LoggerNames.API)
 
 @guacamole_router.get('/{build_id}/servers/{server_idx}/')
 async def get_connection(
+    response: Response,
     build_id: str,
     server_idx: str,
     env_dict: dict = Depends(get_cloud_env),
 ) -> AgogeResponse:
+    response.headers['Cache-Control'] = 'no-store'
     try:
         session = (
             Guacamole(build_id=build_id, env_dict=env_dict)
@@ -39,22 +42,24 @@ async def get_connection(
         return AgogeResponse(data=session)
     except BadRequest as e:
         logger.warning(e.message, build_id=build_id, server_idx=server_idx)
-        raise HTTPException(status_code=400, detail=e.message)
+        raise HTTPException(status_code=400, detail=e.message, headers={'Cache-Control': 'no-store'})
     except NotFound as e:
         logger.warning(e.message, build_id=build_id, server_idx=server_idx)
-        raise HTTPException(status_code=404, detail=e.message)
+        raise HTTPException(status_code=404, detail=e.message, headers={'Cache-Control': 'no-store'})
     except GuacamoleSessionNotFound as e:
         logger.warning(e.message, build_id=build_id, server_idx=server_idx)
-        raise HTTPException(status_code=404, detail=e.message)
+        raise HTTPException(status_code=404, detail=e.message, headers={'Cache-Control': 'no-store'})
     except GuacamoleUserNotFound as e:
         logger.warning(e.message, build_id=build_id, server_idx=server_idx)
-        raise HTTPException(status_code=404, detail="Requested user not found")
+        raise HTTPException(status_code=404, detail="Requested user not found", headers={'Cache-Control': 'no-store'})
     except GuacamoleServerNotFound as e:
         logger.warning(e.message, build_id=build_id, server_idx=server_idx)
-        raise HTTPException(status_code=404, detail=e.message)
+        raise HTTPException(status_code=404, detail=e.message, headers={'Cache-Control': 'no-store'})
     except GuacamoleInvalidSession as e:
         logger.warning(e.message, build_id=build_id, server_idx=server_idx)
-        raise HTTPException(status_code=503, detail=e.message)
+        raise HTTPException(status_code=503, detail=e.message, headers={'Cache-Control': 'no-store'})
     except Exception as e:
-        logger.warning(str(e), build_id=build_id, server_idx=server_idx)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning('Guacamole session request failed', error_type=type(e).__name__,
+                       build_id=build_id, server_idx=server_idx)
+        raise HTTPException(status_code=500, detail='The display session could not be created',
+                            headers={'Cache-Control': 'no-store'})

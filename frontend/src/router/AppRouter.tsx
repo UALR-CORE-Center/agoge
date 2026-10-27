@@ -16,6 +16,7 @@ import {InfoDrawer} from "../components/Common/InfoDrawer/InfoDrawer";
 import {DrawerProvider} from "../components/Common/InfoDrawer/InfoDrawerContext";
 import Layout from "../components/Common/Layout";
 import SessionWaitDialog from "../components/Guacamole/SessionWaitDialog";
+import {HelpApp} from "../components/Help/HelpApp";
 import MarkdownEditor from "../components/Markdown/MarkdownEditor";
 import MarkdownViewer from "../components/Markdown/MarkdownViewer";
 import PuzzleAdminPanel from "../components/PuzzleControl/PuzzleAdminPanel";
@@ -59,6 +60,7 @@ import {
     URL_ADMIN_MANAGE_IMAGES,
     URL_DOCS_EDITOR,
     URL_DOCS_VIEWER,
+    URL_HELP,
     URL_PUZZLE_ADMIN,
     URL_PUZZLE_PLAYER
 } from './urls';
@@ -104,6 +106,7 @@ const AppRouter: React.FC = () => {
                     { path: URL_ADMIN_MANAGE_PROJECT, element: <ProtectedRoute element={<ProjectSettings />} level={"admin"} />},
 
                     // Public Endpoints
+                    { path: `${URL_HELP}/*`, element: <HelpApp /> },
                     { path: `${URL_STUDENT_WORKOUT}/:build_id`, element: <StudentWorkout /> },
                     { path: URL_DOCS_EDITOR, element: <ProtectedRoute element={<MarkdownEditor/>} />},
                     { path: URL_DOCS_VIEWER, element: <MarkdownViewer /> },
