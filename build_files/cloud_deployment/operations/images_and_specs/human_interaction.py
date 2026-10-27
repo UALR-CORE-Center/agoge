@@ -93,6 +93,8 @@ class HumanInteraction:
             mode_name = options.NLA.value
             while True:
                 print("Enter a proxy security mode (default is NLA)")
+                # xrdp has no NLA, and guacd 1.6 fails its classic RDP security with a MAC error.
+                print("Linux images running xrdp (e.g. Kali) need TLS or ANY.")
                 for opt in opts:
                     self.msg.default(opt, indent=True)
 

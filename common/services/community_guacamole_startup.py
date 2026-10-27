@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -77,6 +78,12 @@ def compose(key, host, domain):
         'services': {
             'guacd': {
                 'image': 'guacamole/guacd:1.6.0',
+                # The image's own check runs every 300s, so Swarm withholds guacd
+                # for five minutes after every lab start.
+                'healthcheck': {
+                    'test': ['CMD-SHELL', 'nc -z 127.0.0.1 4822 || exit 1'],
+                    'interval': '10s', 'timeout': '5s', 'retries': 3, 'start_period': '5s',
+                },
                 'networks': ['guacnet'],
                 'volumes': ['guac_recordings:/record'],
                 'deploy': {'replicas': 1, 'restart_policy': {'condition': 'on-failure'}},
@@ -144,7 +151,18 @@ def configure():
     key = signing_key()
     certificate = Path('/etc/letsencrypt/live') / domain
     if not (certificate / 'fullchain.pem').is_file() or not (certificate / 'privkey.pem').is_file():
-        raise ValueError('The shared proxy TLS certificate is unavailable')
+        # The project image should carry a wildcard certificate. Without one,
+        # issue a certificate for this host only (HTTP-01 on port 80), stored
+        # under the same lineage name so the nginx paths do not change.
+        if not shutil.which('certbot'):
+            raise ValueError('The shared proxy TLS certificate is unavailable and certbot is not installed')
+        result = command(['certbot', 'certonly', '--standalone', '--preferred-challenges', 'http',
+                          '--non-interactive', '--agree-tos', '--register-unsafely-without-email',
+                          '--cert-name', domain, '-d', host], check=False)
+        if result.returncode != 0:
+            raise ValueError('The shared proxy TLS certificate is unavailable; certbot could not issue one for '
+                             + host + ' (is its DNS record published yet?)')
+        print('Issued a host certificate for ' + host + ' because the image has no wildcard certificate.')
     command(['systemctl', 'stop', 'guacamole.service'], check=False)
     command(['systemctl', 'start', 'docker'])
     address = request(METADATA + 'instance/network-interfaces/0/ip',
@@ -152,7 +170,9 @@ def configure():
     ipaddress.ip_address(address)
     swarm = json.loads(command(['docker', 'info', '--format', '{{json .Swarm}}']).stdout)
     if swarm.get('LocalNodeState') != 'active' or swarm.get('NodeAddr') != address:
-        if swarm.get('LocalNodeState') == 'active':
+        # An image can carry its build host's swarm, whose node certificate
+        # expires and leaves it in the 'error' state; init fails until it is left.
+        if swarm.get('LocalNodeState') != 'inactive':
             command(['docker', 'swarm', 'leave', '--force'])
         command(['docker', 'swarm', 'init', '--advertise-addr', address])
     atomic_write(APP / 'docker-compose.yml', json.dumps(compose(key, host, domain)))
@@ -179,11 +199,22 @@ WantedBy=multi-user.target
     print('Shared community Guacamole configuration deployed.')
 
 
+def failure_reason(error):
+    # Only messages and command names this script controls are printed; Docker
+    # output and exception bodies can carry the signing key.
+    if isinstance(error, ValueError):
+        return str(error)
+    if isinstance(error, subprocess.CalledProcessError):
+        return ' '.join(error.cmd[:3]) + ' exited with ' + str(error.returncode)
+    return type(error).__name__
+
+
 if __name__ == '__main__':
     try:
         configure()
-    except Exception:
-        print('Shared community Guacamole bootstrap is not ready; retrying is safe.', file=sys.stderr)
+    except Exception as error:
+        print('Shared community Guacamole bootstrap is not ready (' + failure_reason(error)
+              + '); retrying is safe.', file=sys.stderr)
         sys.exit(1)
 '''
 
@@ -210,7 +241,9 @@ def render_community_guacamole_startup(secret_version_name, unit_id, dns_suffix)
         "cat > " + root + "/configure.py <<'AGOGE_COMMUNITY_GUAC_PY'",
         COMMUNITY_GUAC_AGENT, 'AGOGE_COMMUNITY_GUAC_PY',
         'chmod 0700 ' + root + '/configure.py',
-        'for attempt in 1 2 3 4 5; do',
+        # A host certificate needs the proxy's DNS record, which can be
+        # published shortly after the VM boots.
+        'for attempt in $(seq 1 12); do',
         '  if python3 ' + root + '/configure.py; then exit 0; fi',
-        '  sleep 5', 'done', 'exit 1', '',
+        '  sleep 10', 'done', 'exit 1', '',
     ])

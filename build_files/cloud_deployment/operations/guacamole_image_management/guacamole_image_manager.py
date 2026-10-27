@@ -4,7 +4,6 @@ import socket
 import ssl
 import sys
 import time
-from datetime import datetime, UTC
 
 from google.api_core.exceptions import Forbidden, NotFound
 from google.cloud import compute_v1
@@ -24,6 +23,7 @@ class GuacamoleImageManager:
     """
     Manages the creation and synchronization of Guacamole images and startup configurations.
     """
+    CERTIFICATE_WAIT_SECONDS = 15 * 60
     COPY_GUAC_BASE = (
         "gcloud compute --project={dst_project} images create image-guac-{dst_project} "
         "--source-image=image-guac-base --source-image-project={src_project}"
@@ -172,10 +172,19 @@ class GuacamoleImageManager:
         print("🚀 Deploying Guacamole server for initial setup and certificate provisioning...")
         self.image_manager.load(server_name=server_name)
         self.image_manager.check_out()
-        time.sleep(120)
 
-        print("🔍 Verifying SSL certificate for the Guacamole server...")
-        self._verify_certificate_operation()
+        # Certbot's DNS challenge alone waits 60s, so poll rather than sleep a
+        # fixed time. Capturing before the certificate exists produces an image
+        # every shared lab proxy then fails to start from.
+        print("🔍 Waiting for the Guacamole server's wildcard SSL certificate...")
+        deadline = time.monotonic() + self.CERTIFICATE_WAIT_SECONDS
+        while not self._verify_certificate_operation():
+            if time.monotonic() >= deadline:
+                print(f"❌ No valid wildcard certificate after {self.CERTIFICATE_WAIT_SECONDS // 60} minutes. "
+                      f"The server '{server_name}' stays checked out and was NOT captured; inspect it with "
+                      "'sudo journalctl -u google-startup-scripts.service' and rerun this option.")
+                return False
+            time.sleep(15)
 
         print("🔄 Checking Guacamole server back in...")
         self.image_manager.check_in()
@@ -209,21 +218,23 @@ class GuacamoleImageManager:
         print(f'Using Guacamole base image: {image.self_link}')
         return image.self_link
 
-    def _verify_certificate_operation(self):
+    def _verify_certificate_operation(self) -> bool:
+        """True once the server presents a trusted certificate that also covers lab proxy hosts."""
         dns_entry = self.image_manager.dns_record
+        wildcard = '*.' + (self.env.parent_dns_suffix or self.env.dns_suffix).strip('.')
         try:
             context = ssl.create_default_context()
             with socket.create_connection((dns_entry, 443), timeout=10) as sock:
                 with context.wrap_socket(sock, server_hostname=dns_entry) as ssock:
                     cert = ssock.getpeercert()
-            issued_date = datetime.strptime(cert['notBefore'], '%b %d %H:%M:%S %Y %Z').date()
-            if issued_date == datetime.now(UTC).date():
-                print("✅ SSL certificate verified successfully.")
-            else:
-                print("⚠️ Certificate date mismatch.")
-        except Exception as e:
-            print(f"⚠️ SSL verification error for {dns_entry}: {e}")
-            input(f"🔎 Verify manually at https://{dns_entry} and press Enter to continue.")
+        except (OSError, ssl.SSLError):
+            return False
+        names = {value for kind, value in cert.get('subjectAltName', ()) if kind == 'DNS'}
+        if wildcard not in names:
+            print(f"⚠️ The certificate at {dns_entry} does not cover {wildcard}.")
+            return False
+        print("✅ SSL certificate verified successfully.")
+        return True
 
     def _get_guac_startup_script(self) -> str:
         """

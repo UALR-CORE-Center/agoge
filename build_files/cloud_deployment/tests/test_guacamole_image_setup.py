@@ -20,7 +20,7 @@ def setup(monkeypatch):
     manager.db = MagicMock()
     manager.image_manager = MagicMock()
     manager._get_guac_startup_script = MagicMock(return_value='#!/bin/bash\necho setup')
-    manager._verify_certificate_operation = MagicMock()
+    manager._verify_certificate_operation = MagicMock(return_value=True)
     client = MagicMock()
     client.get.return_value = compute_v1.Image(
         status='READY',
@@ -82,3 +82,64 @@ def test_unready_source_does_not_replace_the_existing_image_record(setup, status
     manager._get_guac_startup_script.assert_not_called()
     manager.db.insert.assert_not_called()
     manager.image_manager.check_out.assert_not_called()
+
+
+def test_image_is_not_captured_without_a_verified_wildcard_certificate(setup, monkeypatch):
+    manager, _ = setup
+    manager.CERTIFICATE_WAIT_SECONDS = 30
+    manager._verify_certificate_operation = MagicMock(return_value=False)
+    clock = iter(range(0, 1000, 15))
+    monkeypatch.setattr(guac_module.time, 'monotonic', lambda: next(clock))
+    assert manager.create_guac_project_image() is False
+    assert manager._verify_certificate_operation.call_count >= 2
+    manager.image_manager.check_out.assert_called_once_with()
+    manager.image_manager.check_in.assert_not_called()
+
+
+def test_image_is_captured_once_the_certificate_verifies(setup):
+    manager, _ = setup
+    manager._verify_certificate_operation = MagicMock(side_effect=[False, False, True])
+    assert manager.create_guac_project_image() is True
+    assert manager._verify_certificate_operation.call_count == 3
+    manager.image_manager.check_in.assert_called_once_with()
+
+
+class _TlsSocket:
+    def __init__(self, cert):
+        self.cert = cert
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def getpeercert(self):
+        return self.cert
+
+
+@pytest.mark.parametrize('names, expected', [
+    ((('DNS', '*.agoge-labs.com'), ('DNS', 'agoge-labs.com')), True),
+    # A host-only certificate would not cover each lab's <id>-display host.
+    ((('DNS', 'guac.agoge-labs.com'),), False),
+])
+def test_certificate_must_cover_lab_proxy_hosts(monkeypatch, names, expected):
+    manager = object.__new__(GuacamoleImageManager)
+    manager.env = SimpleNamespace(parent_dns_suffix='.agoge-labs.com', dns_suffix='.other.test')
+    manager.image_manager = SimpleNamespace(dns_record='guac.agoge-labs.com')
+    monkeypatch.setattr(guac_module.socket, 'create_connection', lambda *a, **k: _TlsSocket(None))
+    context = MagicMock()
+    context.wrap_socket.return_value = _TlsSocket({'subjectAltName': names})
+    monkeypatch.setattr(guac_module.ssl, 'create_default_context', lambda: context)
+    assert manager._verify_certificate_operation() is expected
+
+
+def test_unreachable_or_untrusted_server_is_not_verified(monkeypatch):
+    manager = object.__new__(GuacamoleImageManager)
+    manager.env = SimpleNamespace(parent_dns_suffix='.agoge-labs.com', dns_suffix=None)
+    manager.image_manager = SimpleNamespace(dns_record='guac.agoge-labs.com')
+
+    def refuse(*args, **kwargs):
+        raise ConnectionRefusedError()
+    monkeypatch.setattr(guac_module.socket, 'create_connection', refuse)
+    assert manager._verify_certificate_operation() is False
