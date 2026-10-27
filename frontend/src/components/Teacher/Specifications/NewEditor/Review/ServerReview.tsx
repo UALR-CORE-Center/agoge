@@ -68,7 +68,7 @@ const ServerReview: React.FC<Props> = ({ specification, loading, elevation, onNa
                                         <ReviewItemKeyWrapper>Labels</ReviewItemKeyWrapper>
 
                                         <ReviewItemValueOrSkeleton
-                                            value={<ChipListView values={server.details.labels?.length > 0 ? server.details.labels : ['No Labels']}/>}
+                                            value={<ChipListView values={server.details?.labels?.length ? server.details.labels : ['No Labels']}/>}
                                             loading={loading}/>
                                     </NestedReviewListItem>
 

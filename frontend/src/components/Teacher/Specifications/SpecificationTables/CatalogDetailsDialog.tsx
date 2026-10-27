@@ -27,11 +27,12 @@ export default function CatalogDetailsDialog(props: Props) {
     const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
 
     const catalogTags = (): TeachingConcept[] => {
-        if (!specification.summary.tags || specification.summary.tags?.length == 0) {
+        const tags = specification?.summary?.tags;
+        if (!tags || tags.length == 0) {
             return [{id: '-1', name: 'No Tags'}]
         }
 
-        return specification.summary.tags;
+        return tags;
     }
 
 
@@ -47,7 +48,7 @@ export default function CatalogDetailsDialog(props: Props) {
         >
             <DialogTitle justifyContent={"center"}>
                 <Stack direction={'row'} alignItems={'center'} justifyContent={'space-between'} gap={1}>
-                    <span style={{minWidth: 0, overflowWrap: 'anywhere'}}>{`${specification.summary.name} details`}</span>
+                    <span style={{minWidth: 0, overflowWrap: 'anywhere'}}>{`${specification?.summary?.name ?? 'Lab'} details`}</span>
                     <IconButton
                         onClick={() => setOpen(false)}
                         aria-label={"close catalog details"}
@@ -99,4 +100,4 @@ export default function CatalogDetailsDialog(props: Props) {
             </DialogContent>
         </Dialog>
     );
-};
+}
