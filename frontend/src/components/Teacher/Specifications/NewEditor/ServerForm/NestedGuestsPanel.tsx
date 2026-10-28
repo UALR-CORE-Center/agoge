@@ -103,7 +103,7 @@ const NestedGuestsPanel: React.FC<Props> = ({image, serverForm, serverIndex, net
                 <StyledFormFieldLabel>Nested guests</StyledFormFieldLabel>
                 <Typography variant="body2" color="text.secondary">
                     This image is a nested lab host. Exposed guest <i>n</i> answers on NIC 0 alias <i>n</i>, so NIC 0
-                    needs {slotCount} alias IP(s), and the server needs an N1 or N2 machine type. Students reach only
+                    needs {slotCount} alias IP(s), and the server needs an N1, N2, or N4 machine type. Students reach only
                     exposed guests. To let them SSH straight to the first exposed Linux guest (the jumpbox), enable
                     External NAT and Direct Connections on NIC 0.
                 </Typography>

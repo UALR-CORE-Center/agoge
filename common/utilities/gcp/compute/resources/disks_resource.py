@@ -31,6 +31,7 @@ class DiskResource:
         source: str = None,
         source_type: ImageSource = ImageSource.IMAGE,
         description: str = None,
+        disk_type: str = None,
     ) -> Disk:
         """Constructs a Disk proto message with specified configuration.
 
@@ -51,6 +52,9 @@ class DiskResource:
                 snapshot, or image. Defaults to ImageSource.IMAGE.
             description (str, optional):
                 A description for the disk. Defaults to None.
+            disk_type (str, optional):
+                A disk type name such as hyperdisk-balanced. Defaults to None,
+                which keeps pd-standard for a blank disk.
 
         Returns:
             Disk:
@@ -75,10 +79,10 @@ class DiskResource:
                 disk_resource.source_snapshot = source
             else:
                 disk_resource.source_image = source
-        else:
-            # If no source is provided, use a default disk type of pd-standard.
+        if disk_type or not source:
+            # If no source or type is provided, use a default disk type of pd-standard.
             disk_resource.type_ = (
-                f"projects/{self.project}/zones/{self.zone}/diskTypes/pd-standard"
+                f"projects/{self.project}/zones/{self.zone}/diskTypes/{disk_type or 'pd-standard'}"
             )
 
         return disk_resource

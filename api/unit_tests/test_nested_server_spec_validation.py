@@ -48,7 +48,7 @@ def _alias_index_out_of_range(spec):
 
 
 BAD_CASES = [
-    pytest.param(_bad_machine_type, 'needs an N1 or N2 machine type', id='e2-machine-type'),
+    pytest.param(_bad_machine_type, 'needs an N1, N2, or N4 machine type', id='e2-machine-type'),
     pytest.param(_too_few_aliases, 'needs at least 2 ip_aliases; it has 1', id='too-few-aliases'),
     pytest.param(_alias_index_out_of_range, 'alias_index 2', id='alias-index-out-of-range'),
 ]

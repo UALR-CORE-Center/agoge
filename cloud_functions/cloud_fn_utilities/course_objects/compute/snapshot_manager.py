@@ -12,6 +12,7 @@ from common.models.agoge import SnapshotsModel, SnapshotModel, WorkoutModel
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import LoggerNames, Logger
 from common.utilities.gcp.compute.base_compute_api import BaseComputeAPI
+from common.utilities.gcp.compute.compute_machine_type import disk_type_for
 from common.utilities.gcp.compute.image_ownership import is_shared_image
 from common.utilities.gcp.compute.resources.attached_disk_resource import AttachedDiskResource
 from common.utilities.id_generator import IdGenerator
@@ -331,10 +332,12 @@ class SnapshotManager(BaseComputeManager):
         try:
             # create the disk so that it's available to reattach
             new_disk_name = f'{IdGenerator.build_id(16)}-disk'
+            instance = self.compute_instance.get(resource_name=self.server_name)
             disk_operation = self.compute_disk.create(
                 resource_name=new_disk_name,
                 source_snapshot=snapshot_resource.self_link,
-                wait=False
+                wait=False,
+                disk_type=disk_type_for(getattr(instance, 'machine_type', None)),
             )
 
             # stop the server so that the current boot disk can be detached

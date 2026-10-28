@@ -91,7 +91,7 @@ class NestedImage(ComputeImage):
             human_interaction=[parent_access],
             labels=self._sanitize_labels(request.labels),
             base_family=spec.parent_os,
-            # NESTED_MACHINE_FAMILIES (N1, N2) are all x86.
+            # NESTED_MACHINE_FAMILIES (N1, N2, N4) are all x86.
             architecture='X86_64',
             nested=spec,
             nested_build=NestedBuildStatusModel(phase='queued'),

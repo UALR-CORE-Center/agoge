@@ -30,7 +30,7 @@ def _machine_architecture(machine) -> str | None:
     name = getattr(machine, 'name', '')
     if isinstance(name, str):
         series, separator, size = name.partition('-')
-        if separator and size and series in ('e2', 'n1', 'n2'):
+        if separator and size and series in ('e2', 'n1', 'n2', 'n4'):
             return 'X86_64'
     return None
 

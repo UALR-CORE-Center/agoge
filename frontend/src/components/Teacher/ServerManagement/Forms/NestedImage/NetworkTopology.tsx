@@ -1,9 +1,10 @@
-import {Box, useTheme} from "@mui/material";
+import {alpha, Box, useTheme} from "@mui/material";
 import React, {useId} from "react";
 import {NestedGuest, NestedNetwork} from "../../../../../services/Server/nested.model";
 
 // Read-only picture of the lab: networks are horizontal rails, the parent and each guest are boxes above them,
-// and a drop line joins a box to every rail it has an address or NIC on. Inline SVG, no chart library.
+// and a drop line joins a box to every rail it has an address or NIC on. A guest with an exposed NIC is green:
+// it is reachable across the VPC. Inline SVG, no chart library.
 const LABEL_WIDTH = 190;
 const BOX_WIDTH = 120;
 const BOX_HEIGHT = 44;
@@ -32,11 +33,12 @@ const NetworkTopology: React.FC<NetworkTopologyProps> = ({networks, guests}) => 
 
     const parentDrops: Drop[] = networks.flatMap((network, index) =>
         network.parent_address ? [{railIndex: index, label: network.parent_address}] : []);
-    const nodes: {name: string; detail: string; drops: Drop[]}[] = [
-        {name: "parent", detail: "libvirt host", drops: parentDrops},
+    const nodes: {name: string; detail: string; drops: Drop[]; exposed: boolean}[] = [
+        {name: "parent", detail: "libvirt host", drops: parentDrops, exposed: false},
         ...guests.map(guest => ({
             name: guest.name || "unnamed",
             detail: guest.os_id,
+            exposed: guest.nics.some(nic => nic.expose),
             // A NIC on a network that no longer exists has no rail to drop to; the Guests step reports it.
             drops: guest.nics
                 .map(nic => ({railIndex: railIndex(nic.network), label: nic.ip || "DHCP"}))
@@ -49,6 +51,7 @@ const NetworkTopology: React.FC<NetworkTopologyProps> = ({networks, guests}) => 
     const height = railY(Math.max(networks.length, 1) - 1) + 24;
     const line = theme.palette.text.secondary;
     const accent = theme.palette.primary.main;
+    const exposed = theme.palette.success.main;
     const description = `${networks.length} network(s), ${guests.length} guest(s)`;
 
     return (
@@ -85,7 +88,8 @@ const NetworkTopology: React.FC<NetworkTopologyProps> = ({networks, guests}) => 
                     const x = LABEL_WIDTH + nodeIndex * (BOX_WIDTH + BOX_GAP);
                     const centre = x + BOX_WIDTH / 2;
                     return (
-                        <g key={`node-${nodeIndex}`} data-testid="topology-node">
+                        <g key={`node-${nodeIndex}`} data-testid="topology-node" data-exposed={node.exposed || undefined}>
+                            {node.exposed && <title>{`${node.name}: reachable across the VPC`}</title>}
                             {node.drops.map((drop, dropIndex) => (
                                 <g key={`drop-${dropIndex}`}>
                                     <line
@@ -108,9 +112,9 @@ const NetworkTopology: React.FC<NetworkTopologyProps> = ({networks, guests}) => 
                                 width={BOX_WIDTH}
                                 height={BOX_HEIGHT}
                                 rx={6}
-                                fill={theme.palette.background.paper}
-                                stroke={nodeIndex === 0 ? accent : line}
-                                strokeWidth={1.5}
+                                fill={node.exposed ? alpha(exposed, 0.12) : theme.palette.background.paper}
+                                stroke={node.exposed ? exposed : nodeIndex === 0 ? accent : line}
+                                strokeWidth={node.exposed ? 2 : 1.5}
                             />
                             <text x={centre} y={TOP + 18} textAnchor="middle" fill={theme.palette.text.primary} fontWeight={600}>
                                 {truncate(node.name, 16)}

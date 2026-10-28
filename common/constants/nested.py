@@ -3,7 +3,14 @@
 # Images carrying this license boot with VMX exposed to the guest kernel, so a
 # lab server built from a nested image gets nested virtualization without asking.
 ENABLE_VMX_LICENSE = 'https://www.googleapis.com/compute/v1/projects/vm-options/global/licenses/enable-vmx'
-NESTED_MACHINE_FAMILIES = ('n1', 'n2')
+NESTED_MACHINE_FAMILIES = ('n1', 'n2', 'n4')
+# The types offered for a nested image's build and lab machine. Lab specs may still use any type in
+# NESTED_MACHINE_FAMILIES up to NESTED_MAX_MACHINE_MEMORY_MB.
+NESTED_MACHINE_TYPES = (
+    'n1-standard-4', 'n1-standard-8', 'n1-standard-16',
+    'n2-standard-4', 'n2-standard-8', 'n2-standard-16',
+    'n4-standard-4', 'n4-standard-8', 'n4-standard-16',
+)
 NESTED_MAX_MACHINE_MEMORY_MB = 65536
 STANDARD_MAX_MACHINE_MEMORY_MB = 17000
 

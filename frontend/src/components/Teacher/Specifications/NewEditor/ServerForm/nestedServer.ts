@@ -10,7 +10,7 @@ export type NestedImage = AgogeImage & { nested: NestedHostSpec };
 
 export const isNestedImage = (image?: AgogeImage | null): image is NestedImage => !!image?.nested;
 
-// Nested virtualization needs N1/N2 (NESTED_MACHINE_FAMILIES); the API rejects E2 on a nested server
+// Nested virtualization needs N1/N2/N4 (NESTED_MACHINE_FAMILIES); the API rejects E2 on a nested server
 export const nestedMachineTypes = (machineTypes: ServerMachineTypes[]): ServerMachineTypes[] =>
     machineTypes.filter(type => /^n[12]-/i.test(type.id));
 

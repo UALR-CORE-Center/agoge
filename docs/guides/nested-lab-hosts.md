@@ -27,7 +27,7 @@ The wizard checks these limits before it lets you create the image:
 
 | Resource | Rule |
 | --- | --- |
-| Machine type | **Build machine type** and **Lab machine type** must be N1 or N2 (nested-capable). E2 is not offered. Types up to 64 GB of memory are listed. |
+| Machine type | **Build machine type** and **Lab machine type** offer only n1-, n2-, and n4-standard-4, -8, and -16 (nested-capable). |
 | Memory | The guests' memory plus 2048 MB for the parent must fit in both machine types. |
 | vCPUs | The guests' vCPUs may total at most twice the machine's vCPUs. |
 | Disk | At least 20 GB for the parent, plus every guest's disk, plus 12 GB of build scratch space, plus the size of each installation medium (cloud image, ISO, or upload), rounded up to whole GB. Media stay on the parent until the build finishes, and guests that share one medium count it once. At most 1000 GB. Leave it empty to use this minimum; you can raise it. |
@@ -162,7 +162,7 @@ To change a finalized image, **Check Out** again. Nothing is rebuilt: you get th
 
 ## Use the image in a lab
 
-In the lab spec editor, choose the image for a server. Its NIC 0 needs one **alias IP per exposed NIC**: alias slot *i* is the *i*-th exposed NIC from the Access step. The server's machine type must be N1 or N2 (E2 types are hidden for nested images).
+In the lab spec editor, choose the image for a server. Its NIC 0 needs one **alias IP per exposed NIC**: alias slot *i* is the *i*-th exposed NIC from the Access step. The server's machine type must be N1, N2, or N4 (E2 types are hidden for nested images).
 
 When you select a nested image, the server form shows a **Nested guests** panel:
 

@@ -75,7 +75,8 @@ class ComputeDiskAPI(BaseComputeAPI):
         disk_size: int = None,
         source_snapshot: str = None,
         source_image: str = None,
-        disk: Disk = None
+        disk: Disk = None,
+        disk_type: str = None
     ) -> bool:
         client = self.client()
 
@@ -93,6 +94,8 @@ class ComputeDiskAPI(BaseComputeAPI):
                     f"Insert disk request for {resource_name} but no source given. "
                     f"Requires `source_snapshot` or `source_image`"
                 )
+            if disk_type:
+                disk.type_ = f"projects/{self.project}/zones/{self.zone}/diskTypes/{disk_type}"
 
         request_args = {
             'project': self.project,

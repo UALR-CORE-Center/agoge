@@ -8,6 +8,7 @@ from common.document_database import DocumentDatabaseFactory
 from common.models.google import MachineTypeModel
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
+from common.constants.nested import NESTED_MACHINE_TYPES
 from common.utilities.gcp.compute.compute_machine_type import is_allowed_machine_type
 
 
@@ -62,6 +63,9 @@ class ComputeResources:
 
         machine_types = []
         for m_type in resp:
+            # The nested image wizard offers only a fixed set; lab specs still resolve the wider families.
+            if nested and m_type.name not in NESTED_MACHINE_TYPES:
+                continue
             if cleaned_machine_type := self._machine_type_object(m_type, nested=nested):
                 machine_types.append(cleaned_machine_type)
 

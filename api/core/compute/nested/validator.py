@@ -10,7 +10,7 @@ from common.constants.database import DatabaseTypes, DbCollections, DATABASE_NAM
 from common.constants.nested import (
     NESTED_BUILD_SCRATCH_GB,
     NESTED_CONSOLE_BASE_PORT,
-    NESTED_MACHINE_FAMILIES,
+    NESTED_MACHINE_TYPES,
     NESTED_MAX_DISK_GB,
     NESTED_MAX_EXPOSURES,
     NESTED_MEDIA_MAX_BYTES,
@@ -318,8 +318,10 @@ class NestedHostValidator:
         return len(password) >= MIN_PASSWORD_LENGTH and sum(classes) >= 3
 
     def _machine_type(self, field: str, name: str) -> MachineTypeModel:
-        if name.split('-')[0] not in NESTED_MACHINE_FAMILIES:
-            raise BadRequest(f'{field}: {name} does not support nested virtualization; choose an N1 or N2 type.')
+        if name not in NESTED_MACHINE_TYPES:
+            raise BadRequest(
+                f'{field}: {name} is not offered for nested images; choose one of {", ".join(NESTED_MACHINE_TYPES)}.'
+            )
         machine_type: Optional[MachineTypeModel] = self.machine_type_api.get(name)
         if not machine_type:
             raise BadRequest(f'{field}: {name} is not an available machine type.')

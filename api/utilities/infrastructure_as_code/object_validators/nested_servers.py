@@ -45,7 +45,7 @@ class NestedServersValidator:
         family = machine_type.split('-')[0].lower() if isinstance(machine_type, str) else None
         if family not in NESTED_MACHINE_FAMILIES:
             raise AgogeValidationError(
-                f'Server {name} uses a nested lab host image and needs an N1 or N2 machine type, '
+                f'Server {name} uses a nested lab host image and needs an N1, N2, or N4 machine type, '
                 f'not {machine_type}'
             )
         exposures = len(nested.get('exposures') or [])

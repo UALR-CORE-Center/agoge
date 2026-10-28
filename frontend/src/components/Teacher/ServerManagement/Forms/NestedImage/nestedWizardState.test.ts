@@ -150,7 +150,7 @@ describe("nestedWizardState", () => {
 
     it("rejects a machine type outside the nested-capable list", () => {
         const errors = validateHostStep(validHost({machine_type: "e2-standard-8"}), machineTypes, context);
-        expect(errors.machine_type).toMatch(/N1 or N2/);
+        expect(errors.machine_type).toMatch(/N1, N2, or N4/);
         // While the list has not loaded, a chosen value is not second-guessed.
         expect(validateHostStep(validHost({machine_type: "e2-standard-8"}), [], context).machine_type).toBeUndefined();
     });

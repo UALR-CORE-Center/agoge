@@ -44,4 +44,21 @@ describe("NetworkTopology", () => {
         expect(dc01.querySelectorAll("circle")).toHaveLength(2);
         expect(ws01.querySelectorAll("circle")).toHaveLength(0);
     });
+
+    it("colors only guests with an exposed NIC green", () => {
+        const guests = [
+            guest("dc01", [{network: "lab", ip: "192.168.100.10", expose: true}]),
+            guest("ws01", [{network: "lab", ip: null, expose: false}]),
+        ];
+        render(<NetworkTopology networks={[defaultNestedNetwork()]} guests={guests} />);
+
+        const [parent, dc01, ws01] = screen.getAllByTestId("topology-node");
+        expect(dc01).toHaveAttribute("data-exposed", "true");
+        expect(dc01.querySelector("title")).toHaveTextContent("dc01: reachable across the VPC");
+        const green = dc01.querySelector("rect")!.getAttribute("stroke");
+        for (const node of [parent, ws01]) {
+            expect(node).not.toHaveAttribute("data-exposed");
+            expect(node.querySelector("rect")!.getAttribute("stroke")).not.toBe(green);
+        }
+    });
 });

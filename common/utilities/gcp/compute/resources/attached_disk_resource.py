@@ -82,6 +82,7 @@ class AttachedDiskResource:
         description: str = None,
         disk_name: str = None,
         disk_size_gb: int = None,
+        disk_type: str = None,
     ) -> AttachedDiskInitializeParams:
         """Generates initialization parameters for an AttachedDisk resource.
 
@@ -104,6 +105,9 @@ class AttachedDiskResource:
                 An optional name for the new disk. Defaults to None.
             disk_size_gb (int, optional):
                 The size of the disk in GB. Defaults to None.
+            disk_type (str, optional):
+                A disk type name such as hyperdisk-balanced. Requires the zone
+                given at construction. Defaults to None (Compute Engine's default).
 
         Returns:
             AttachedDiskInitializeParams:
@@ -126,5 +130,9 @@ class AttachedDiskResource:
             init_params.disk_size_gb = disk_size_gb
         if disk_name:
             init_params.disk_name = disk_name
+        if disk_type:
+            if not self.zone:
+                raise ValueError('A zone is required to set the disk type of a new disk.')
+            init_params.disk_type = f'zones/{self.zone}/diskTypes/{disk_type}'
 
         return init_params

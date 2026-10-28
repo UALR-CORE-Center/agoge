@@ -60,6 +60,7 @@ MACHINE_TYPES = {
     'n2-standard-4': (16384, 4),
     'n1-standard-2': (7680, 2),
     'n1-highmem-2': (13312, 2),
+    'n1-standard-4': (15360, 4),
 }
 PRODUCT_KEY = 'ABCDE-FGHIJ-KLMNO-PQRST-UVWXY'
 
@@ -246,15 +247,20 @@ def test_rejects_machine_type_too_small_for_guest_memory(validator, field):
 
 def test_rejects_too_many_guest_vcpus(validator):
     body = _body()
-    # n1-highmem-2 holds the 11264 MB the guests need, but its 2 vCPUs allow only 4 guest vCPUs, not 5.
-    body['machine_type'] = 'n1-highmem-2'
-    _reject(validator, body, 'machine_type', 'at most 4', 'ask for 5')
+    # n1-standard-4 holds the 11264 MB the guests need, but its 4 vCPUs allow only 8 guest vCPUs, not 9.
+    body['machine_type'] = 'n1-standard-4'
+    body['nested']['guests'][1]['vcpus'] = 6
+    _reject(validator, body, 'machine_type', 'at most 8', 'ask for 9')
 
 
-# Row 7: N1/N2 only.
+# Row 7: only NESTED_MACHINE_TYPES, and only when the zone offers them.
 @pytest.mark.parametrize('field', ['machine_type', 'build_machine_type'])
 def test_rejects_e2_and_unknown_machine_types(validator, field):
-    for name, fragment in (('e2-standard-8', 'N1 or N2'), ('n2-standard-999', 'not an available')):
+    for name, fragment in (
+        ('e2-standard-8', 'not offered for nested images'),
+        ('n2-highmem-4', 'not offered for nested images'),
+        ('n4-standard-16', 'not an available'),
+    ):
         body = _body()
         (body if field == 'machine_type' else body['nested'])[field] = name
         _reject(validator, body, field, name, fragment)

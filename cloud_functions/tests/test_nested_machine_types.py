@@ -1,4 +1,5 @@
-"""Nested hosts resolve N1/N2 machine types up to the nested cap, and an unknown type falls back to SMALL (V2)."""
+"""Nested hosts resolve N1/N2/N4 machine types up to the nested cap, the nested list offers only
+NESTED_MACHINE_TYPES, and an unknown type falls back to SMALL (V2)."""
 
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -20,6 +21,8 @@ MACHINE_TYPES = {
     'n2-standard-8': 32768,
     'n2-standard-16': 65536,
     'n2-standard-32': 131072,
+    'n2-highmem-4': 32768,
+    'n4-standard-8': 32768,
     'c2-standard-4': 16384,
 }
 
@@ -53,11 +56,12 @@ def test_default_list_is_unchanged():
     ]
 
 
-def test_nested_list_holds_n1_and_n2_up_to_the_nested_cap():
+def test_nested_list_holds_only_the_offered_types():
     names = _names(_api().list(nested=True))
 
+    # n2-highmem-4 is nested-capable but not offered; n2-standard-32 is offered by neither.
     assert names == [
-        'n1-standard-16', 'n1-standard-4', 'n2-standard-16', 'n2-standard-4', 'n2-standard-8',
+        'n1-standard-16', 'n1-standard-4', 'n2-standard-16', 'n2-standard-4', 'n2-standard-8', 'n4-standard-8',
     ]
     assert not any(name.startswith('e2') for name in names)
 
@@ -66,12 +70,14 @@ def test_nested_list_holds_n1_and_n2_up_to_the_nested_cap():
     ('n2-standard-8', True),
     ('n2-standard-16', True),
     ('n1-standard-16', True),
+    ('n2-highmem-4', True),
+    ('n4-standard-8', True),
     ('e2-standard-4', True),
     ('e2-standard-8', False),
     ('n2-standard-32', False),
     ('c2-standard-4', False),
 ])
-def test_get_resolves_n1_n2_up_to_the_nested_cap_and_e2_up_to_the_standard_cap(name, resolves):
+def test_get_resolves_n1_n2_n4_up_to_the_nested_cap_and_e2_up_to_the_standard_cap(name, resolves):
     m_type = _api().get(resource=name)
 
     assert (m_type is not None) == resolves

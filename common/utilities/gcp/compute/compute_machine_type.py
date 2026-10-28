@@ -11,6 +11,7 @@ from googleapiclient.discovery import Resource
 from common.constants.google import ResourceType, ClientType
 from common.constants.nested import (
     NESTED_MACHINE_FAMILIES,
+    NESTED_MACHINE_TYPES,
     NESTED_MAX_MACHINE_MEMORY_MB,
     STANDARD_MAX_MACHINE_MEMORY_MB
 )
@@ -23,13 +24,24 @@ def is_allowed_machine_type(name: str, memory_mb: int, nested: bool = False) -> 
     """Whether a machine type may be offered for a server build.
 
     Standard servers may use N1, N2, or E2 types up to 17000 MB. Nested hosts
-    need nested virtualization, so only N1 and N2 types qualify, up to
+    need nested virtualization, so only N1, N2, and N4 types qualify, up to
     NESTED_MAX_MACHINE_MEMORY_MB.
     """
     family = name.split('-')[0]
     if nested:
         return family in NESTED_MACHINE_FAMILIES and memory_mb <= NESTED_MAX_MACHINE_MEMORY_MB
     return family in BaseComputeAPI.ALLOWED_GOOGLE_MACHINE_TYPES and memory_mb <= STANDARD_MAX_MACHINE_MEMORY_MB
+
+
+def disk_type_for(machine_type: str) -> Union[str, None]:
+    """The disk type a machine type's disks must use, or None for Compute Engine's default.
+
+    N4 attaches only Hyperdisk, while the default (pd-standard) still suits every
+    other series. Accepts a bare name or a machine type URL.
+    """
+    if isinstance(machine_type, str) and machine_type.rsplit('/', 1)[-1].startswith('n4-'):
+        return 'hyperdisk-balanced'
+    return None
 
 
 class ComputeMachineTypesAPI(BaseComputeAPI):
@@ -75,8 +87,8 @@ class ComputeMachineTypesAPI(BaseComputeAPI):
         Args:
             project (str, optional): Name of project to get machine types
             zone (str, optional): Name of zone to get machine types
-            nested (bool, optional): List the N1/N2 types allowed for nested
-                hosts instead of the standard list
+            nested (bool, optional): List the NESTED_MACHINE_TYPES offered for
+                nested images instead of the standard list
 
         Returns:
             List(MachineTypeModel)
@@ -98,6 +110,8 @@ class ComputeMachineTypesAPI(BaseComputeAPI):
 
         valid_m_types = []
         for m_type in m_types:
+            if nested and m_type.name not in NESTED_MACHINE_TYPES:
+                continue
             if cleaned_m_type := self._machine_type_object(m_type, nested=nested):
                 valid_m_types.append(cleaned_m_type)
 
@@ -111,7 +125,7 @@ class ComputeMachineTypesAPI(BaseComputeAPI):
         **kwargs
     ) -> Any:
         """Retrieves a Compute Engine machine type from a specific project.
-        If the machine type is not allowed, method returns nothing. N1 and N2
+        If the machine type is not allowed, method returns nothing. N1, N2, and N4
         types resolve up to the nested cap so nested hosts can use them; E2
         types keep the standard cap.
 

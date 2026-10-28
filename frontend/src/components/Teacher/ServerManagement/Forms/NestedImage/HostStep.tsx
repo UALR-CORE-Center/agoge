@@ -142,7 +142,7 @@ const HostStep: React.FC<HostStepProps> = ({state, errors, machineTypes, context
             {machineTypeSelect(
                 'machine_type',
                 "Lab machine type",
-                "What lab servers built from this image default to. Only nested-capable N1 and N2 types are listed.",
+                "What lab servers built from this image default to. Only nested-capable N1, N2, and N4 standard types are listed.",
             )}
             <TextField
                 id="nested-disk-size"

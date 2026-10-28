@@ -398,7 +398,8 @@ class LabServerManager(BaseComputeManager):
                     disk_name = f'{self.server_name}-disk-1'
                     new_disk = DiskResource(project=self.env.project, zone=self.env.zone).new(
                         name=disk_name,
-                        size_gb=add_disk
+                        size_gb=add_disk,
+                        disk_type=self.disk_type,
                     )
                     self.compute_disk.create(
                         resource_name=disk_name,

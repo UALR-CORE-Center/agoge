@@ -24,7 +24,7 @@ from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.compute.compute_image import ComputeImageAPI, BaseComputeAPI
 from common.utilities.gcp.compute.compute_instance import ComputeInstanceAPI
 from common.utilities.gcp.compute.compute_disk import ComputeDiskAPI
-from common.utilities.gcp.compute.compute_machine_type import ComputeMachineTypesAPI
+from common.utilities.gcp.compute.compute_machine_type import ComputeMachineTypesAPI, disk_type_for
 from common.utilities.gcp.compute.compute_snapshot import ComputeSnapshotAPI
 from common.utilities.gcp.compute.resources.attached_disk_resource import AttachedDiskResource
 from common.utilities.gcp.compute.resources.instance_resource import InstanceResource
@@ -156,6 +156,8 @@ class BaseComputeManager:
         self.assessment = None
         self.ip_aliases = False
         self.nested_host = False
+        # Set from the resolved machine type in _build_server, before any disk is created.
+        self.disk_type = None
         self.collection = DbCollections.SERVER
         self.primary_external_ip = None
 
@@ -309,8 +311,9 @@ class BaseComputeManager:
         nested_host = getattr(self, 'nested_host', False)
         if nested_host and machine_type.startswith('e2'):
             raise BadRequest(
-                f'{self.class_name}:{self.server_name} - Nested hosts need an N1 or N2 machine type, not {machine_type}'
+                f'{self.class_name}:{self.server_name} - Nested hosts need an N1, N2, or N4 machine type, not {machine_type}'
             )
+        self.disk_type = disk_type_for(machine_type)
         self.state_manager.state_transition(self.s.BUILDING)
         self._add_disks()
         self._add_metadata()
@@ -672,12 +675,13 @@ class BaseComputeManager:
             image = image_source
 
         # Generate boot disk from existing image
-        attached_disk_resource = AttachedDiskResource()
+        attached_disk_resource = AttachedDiskResource(zone=self.env.zone)
         disk_init_params = attached_disk_resource.initialized_params(
             disk_name=f'{self.server_name}-disk',
             source=image,
             source_type=ImageSource.IMAGE,
             disk_size_gb=disk_size_gb,
+            disk_type=getattr(self, 'disk_type', None),
         )
         boot_disk = attached_disk_resource.new(
             boot=True,

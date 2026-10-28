@@ -124,9 +124,9 @@ const validateMachineType = (value: string, machineTypes: ServerMachineTypes[], 
     if (!value) {
         return `Choose a ${label}.`;
     }
-    // The list comes from ?nested=true, so anything outside it is not nested-capable (E2 is excluded).
+    // The list comes from ?nested=true, so anything outside it is not nested-capable (a fixed N1/N2/N4 set).
     if (machineTypes.length > 0 && !machineTypes.some(type => type.name === value)) {
-        return `${value} is not available for nested images; choose an N1 or N2 type.`;
+        return `${value} is not available for nested images; choose an N1, N2, or N4 standard type.`;
     }
     return "";
 };
