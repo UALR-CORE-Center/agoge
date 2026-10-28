@@ -6,6 +6,7 @@ import {
     Typography,
 } from '@mui/material';
 import React, { useRef, useState } from 'react';
+import { ListOfDictionaries } from '../../../types/Common';
 
 
 export interface ConnectButtonProps {
@@ -13,6 +14,8 @@ export interface ConnectButtonProps {
     addGuacamole?: boolean;
     buildId?: string;
     serverIdx?: string;
+    // The workout's proxy_connections; each carries the Guacamole `idx` of one proxied connection
+    proxyConnections?: ListOfDictionaries;
 }
 
 interface BaseConnectButtonProps extends ConnectButtonProps{

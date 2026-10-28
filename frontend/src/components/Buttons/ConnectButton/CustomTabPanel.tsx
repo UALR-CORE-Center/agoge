@@ -10,7 +10,8 @@ interface Props extends ConnectButtonProps {
     handleProtocolChange: (event: React.SyntheticEvent, newValue: string) => void;
     fullInteractions: HumanInteraction[];
     parsedHumanInteraction: HumanInteraction;
-    renderGuacamoleConnect?: () => React.ReactNode;
+    // Each tab offers Guacamole for its own connection, so this renders per interaction
+    renderGuacamoleConnect?: (interaction: HumanInteraction) => React.ReactNode;
 }
 
 export const a11yProps = (protocol: string) => ({
@@ -151,11 +152,10 @@ export const CustomTabPanel: React.FC<Props> = (props) => {
                             )}
                         </>
                     )}
+                    {renderGuacamoleConnect && renderGuacamoleConnect(interaction)}
                 </TabPanel>
                 );
             })}
-
-            {renderGuacamoleConnect && renderGuacamoleConnect()}
         </Box>
     );
 };

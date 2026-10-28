@@ -151,9 +151,9 @@ def test_two_students_use_same_proxy_and_distinct_user_scopes(context):
 
 def test_shared_descriptors_do_not_expose_vm_credentials_or_internal_records(context):
     connections = context.session().get_all_connections()
-    assert list(connections) == ['kali', 'windows']
-    assert [connection['idx'] for connection in connections.values()] == [0, 1]
-    for connection in connections.values():
+    assert [connection['server'] for connection in connections] == ['kali', 'windows']
+    assert [connection['idx'] for connection in connections] == [0, 1]
+    for connection in connections:
         assert connection['username'] == f'agoge-{FIRST_ID}'
         assert connection['password'] is None
         assert not any(key.startswith('_') for key in connection)

@@ -49,6 +49,7 @@ const WorkoutTable: React.FC<WorkoutTableProps> = ({ workoutFull }) => {
                         item={params.row}
                         buildId={workoutFull.workout.id}
                         serverIdx={params.row.index.toString()}
+                        proxyConnections={workoutFull.workout.proxy_connections}
                         addGuacamole={true}
                     />
                 </Box>

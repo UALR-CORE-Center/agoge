@@ -106,12 +106,16 @@ class Guacamole:
             return self.___session.list_connections()
         raise GuacamoleInvalidSession(f'Invalid session of type {type(self.___session)}')
 
-    def get_all_connections(self) -> dict:
-        """Extracts all connection (minus session info) from `self.build`"""
+    def get_all_connections(self) -> list[dict]:
+        """Extracts all connections (minus session info) from `self.build`, ordered by `idx`.
+
+        A server may have several displayed connections (a nested jumpbox gets SSH and RDP), so this is a list
+        with one entry per proxied connection rather than a dict keyed by server name.
+        """
         connections = self._get_ordered_connections()
         if self.shared_proxy:
-            return {name: {key: value for key, value in connection.items() if not key.startswith('_')}
-                    for name, connection in connections.items()}
+            return [{key: value for key, value in connection.items() if not key.startswith('_')}
+                    for connection in connections]
         return connections
 
     def get_connection_from_server(
@@ -128,7 +132,7 @@ class Guacamole:
         except (ValueError, TypeError):
             raise BadRequest(message="Invalid or missing value for server index")
 
-        for conn in connections.values():
+        for conn in connections:
             if server_idx == conn['idx']:
                 if self.shared_proxy:
                     token = self._shared_user_session(conn)
@@ -137,43 +141,53 @@ class Guacamole:
                     token = self.token()
                 return {
                     'token': token,
-                    'protocol': conn['protocol'],
-                    'hostname': conn['hostname'],
+                    'protocol': conn.get('protocol'),
+                    'hostname': conn.get('hostname'),
                     'server': conn['server'],
                     'url': self.guac_url
                 }
         raise GuacamoleServerNotFound(f'No server found with index {server_idx}')
 
-    def _get_ordered_connections(self) -> dict:
+    def _get_ordered_connections(self) -> list[dict]:
+        """One entry per proxied connection, ordered by `idx`.
+
+        DisplayProxy registers a connection for every displayed human_interaction, server by server, then sorts
+        the list stably by server name and indexes it. So the Nth connection of a server in that order is the
+        Nth displayed interaction of that server.
+        """
         if self.shared_proxy:
-            return self._get_shared_connections()
+            return list(self._get_shared_connections().values())
         proxy_connections = self.build.get('proxy_connections', [])
-        servers = self.build.get('servers', [])
+        servers = {server['name']: server for server in self.build.get('servers') or []}
 
         if not proxy_connections:
             raise GuacamoleServerNotFound(message='No servers found with proxy connections')
-
-        sorted_list = sorted(proxy_connections, key=lambda x: x['server'])
-        sorted_dict = {conn['server']: {'idx': idx, **conn} for idx, conn in enumerate(sorted_list)}
 
         main_app_url = self.env.main_app_url
         if not main_app_url.startswith('https://'):
             main_app_url = f'https://{main_app_url}'
 
-        for server in servers:
-            server_name = server['name']
-            if server_name in sorted_dict:
-                sorted_dict[server_name]['hostname'] = server.get('hostname')
-                # The proxied connection is a displayed one; a nested host's own login comes first but is hidden
+        # sorted() is stable, so a server's connections keep their registration order
+        sorted_list = sorted(proxy_connections, key=lambda x: x['server'])
+        position_in_server = {}
+        connections = []
+        for idx, conn in enumerate(sorted_list):
+            connection = {'idx': idx, **conn}
+            server_name = conn['server']
+            nth = position_in_server.get(server_name, 0)
+            position_in_server[server_name] = nth + 1
+            server = servers.get(server_name)
+            if server is not None:
+                connection['hostname'] = server.get('hostname')
+                # The proxied connections are the displayed ones; a nested host's own login is hidden
                 interactions = server.get('human_interaction') or []
-                displayed = next((hi for hi in interactions if hi.get('display')), interactions[0] if interactions else {})
-                sorted_dict[server_name]['protocol'] = displayed.get('protocol')
-                sorted_dict[server_name]['url'] = (
-                    f'{main_app_url}/student/workout/{self.build_id}'
-                    f'/guacamole/{sorted_dict[server_name]["idx"]}'
-                )
+                candidates = [hi for hi in interactions if hi.get('display')] or interactions
+                interaction = candidates[nth] if nth < len(candidates) else {}
+                connection['protocol'] = interaction.get('protocol')
+                connection['url'] = f'{main_app_url}/student/workout/{self.build_id}/guacamole/{idx}'
+            connections.append(connection)
 
-        return sorted_dict
+        return connections
 
     def _get_shared_connections(self) -> dict:
         """Use only this Workout's actual, owned student records as targets.

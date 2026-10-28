@@ -7,6 +7,7 @@ import {WorkoutStates} from '../../../types/AgogeStates';
 import {WorkoutConnectButton} from './WorkoutConnectButton';
 
 const PARENT_SSH = {display: false, protocol: 'ssh', username: 'instructor', password: 'parent-secret'};
+const KALI_RDP = {display: true, protocol: 'rdp', username: 'kali', password: 'kali-pw', alias_index: 0, nested_guest: 'kali', security_mode: 'any'};
 const KALI_SSH = {display: true, protocol: 'ssh', username: 'kali', password: 'kali-pw', alias_index: 0, nested_guest: 'kali'};
 
 const nestedHost = (hostname: string | null, human_interaction: object[] = [PARENT_SSH, KALI_SSH]) => ({
@@ -59,5 +60,54 @@ describe('WorkoutConnectButton on a nested host', () => {
         });
 
         expect(screen.getByText('ssh student@kali.agoge-labs.com')).toBeInTheDocument();
+    });
+});
+
+describe('WorkoutConnectButton Guacamole links', () => {
+    afterEach(cleanup);
+
+    const jumpbox = {...nestedHost('nested-host.agoge-labs.com', [PARENT_SSH, KALI_SSH, KALI_RDP]), name: 'nested-host'};
+    // As DisplayProxy records them: sorted by server, registration order within a server, indexed across the workout
+    const proxyConnections = [
+        {server: 'attacker', idx: 0, username: 'agoge0'},
+        {server: 'nested-host', idx: 1, username: 'agoge1'},
+        {server: 'nested-host', idx: 2, username: 'agoge2'},
+    ];
+
+    const openWith = (item: object, connections?: object[], serverIdx = '1') => {
+        render(<WorkoutConnectButton item={item} buildId="abcdefghij" serverIdx={serverIdx} addGuacamole={true}
+                                     proxyConnections={connections as never}/>);
+        fireEvent.click(screen.getByRole('button', {name: 'Connect'}));
+    };
+
+    it('links each protocol tab of a jumpbox to its own connection index', () => {
+        openWith(jumpbox, proxyConnections);
+
+        expect(screen.getByRole('link', {name: /Guacamole SSH/})).toHaveAttribute(
+            'href', expect.stringMatching(/\/abcdefghij\/guacamole\/1$/));
+        fireEvent.click(screen.getByRole('tab', {name: 'rdp'}));
+        expect(screen.getByRole('link', {name: /Guacamole RDP/})).toHaveAttribute(
+            'href', expect.stringMatching(/\/abcdefghij\/guacamole\/2$/));
+        expect(screen.queryByRole('link', {name: /Guacamole SSH/})).not.toBeInTheDocument();
+    });
+
+    it('offers no Guacamole link for a connection the proxy does not carry', () => {
+        // A community workout's shared proxy carries only a server's first displayed connection
+        openWith(jumpbox, [{server: 'nested-host', idx: 0}]);
+
+        expect(screen.getByRole('link', {name: /Guacamole SSH/})).toHaveAttribute(
+            'href', expect.stringMatching(/\/guacamole\/0$/));
+        fireEvent.click(screen.getByRole('tab', {name: 'rdp'}));
+        expect(screen.queryByRole('link', {name: /Guacamole/})).not.toBeInTheDocument();
+    });
+
+    it('falls back to the server index without proxy connection records', () => {
+        openWith({
+            name: 'kali', state: WorkoutStates.RUNNING, hostname: 'kali.agoge-labs.com',
+            nics: [{network: 'external'}], human_interaction: [{protocol: 'ssh', username: 'student', password: 'spw'}],
+        }, undefined, '3');
+
+        expect(screen.getByRole('link', {name: /Guacamole/})).toHaveAttribute(
+            'href', expect.stringMatching(/\/guacamole\/3$/));
     });
 });
