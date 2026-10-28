@@ -64,10 +64,12 @@ isolate_parent() {
   jump_first filter INPUT -i "$BRIDGES" -j "$IN_CHAIN"
 }
 
+# The directory itself lists entry indices ("0", "1"), not addresses; recursive=true returns the values as JSON.
 fetch_aliases() {
-  local attempt
+  local attempt body
   for attempt in 1 2 3 4 5; do
-    if curl -sf -H "Metadata-Flavor: Google" "$ALIASES_URL"; then
+    if body="$(curl -sf -H "Metadata-Flavor: Google" "${ALIASES_URL}?recursive=true")" \
+        && printf '%s' "$body" | jq -r '.[]'; then
       return 0
     fi
     sleep 2

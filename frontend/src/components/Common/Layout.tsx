@@ -13,15 +13,22 @@ interface FooterProps {
     backgroundColor?: string;
 }
 
+// Conventional "© <year> <product> · <owner>. All rights reserved." notice; the year is
+// computed so the footer never goes stale.
 const Copyright = () => {
     return (
         <Typography variant="body2" color="text.secondary" align="center">
-            {'Copyright © '}
-            {new Date().getFullYear()}
-            {' '}
-            <Link color="inherit" href="https://github.com/UALR-CORE-Center">
+            &copy; {new Date().getFullYear()} Agoge &middot;{' '}
+            <Link
+                color="inherit"
+                href="https://github.com/UALR-CORE-Center"
+                target="_blank"
+                rel="noopener noreferrer"
+                underline="hover"
+            >
                 UALR CORE Center
-            </Link>{' '}
+            </Link>
+            . All rights reserved.
         </Typography>
     );
 }
@@ -33,15 +40,15 @@ const Footer = ({ backgroundColor = 'background.paper' }: FooterProps) => {
             component="footer"
             role="contentinfo"
             sx={{
-                py: 3,
+                py: 2,
                 px: 2,
                 mt: 'auto',
+                bgcolor: backgroundColor,
+                borderTop: 1,
+                borderColor: 'divider',
             }}
         >
-            <Container maxWidth="sm">
-                <Typography variant="body1" align="center">
-                    Agoge
-                </Typography>
+            <Container maxWidth="lg">
                 <Copyright />
             </Container>
         </Box>

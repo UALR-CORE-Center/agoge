@@ -110,7 +110,11 @@ FAKE_VIRSH = textwrap.dedent("""\
         [ "$(cat "$D/$dom.state" 2>/dev/null)" = running ] || exit 1
         case "$1" in
           *guest-exec-status*) cat "$FAKE_DIR/exec-status-$dom" 2>/dev/null || echo '{"return":{"exited":true,"exitcode":0}}' ;;
-          *guest-exec*) echo "$1" > "$FAKE_DIR/exec-request-$dom"; echo '{"return":{"pid":42}}' ;;
+          *guest-exec*)
+            # The first request (the post-install, when there is one) is kept; every request is logged
+            [ -f "$FAKE_DIR/exec-request-$dom" ] || echo "$1" > "$FAKE_DIR/exec-request-$dom"
+            echo "$1" >> "$FAKE_DIR/exec-requests-$dom"
+            echo '{"return":{"pid":42}}' ;;
           *) echo '{"return":{}}' ;;
         esac ;;
       net-dhcp-leases)
@@ -877,6 +881,46 @@ def test_post_install_runs_through_guest_exec_with_the_script_as_input(builder):
     assert request['arguments']['path'] == '/bin/bash' and request['arguments']['arg'] == ['-s']
     assert base64.b64decode(request['arguments']['input-data']).decode() == POST_INSTALL
     assert not (builder.fake / 'exec-request-win').exists()
+
+
+@needs_tools
+def test_the_jumpbox_gets_xrdp_after_its_post_install(builder, tmp_path):
+    result, _ = builder()
+
+    requests = [json.loads(line) for line in (builder.fake / 'exec-requests-deb').read_text().splitlines()]
+    assert result.returncode == 0, result.stderr
+    assert len(requests) == 2
+    xrdp = requests[1]['arguments']
+    assert xrdp['path'] == '/bin/bash' and xrdp['arg'] == ['-s', 'labadmin']
+    script = base64.b64decode(xrdp['input-data']).decode()
+    assert 'apt-get $lock install -y -q xrdp xorgxrdp' in script
+    assert script.rstrip().endswith('systemctl enable --now xrdp')
+    (tmp_path / 'xrdp.sh').write_text(script)
+    assert subprocess.run(['bash', '-n', str(tmp_path / 'xrdp.sh')]).returncode == 0
+    # Windows is exposed nowhere and is not Linux; only the jumpbox is touched
+    assert not (builder.fake / 'exec-requests-win').exists()
+
+
+@needs_tools
+def test_a_linux_guest_that_is_not_exposed_gets_no_xrdp(builder):
+    result, _ = builder(spec=_spec(deb={'post_install_script': None}).model_copy(update={'exposures': []}))
+
+    assert result.returncode == 0, result.stderr
+    assert not (builder.fake / 'exec-requests-deb').exists()
+
+
+@needs_tools
+def test_a_failed_xrdp_install_fails_only_the_jumpbox(builder):
+    stderr = 'E: Unable to locate package xorgxrdp'
+    (builder.fake / 'exec-status-deb').write_text(json.dumps(
+        {'return': {'exited': True, 'exitcode': 100, 'err-data': base64.b64encode(stderr.encode()).decode()}}))
+
+    result, _ = builder(spec=_spec(deb={'post_install_script': None}))
+
+    last, _ = _attributes(builder.fake)
+    assert result.returncode == 0, result.stderr
+    assert last['guest-deb'].rstrip() == f'failed:xrdp exited 100: {stderr}'
+    assert last['guest-win'] == 'ready'
 
 
 @needs_tools

@@ -3,6 +3,7 @@ import {AgogeImage} from "../../../../../services/Server/image.model";
 import {NestedHostSpec, NestedOsCatalogEntry} from "../../../../../services/Server/nested.model";
 import {HumanInteraction, Network} from "../../../../../services/Specification/specification.model";
 import {ServerMachineTypes} from "../../../../../services/Specification/specificationEdit.model";
+import {SecurityModes} from "../../../../../types/Guacamole";
 import {formatIpv4, parseCidr, parseIpv4} from "../../../ServerManagement/Forms/NestedImage/networkRules";
 
 export type NestedImage = AgogeImage & { nested: NestedHostSpec };
@@ -69,28 +70,44 @@ export const fillAliasIps = (
 };
 
 /**
- * Guacamole connections for a nested image's exposed guests, in guest order: a Windows guest gets RDP and a
- * Linux guest SSH, both on its alias slot with the guest's admin credentials. An exposed guest the catalog does
- * not know is never guessed at: it gets only its console, VNC to the console port on the parent. Guests that are
- * not exposed get nothing, so students reach them only from inside the lab. All are `display` so DisplayProxy
- * registers them with Guacamole.
+ * Guacamole connections for a nested image's exposed guests, in alias-slot order: a Windows guest gets RDP and a
+ * Linux guest SSH, both on its alias slot with the guest's admin credentials. The jumpbox (the first exposed
+ * Linux guest, in slot order) also gets RDP to the xrdp desktop the image builder installs on it. An exposed guest
+ * the catalog does not know is never guessed at: it gets only its console, VNC to the console port on the parent.
+ * Guests that are not exposed get nothing, so students reach them only from inside the lab. All are `display` so
+ * DisplayProxy registers them with Guacamole.
  */
-export const nestedConnections = (nested: NestedHostSpec, catalog: NestedOsCatalogEntry[]): HumanInteraction[] =>
-    nested.guests.flatMap((guest): HumanInteraction[] => {
-        const slot = nested.exposures.findIndex(([name]) => name === guest.name);
-        if (slot < 0) {
+export const nestedConnections = (nested: NestedHostSpec, catalog: NestedOsCatalogEntry[]): HumanInteraction[] => {
+    const familyOf = (name: string) => {
+        const osId = nested.guests.find(guest => guest.name === name)?.os_id;
+        return catalog.find(entry => entry.id === osId)?.family ?? null;
+    };
+    // Mirrors is_jumpbox in the nested builder
+    const jumpbox = nested.exposures.map(([name]) => name).find(name => familyOf(name) === 'linux');
+    // Slot order, so direct_connect_slot's first displayed SSH connection is the jumpbox's
+    const exposed = [...new Set(nested.exposures.map(([name]) => name))];
+    return exposed.flatMap((name): HumanInteraction[] => {
+        const guest = nested.guests.find(candidate => candidate.name === name);
+        if (!guest) {
             return [];
         }
-        const family = catalog.find(entry => entry.id === guest.os_id)?.family ?? null;
+        const slot = nested.exposures.findIndex(([exposure]) => exposure === name);
+        const family = familyOf(guest.name);
         if (family === 'windows' || family === 'linux') {
-            return [{
+            const connection = {
                 display: true,
-                protocol: family === 'windows' ? 'rdp' : 'ssh',
                 username: guest.admin_username,
                 password: guest.admin_password,
                 alias_index: slot,
                 nested_guest: guest.name,
-            }];
+            };
+            if (family === 'windows') {
+                return [{...connection, protocol: 'rdp'}];
+            }
+            // xrdp has no NLA, so the RDP connection negotiates TLS (ANY)
+            return guest.name === jumpbox
+                ? [{...connection, protocol: 'ssh'}, {...connection, protocol: 'rdp', security_mode: SecurityModes.ANY}]
+                : [{...connection, protocol: 'ssh'}];
         }
         const port = nested.console_ports[guest.name];
         if (port === undefined) {
@@ -104,6 +121,7 @@ export const nestedConnections = (nested: NestedHostSpec, catalog: NestedOsCatal
             nested_guest: guest.name,
         }];
     });
+};
 
 /**
  * The connections a student is shown for a server. When any is `display` (proxied through Guacamole), only those:

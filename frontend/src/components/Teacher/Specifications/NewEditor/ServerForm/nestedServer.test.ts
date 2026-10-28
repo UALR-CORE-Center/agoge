@@ -3,6 +3,7 @@ import {describe, expect, it, vi} from "vitest";
 import {NestedGuest, NestedHostSpec, NestedOsCatalogEntry} from "../../../../../services/Server/nested.model";
 import {missingImageGuests} from "../../../Ctf/CtfSpecEditor";
 import {
+    directConnection,
     fillAliasIps,
     mergeNestedConnections,
     nestedConnections,
@@ -71,7 +72,25 @@ describe('nestedConnections', () => {
         expect(nestedConnections(NESTED, CATALOG)).toEqual([
             {display: true, protocol: 'rdp', username: 'dc-admin', password: 'dc-pw', alias_index: 0, nested_guest: 'dc'},
             {display: true, protocol: 'ssh', username: 'web-admin', password: 'web-pw', alias_index: 1, nested_guest: 'web'},
+            // web is the jumpbox, the first exposed Linux guest: its xrdp desktop too
+            {display: true, protocol: 'rdp', security_mode: 'any', username: 'web-admin', password: 'web-pw',
+                alias_index: 1, nested_guest: 'web'},
         ]);
+    });
+
+    it('gives only the first exposed Linux guest the jumpbox RDP', () => {
+        const twoLinux = {...NESTED, guests: [...NESTED.guests, guest('app', 'ubuntu-24.04')],
+            exposures: [['dc', 0], ['web', 0], ['app', 0]]} as unknown as NestedHostSpec;
+        const rdp = nestedConnections(twoLinux, CATALOG).filter(connection => connection.protocol === 'rdp');
+        expect(rdp.map(connection => connection.nested_guest)).toEqual(['dc', 'web']);
+    });
+
+    it('lists connections in slot order, so the jumpbox\'s SSH comes first even when guests are listed otherwise', () => {
+        const reversed = {...NESTED, exposures: [['web', 0], ['dc', 0]]} as unknown as NestedHostSpec;
+        const generated = nestedConnections(reversed, CATALOG);
+        expect(generated.map(connection => [connection.nested_guest, connection.protocol, connection.alias_index]))
+            .toEqual([['web', 'ssh', 0], ['web', 'rdp', 0], ['dc', 'rdp', 1]]);
+        expect(directConnection(generated)?.nested_guest).toBe('web');
     });
 
     it('falls back to the console when the catalog does not know an exposed guest', () => {

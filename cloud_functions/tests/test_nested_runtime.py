@@ -42,7 +42,11 @@ FAKE_CURL = textwrap.dedent("""\
     #!/bin/bash
     echo "curl $*" >> "$FAKE_LOG"
     [ -f "$FAKE_ALIASES" ] || exit 22
-    cat "$FAKE_ALIASES"
+    # As GCE answers: the directory lists entry indices, and recursive=true returns the values as JSON
+    case "$*" in
+      *recursive=true*) jq -cR '[., inputs | select(length > 0)]' "$FAKE_ALIASES" ;;
+      *) awk 'NF { print NR - 1 }' "$FAKE_ALIASES" ;;
+    esac
 """)
 FAKE_IP = "#!/bin/bash\necho 'default via 10.1.0.1 dev ens4 proto dhcp src 10.1.0.5 metric 100'\n"
 FAKE_LOGGER = '#!/bin/bash\necho "$(basename "$0") $*" >> "$FAKE_LOG"\n'
@@ -66,7 +70,7 @@ HOST = {
     'exposures': [['web', 0], ['dc', 1], ['kali', 0]],
     'console_ports': {'kali': 5901},
 }
-# The metadata server's answer: one CIDR per line, in the instance's aliasIpRanges order.
+# The instance's alias CIDRs, one per line in aliasIpRanges order; FAKE_CURL serves them the way GCE does.
 ALIASES = '10.1.0.20/32\n10.1.0.21/32\n10.1.0.22/32\n'
 
 

@@ -110,6 +110,13 @@ is_exposed() {
   jq -e --arg g "$1" 'any((.exposures // [])[]; .[0] == $g)' "$MANIFEST" >/dev/null
 }
 
+# Whether guest $1 is the students' jumpbox: the first exposed Linux guest, in alias-slot order. The template
+# editor's nestedConnections and direct_connect_slot pick the same guest.
+is_jumpbox() {
+  jq -e --arg g "$1" '(.guests | map({key: .name, value: .catalog.family}) | from_entries) as $family
+    | [(.exposures // [])[] | .[0] | select($family[.] == "linux")][0] == $g' "$MANIFEST" >/dev/null
+}
+
 secret_value() {
   jq -r --arg g "$1" --arg k "$2" '.[$g][$k] // empty' "$SECRETS"
 }
@@ -930,7 +937,7 @@ install_manual_iso() {
 
 # Runs guest $1's post_install_script through guest-exec, with the script as input-data.
 post_install() {
-  local guest=$1 request pid status tries exited code stderr
+  local guest=$1 request
   request=$(jq -c --arg g "$guest" '
     .guests[] | select(.name == $g)
     | (if .catalog.family == "windows"
@@ -938,9 +945,70 @@ post_install() {
        else {path: "/bin/bash", arg: ["-s"]} end) as $shell
     | {execute: "guest-exec",
        arguments: ($shell + {"input-data": (.post_install_script | @base64), "capture-output": true})}' "$MANIFEST")
+  guest_exec "$guest" "$request" post-install
+}
+
+# The jumpbox's xrdp setup, run as root through guest-exec with the admin username as $1. A guest with no X
+# session gets a minimal Xfce, since xrdp alone shows a black screen.
+xrdp_script() {
+  cat <<'AGOGE_XRDP_SCRIPT'
+set -eu
+user=$1
+has_desktop() { ls /usr/share/xsessions/*.desktop >/dev/null 2>&1; }
+added_desktop=false
+if command -v apt-get >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  # A guest just booted may still hold the dpkg lock (unattended-upgrades)
+  lock='-o DPkg::Lock::Timeout=300'
+  apt-get $lock update -q
+  if ! has_desktop; then
+    apt-get $lock install -y -q --no-install-recommends xfce4 xfce4-terminal dbus-x11 xorg
+    added_desktop=true
+  fi
+  apt-get $lock install -y -q xrdp xorgxrdp
+  # Debian's xrdp reads its TLS key from the ssl-cert group's snakeoil pair.
+  if getent group ssl-cert >/dev/null; then usermod -aG ssl-cert xrdp; fi
+elif command -v dnf >/dev/null 2>&1; then
+  if grep -Eqi '^ID(_LIKE)?=.*(rhel|centos)' /etc/os-release; then dnf install -y -q epel-release; fi
+  if ! has_desktop; then
+    dnf install -y -q xfce4-session xfwm4 xfdesktop xfce4-panel xfce4-terminal xorg-x11-server-Xorg dbus-x11
+    added_desktop=true
+  fi
+  dnf install -y -q xrdp xorgxrdp
+elif command -v zypper >/dev/null 2>&1; then
+  if ! has_desktop; then
+    zypper -n -q install -t pattern xfce
+    added_desktop=true
+  fi
+  zypper -n -q install xrdp xorgxrdp
+else
+  echo "no supported package manager (apt-get, dnf, zypper) for xrdp" >&2
+  exit 1
+fi
+if [ "$added_desktop" = true ]; then
+  home=$(getent passwd "$user" | cut -d: -f6)
+  echo startxfce4 > "$home/.xsession"
+  chown "$user": "$home/.xsession"
+fi
+systemctl enable --now xrdp
+AGOGE_XRDP_SCRIPT
+}
+
+# Installs xrdp on the jumpbox guest $1, so students get a desktop over RDP as well as SSH.
+install_xrdp() {
+  local guest=$1 request
+  request=$(xrdp_script | jq -Rsc --arg user "$(guest_value "$guest" .admin_username)" '
+    {execute: "guest-exec",
+     arguments: {path: "/bin/bash", arg: ["-s", $user], "input-data": @base64, "capture-output": true}}')
+  guest_exec "$guest" "$request" xrdp
+}
+
+# Runs the guest-exec request $2 on guest $1 and waits for it; $3 names it in FAIL_MESSAGE.
+guest_exec() {
+  local guest=$1 request=$2 label=$3 pid status tries exited code stderr
   pid=$(virsh qemu-agent-command "$guest" --timeout 60 "$request" 2>/dev/null | jq -r '.return.pid // empty')
   if [ -z "$pid" ]; then
-    FAIL_MESSAGE="guest-exec did not start the post-install script"
+    FAIL_MESSAGE="guest-exec did not start the $label script"
     return 1
   fi
   for ((tries = 0; tries < POST_INSTALL_MINUTES * 12; tries++)); do
@@ -951,12 +1019,12 @@ post_install() {
       code=$(echo "$status" | jq -r '.return.exitcode // 0')
       [ "$code" = "0" ] && return 0
       stderr=$(echo "$status" | jq -r '.return["err-data"] // "" | @base64d' | tr '\r\n' '  ')
-      FAIL_MESSAGE="post-install exited $code: ${stderr:0:150}"
+      FAIL_MESSAGE="$label exited $code: ${stderr:0:150}"
       return 1
     fi
     sleep 5
   done
-  FAIL_MESSAGE="post-install did not finish within $POST_INSTALL_MINUTES minutes"
+  FAIL_MESSAGE="$label did not finish within $POST_INSTALL_MINUTES minutes"
   return 1
 }
 
@@ -1059,6 +1127,16 @@ build_guest() {
     set_guest_status "$guest" post_install
     guest_step "$guest" "running $guest's post-install script"
     post_install "$guest" || { finish_guest "$guest" "failed:$FAIL_MESSAGE"; return; }
+  fi
+  if is_jumpbox "$guest"; then
+    if [ "$(guest_value "$guest" .catalog.agent)" != "true" ]; then
+      finish_guest "$guest" "failed:the jumpbox needs qemu-guest-agent to install xrdp"
+      return
+    fi
+    # The post-install, when there was one, already reported this status
+    [ -n "$(guest_value "$guest" .post_install_script)" ] || set_guest_status "$guest" post_install
+    guest_step "$guest" "installing xrdp on $guest, the students' jumpbox"
+    install_xrdp "$guest" || { finish_guest "$guest" "failed:$FAIL_MESSAGE"; return; }
   fi
   report_addresses "$guest"
   finish_guest "$guest" ready
