@@ -10,6 +10,7 @@ from google.api_core.exceptions import NotFound as GoogleNotFound
 from google.api_core.exceptions import BadRequest as GoogleBadRequest
 from google.api_core.exceptions import PreconditionFailed as GooglePreconditionFailed
 from googleapiclient.discovery import Resource
+from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from common.constants.google import ResourceType, OperationType
 from common.constants.build_constants import BuildConstants
@@ -28,6 +29,9 @@ class BaseComputeAPI:
 
     ALLOWED_GOOGLE_MACHINE_TYPES = ["n1", "n2", "e2"]
     GOOGLE_MACHINE_TYPES = BuildConstants.GoogleMachineTypes.ALL.value
+    # Idempotent actions that _send may resend after a dropped connection
+    READ_ACTIONS = frozenset({'get', 'list', 'get guest attributes'})
+    READ_RETRY_ATTEMPTS = 3
     SOURCE_IMAGE_PROJECT = "ualr-cybersecurity"
     INITIAL_TIMESTAMP = '2000-01-01T00:00:00.000'
     DEFAULT_MAX_SNAPSHOTS = 5
@@ -201,7 +205,7 @@ class BaseComputeAPI:
             **log_args
         )
         try:
-            operation = client_request(**kwargs)
+            operation = self._send(client_request, action, resource, log_args, **kwargs)
             if wait:
                 return self.wait_for_operation(operation.name, operation_type)
             return operation
@@ -241,6 +245,26 @@ class BaseComputeAPI:
             else:
                 self.logger.error(f"Error {action}: {e}", **log_args)
                 raise BaseAgogeException(str(e))
+
+    def _send(self, client_request: Any, action: str, resource: str, log_args: dict, **kwargs) -> Any:
+        """Send the request, resending a read whose connection dropped.
+
+        The REST transport pools HTTPS connections, and Google closes one left idle for a long wait (an image
+        insert can take half an hour), so the next call fails with SSLEOFError. urllib3 discards the broken
+        connection, so a resend opens a fresh one. Writes are never resent: the first may have been applied.
+        """
+        attempts = self.READ_RETRY_ATTEMPTS if action in self.READ_ACTIONS else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                return client_request(**kwargs)
+            except RequestsConnectionError as e:
+                if attempt == attempts:
+                    raise
+                self.logger.warning(
+                    f'{self.class_name}:{resource} - connection dropped on {action}; resending '
+                    f'(attempt {attempt + 1} of {attempts})',
+                    details=str(e), **log_args
+                )
 
     def wait_for_operation(
         self,
