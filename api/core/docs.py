@@ -14,11 +14,14 @@ from common.document_database.factory import DocumentDatabaseFactory
 from common.exceptions import NotFound, Unauthorized, BadRequest, AgogeValidationError
 from common.models.agoge import AgogeInstructionsModel
 from common.models.model_validators.model_validator import ModelValidator
+from common.models.users import AgogeUser
 from common.utilities.gcp.bucket_manager import BucketManager
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.id_generator import IdGenerator
 from common.utilities.timestamps import Timestamps
+
+from core.unit_access import UnitAccess
 
 
 class Docs:
@@ -42,7 +45,12 @@ class Docs:
         self,
         build_id: str,
         build_type: DbCollections = DbCollections.WORKOUT,
+        requester: Optional[AgogeUser] = None,
     ) -> dict:
+        """
+        Student instructions are public to anyone holding the Workout ID. Teacher
+        instructions require `requester` to be an instructor of the Unit.
+        """
         if build_type == DbCollections.WORKOUT:
             if build := self.db.get(collection_name=build_type, doc_id=build_id):
                 file_id = build['summary'].get('student_instructions_id')
@@ -54,6 +62,9 @@ class Docs:
             raise NotFound("No build found with matching ID")
         elif build_type == DbCollections.UNIT:
             if build := self.db.get(collection_name=build_type, doc_id=build_id):
+                if requester is None:
+                    raise Unauthorized(message="Teacher instructions require an instructor of the Unit")
+                UnitAccess.require_instructor(build, requester)
                 file_id = build['summary'].get('teacher_instructions_id')
                 if file_id and (instructions := self.db.get(collection_name=self.collection, doc_id=file_id)):
                     return instructions

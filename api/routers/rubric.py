@@ -35,7 +35,7 @@ def get_rubric(
     }
 
     try:
-        rubric = Rubric(env_dict=env_dict).get(build_id)
+        rubric = Rubric(env_dict=env_dict).get(build_id, requester=current_user)
         return AgogeResponse(data=rubric)
     except NotFound as e:
         logger.error(f"{route_name}:get_rubric - {e.message}", **log_args)
@@ -43,6 +43,9 @@ def get_rubric(
     except BadRequest as e:
         logger.error(f"{route_name}:get_rubric - {e.message}", **log_args)
         raise HTTPException(status_code=400)
+    except Unauthorized as e:
+        logger.warning(f"{route_name}:get_rubric - {e.message}", **log_args)
+        raise HTTPException(status_code=403, detail=e.message)
 
 
 @rubric_router.post("/generate/{build_id}/")
@@ -64,6 +67,7 @@ def generate_rubric(
         if rubric_params.get("confirm_ai_generation") is not True:
             raise BadRequest(message="AI rubric generation requires explicit confirmation that it uses OpenAI API credits.")
         unit = Unit(env_dict=env_dict).get(build_id, as_dict=True)
+        Unit._require_instructor_access(unit, current_user)
         if unit.get("rubric_support") is not True:
             raise Forbidden(message="Rubric generation is disabled for this lab. Its specification must explicitly enable rubric support.")
         rubric_params = {**rubric_params, "id": build_id}
@@ -74,7 +78,7 @@ def generate_rubric(
     except BadRequest as e:
         logger.error(e.message, **log_args)
         raise HTTPException(status_code=400, detail=e.message)
-    except Forbidden as e:
+    except (Forbidden, Unauthorized) as e:
         logger.warning(e.message, **log_args)
         raise HTTPException(status_code=403, detail=e.message)
     except NotFound as e:
@@ -107,7 +111,7 @@ async def update_rubric(
 
     try:
         logger.info(
-            f"PATCH request to update rubric with id {build_id} and current user {current_user}",
+            f"PATCH request to update rubric with id {build_id} from user {current_user.uid}",
             **log_args
         )
         await Rubric(env_dict=env_dict).update(
@@ -124,4 +128,4 @@ async def update_rubric(
         raise HTTPException(404, detail=e.message)
     except Unauthorized as e:
         logger.error(e.message, **log_args)
-        raise HTTPException(status_code=401, detail=e.message)
+        raise HTTPException(status_code=403, detail=e.message)

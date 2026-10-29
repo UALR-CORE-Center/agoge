@@ -22,6 +22,9 @@ from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.utilities.gcp.compute.image_ownership import is_shared_image
 from common.document_database.factory import DocumentDatabaseFactory
 from common.exceptions import BadRequest, NotFound, AgogeValidationError
+from common.models.users import AgogeUser
+
+from core.unit_access import UnitAccess
 
 
 class ComputeSnapshot:
@@ -45,6 +48,7 @@ class ComputeSnapshot:
             log_name=self.log_name
         )
         self.db_queries = DatabaseQueries(db=self.db)
+        self.access = UnitAccess(self.db)
         self.handler = PubSub.Handlers
         self.pubsub_keys = PubSub.EventAttributes
         self.logger = Logger(log_name=self.log_name, class_name=self.class_name)
@@ -53,8 +57,10 @@ class ComputeSnapshot:
 
     async def get(
         self,
-        server_name: str
+        server_name: str,
+        requester: AgogeUser
     ) -> SnapshotsModel:
+        self.access.server(server_name, requester)
         if snapshot := self.db.get(self.collection, doc_id=server_name):
             return self.agoge_model_validator.load(snapshot)
         return SnapshotsModel(
@@ -66,19 +72,23 @@ class ComputeSnapshot:
     async def list(
         self,
         build_id: str,
-        course_object: int
+        course_object: int,
+        requester: AgogeUser
     ) -> List[Union[SnapshotsModel, List[SnapshotsModel]]]:
         if not build_id or not course_object:
             raise BadRequest(message='Missing or invalid data for snapshot list request')
 
         if course_object == PubSub.CourseObjects.WORKOUT.value:
+            self.access.workout(build_id, requester)
             return self._get_workout_snapshots(build_id=build_id)
         elif course_object == PubSub.CourseObjects.UNIT.value:
+            self.access.unit(build_id, requester)
             workouts = self.db_queries.get_children(child_collection=DbCollections.WORKOUT, parent_id=build_id)
             if not workouts:
                 raise NotFound(message=f'No snapshots found for given UNIT')
             return [self._get_workout_snapshots(w['id']) for w in workouts]
         elif course_object == PubSub.CourseObjects.TEMPLATE_SERVER.value:
+            self.access.server(build_id, requester)
             if snapshot := self.db.get(self.collection, doc_id=build_id):
                 return [self.agoge_model_validator.load(snapshot)]
             return [SnapshotsModel(server_id=build_id, server_type=course_object, snapshots=[])]
@@ -87,7 +97,8 @@ class ComputeSnapshot:
 
     def process_action_on_list(
         self,
-        data: dict
+        data: dict,
+        requester: AgogeUser
     ) -> None:
         snapshot_items = data.get('items', [])
         course_object = data.get(self.pubsub_keys.COURSE_OBJECT)
@@ -104,6 +115,9 @@ class ComputeSnapshot:
         if action == PubSub.Actions.SNAPSHOT.value:
             msg_args[self.pubsub_keys.SNAPSHOT_TYPE] = str(SnapshotTypes.MANUAL)
             if course_object == PubSub.CourseObjects.WORKOUT.value:
+                # Check every item before publishing any, so a denied ID cannot leave a partial batch
+                for item in snapshot_items:
+                    self.access.workout(str(item), requester)
                 self.logger.info(
                     f'SNAPSHOT action called for WORKOUT list',
                     course_object=course_object,
@@ -115,6 +129,7 @@ class ComputeSnapshot:
                 return
             elif course_object == PubSub.CourseObjects.TEMPLATE_SERVER.value:
                 for item in snapshot_items:
+                    self.access.server(str(item), requester)
                     self._require_local_template(str(item))
                 self.logger.info(
                     f'SNAPSHOT action called for TEMPLATE_SERVER list',
@@ -130,7 +145,8 @@ class ComputeSnapshot:
     def process_server_action(
         self,
         server_name: str,
-        data: dict
+        data: dict,
+        requester: AgogeUser
     ) -> None:
         action = data.get(self.pubsub_keys.ACTION)
         course_object = data.get(self.pubsub_keys.COURSE_OBJECT)
@@ -152,6 +168,7 @@ class ComputeSnapshot:
 
         # Resolve ownership by stored server identity even when a caller supplies
         # a different course object; shared image changes use the warning flow.
+        self.access.server(server_name, requester)
         self._require_local_template(server_name)
 
         if action in [
@@ -184,7 +201,8 @@ class ComputeSnapshot:
                     if not parent_build_id:
                         raise BadRequest('Missing data for key parent_build_id')
                     else:
-                        workout = self.db.get(collection_name=DbCollections.WORKOUT, doc_id=parent_build_id)
+                        # The parent sets the snapshot's expiration, so it must belong to the requester too
+                        workout = self.access.workout(parent_build_id, requester)
                         expires = int(workout.get('expires')) + self.TWO_WEEKS_TS
                     msg_args[self.pubsub_keys.EXPIRES] = str(expires)
             elif action == PubSub.Actions.RESTORE.value:

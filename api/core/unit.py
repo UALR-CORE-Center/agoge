@@ -32,11 +32,16 @@ from common.services.wireguard_lab_spec import configure_kit_topology
 from common.services.wireguard_provisioning import WireGuardProvisioningService, resolve_remote_peer_id
 from common.utilities.timestamps import Timestamps
 
+from core.unit_access import UnitAccess
+
 from utilities.lms.lms_canvas import LMSSpecCanvas
 from utilities.lms.lms_google_classroom import LMSSpecGoogleClassroom, LMSGoogleClassroom
 
 
 class Unit:
+    # Matches the Extend By (days) input on the instructor's Unit page
+    MAX_EXTENSION_DAYS = 60
+
     def __init__(
         self,
         env_dict: dict,
@@ -133,7 +138,7 @@ class Unit:
         unit = self.get(build_id)
         self._require_instructor_access(unit, requester)
         try:
-            workouts = self.list_workouts(build_id)
+            workouts = self._list_workouts(build_id)
         except NotFound:
             workouts = []
         roster = self.get_unit_roster_size(children=workouts)
@@ -142,19 +147,7 @@ class Unit:
     @staticmethod
     def _require_instructor_access(unit: UnitModel | dict, requester: AgogeUser) -> None:
         """Limit instructor-only Unit details to assigned instructors and admins."""
-        if requester.is_admin:
-            return
-        instructor_ids = (
-            unit.get('instructor_id', [])
-            if isinstance(unit, dict)
-            else unit.instructor_id
-        )
-        if isinstance(instructor_ids, str):
-            instructor_ids = [instructor_ids]
-        if requester.email not in (instructor_ids or []):
-            raise Unauthorized(
-                message="Requesting user is not authorized to view this Unit"
-            )
+        UnitAccess.require_instructor(unit, requester)
 
     def list(
         self,
@@ -357,18 +350,21 @@ class Unit:
 
     def build_all(
         self,
-        build_id: str
+        build_id: str,
+        requester: AgogeUser
     ) -> None:
         """
         Processes requests to build all Workouts in a Unit.
 
         Args:
             build_id (str): ID of unit to initiate build requests for
+            requester (AgogeUser): user requesting the builds
 
         Returns: None
-        Raises: NotFound
+        Raises: NotFound, Unauthorized
         """
-        workouts = self.list_workouts(build_id)
+        UnitAccess(self.db).unit(build_id, requester)
+        workouts = self._list_workouts(build_id)
         for workout in workouts:
             workout_id = workout.id
             if workout.state == WorkoutStates.NOT_BUILT.value:
@@ -406,22 +402,32 @@ class Unit:
     async def process_action(
         self,
         build_id: str,
-        request: Request
+        request: Request,
+        requester: AgogeUser
     ) -> None:
         """
         Processes PubSub actions on target Unit
         Args:
             request (Request):
             build_id (str): ID of Unit to interact with
+            requester (AgogeUser): user requesting the action
 
         Returns:
-        Raises: BadRequest
+        Raises: BadRequest, NotFound, Unauthorized
         """
+        UnitAccess(self.db).unit(build_id, requester)
         json_data = await request.json()
-        action = json_data.get('action', 0)
+        try:
+            action = int(json_data.get('action', 0))
+        except (TypeError, ValueError):
+            raise BadRequest("Invalid or unsupported action for Unit")
         workout_ids = json_data.get("workout_ids")
-        if int(action) == PubSub.Actions.RESET_EXPIRATION.value:
+        if action == PubSub.Actions.RESET_EXPIRATION.value:
             days = json_data.get('days', 2)
+            # bool is an int subclass; reject it along with floats and strings
+            if (isinstance(days, bool) or not isinstance(days, int)
+                    or not 1 <= days <= self.MAX_EXTENSION_DAYS):
+                raise BadRequest(f"days must be a whole number from 1 to {self.MAX_EXTENSION_DAYS}")
             self._reset_expiration(build_id=build_id, days=days)
         elif int(action) in [
             PubSub.Actions.START.value,
@@ -439,7 +445,7 @@ class Unit:
                 PubSub.EventAttributes.COURSE_OBJECT: str(PubSub.CourseObjects.WORKOUT.value)
             }
             if workout_ids:
-                unit_workouts = self.list_workouts(build_id)
+                unit_workouts = self._list_workouts(build_id)
                 self.logger.info(
                     f'sending {PubSub.Actions(int(action)).name} request for unit workouts list',
                     action=action,
@@ -605,6 +611,14 @@ class Unit:
         return 0
 
     def list_workouts(
+        self,
+        build_id: str,
+        requester: AgogeUser
+    ) -> List[WorkoutModel]:
+        UnitAccess(self.db).unit(build_id, requester)
+        return self._list_workouts(build_id)
+
+    def _list_workouts(
         self,
         build_id: str
     ) -> List[WorkoutModel]:

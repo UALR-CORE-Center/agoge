@@ -171,7 +171,7 @@ async def get_unit_workouts(
     }
 
     try:
-        unit_workouts = Unit(env_dict=env_dict).list_workouts(build_id)
+        unit_workouts = Unit(env_dict=env_dict).list_workouts(build_id, requester=current_user)
         return AgogeResponse(data={'items': unit_workouts})
     except BadRequest as e:
         logger.error(e.message, **log_args)
@@ -179,6 +179,9 @@ async def get_unit_workouts(
     except NotFound as e:
         logger.error(e.message, **log_args)
         raise HTTPException(status_code=404)
+    except Unauthorized as e:
+        logger.error(e.message, **log_args)
+        raise HTTPException(status_code=403, detail=e.message)
 
 
 @unit_router.post("/{build_id}/")
@@ -199,7 +202,7 @@ async def build_all_workouts(
             f'POST request to build all workouts for unit {build_id} from user {current_user.uid}',
             **log_args
         )
-        Unit(env_dict=env_dict).build_all(build_id)
+        Unit(env_dict=env_dict).build_all(build_id, requester=current_user)
         return Response(status_code=200)
     except NotFound as e:
         logger.error(e.message, **log_args)
@@ -207,6 +210,9 @@ async def build_all_workouts(
     except BadRequest as e:
         logger.error(e.message, **log_args)
         raise HTTPException(status_code=400)
+    except Unauthorized as e:
+        logger.error(e.message, **log_args)
+        raise HTTPException(status_code=403, detail=e.message)
 
 
 @unit_router.put("/{build_id}/")
@@ -229,7 +235,8 @@ async def process_action(
         )
         await Unit(env_dict=env_dict).process_action(
             build_id=build_id,
-            request=request
+            request=request,
+            requester=current_user
         )
         return Response(status_code=200)
     except BadRequest as e:
@@ -238,6 +245,9 @@ async def process_action(
     except NotFound as e:
         logger.error(e.message, **log_args)
         raise HTTPException(404, detail=e.message)
+    except Unauthorized as e:
+        logger.error(e.message, **log_args)
+        raise HTTPException(status_code=403, detail=e.message)
 
 
 @unit_router.patch("/{build_id}/")

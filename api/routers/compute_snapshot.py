@@ -6,7 +6,7 @@ from fastapi import (
     Response
 )
 
-from common.exceptions import NotFound, BadRequest, AgogeValidationError
+from common.exceptions import NotFound, BadRequest, AgogeValidationError, Unauthorized
 from common.models.response import SnapshotListResponse, AgogeResponse, SnapshotResponse
 from common.models.users import AgogeUser
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
@@ -32,7 +32,7 @@ async def list_snapshots(
     }
     try:
         logger.debug(f'GET request initiated by {current_user.uid}', **log_args)
-        snapshots = await ComputeSnapshot(env_dict=env_dict).list(build_id, course_object)
+        snapshots = await ComputeSnapshot(env_dict=env_dict).list(build_id, course_object, requester=current_user)
         return AgogeResponse(data={'items': snapshots})
     except (BadRequest, AgogeValidationError) as e:
         logger.error(f'snapshot list request failed with reason: {e.message}', **log_args)
@@ -40,6 +40,9 @@ async def list_snapshots(
     except NotFound as e:
         logger.error(f'snapshot list request failed with reason: {e.message}', **log_args)
         raise HTTPException(status_code=404, detail=e.message)
+    except Unauthorized as e:
+        logger.warning(f'snapshot list request denied: {e.message}', **log_args)
+        raise HTTPException(status_code=403, detail=e.message)
 
 
 @compute_snapshot_router.get("/{server_name}/")
@@ -54,7 +57,7 @@ async def get_server_snapshots(
         'origin': request.client.host
     }
     try:
-        snapshots = await ComputeSnapshot(env_dict=env_dict).get(server_name)
+        snapshots = await ComputeSnapshot(env_dict=env_dict).get(server_name, requester=current_user)
         return AgogeResponse(data=snapshots)
     except (BadRequest, AgogeValidationError) as e:
         logger.error(f'snapshot get request failed with reason: {e.message}', **log_args)
@@ -62,6 +65,9 @@ async def get_server_snapshots(
     except NotFound as e:
         logger.error(f'snapshot get request failed with reason: {e.message}', **log_args)
         raise HTTPException(status_code=404, detail=e.message)
+    except Unauthorized as e:
+        logger.warning(f'snapshot get request denied: {e.message}', **log_args)
+        raise HTTPException(status_code=403, detail=e.message)
 
 
 @compute_snapshot_router.post("/")
@@ -78,11 +84,17 @@ async def process_snapshot_list_action(
     json_data = await request.json()
     try:
         logger.info(f'POST request initiated by {current_user.uid}', **log_args)
-        ComputeSnapshot(env_dict=env_dict).process_action_on_list(json_data)
+        ComputeSnapshot(env_dict=env_dict).process_action_on_list(json_data, requester=current_user)
         return Response(status_code=200)
     except BadRequest as e:
         logger.error(f'action on list failed with reason: {e.message}', **log_args)
         raise HTTPException(status_code=400, detail=e.message)
+    except NotFound as e:
+        logger.error(f'action on list failed with reason: {e.message}', **log_args)
+        raise HTTPException(status_code=404, detail=e.message)
+    except Unauthorized as e:
+        logger.warning(f'action on list denied: {e.message}', **log_args)
+        raise HTTPException(status_code=403, detail=e.message)
 
 
 @compute_snapshot_router.put("/{server_name}/")
@@ -105,6 +117,7 @@ async def process_snapshot_action(
             ComputeSnapshot(env_dict=env_dict).process_server_action(
                 data=json_data,
                 server_name=server_name,
+                requester=current_user,
             )
             return Response(status_code=200)
         except NotFound as e:
@@ -113,6 +126,9 @@ async def process_snapshot_action(
         except (BadRequest, AgogeValidationError) as e:
             logger.error(e.message, **log_args)
             raise HTTPException(status_code=400, detail=e.message)
+        except Unauthorized as e:
+            logger.warning(e.message, **log_args)
+            raise HTTPException(status_code=403, detail=e.message)
     else:
         error_msg = 'Invalid or missing data in request'
         logger.error(error_msg, **log_args)

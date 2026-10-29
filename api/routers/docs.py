@@ -44,19 +44,22 @@ async def get_student(
 async def get_teacher(
     build_id: str,
     env_dict: dict = Depends(get_cloud_env),
-    _: AgogeUser = Depends(teacher_required)
+    current_user: AgogeUser = Depends(teacher_required)
 ) -> AgogeResponse:
     try:
         resp = (
             await Docs(env_dict=env_dict)
             .get_instructions(
                 build_id=build_id,
-                build_type=DbCollections.UNIT
+                build_type=DbCollections.UNIT,
+                requester=current_user
             )
         )
         return AgogeResponse(data=resp)
     except BadRequest as e:
         raise HTTPException(400, detail=e.message)
+    except Unauthorized as e:
+        raise HTTPException(403, detail=e.message)
     except NotFound as e:
         raise HTTPException(404, detail=e.message)
 

@@ -9,13 +9,15 @@ from common.constants.database import (
     DATABASE_NAME
 )
 from common.document_database.factory import DocumentDatabaseFactory
-from common.exceptions import BadRequest, NotFound, Unauthorized, AgogeValidationError
+from common.exceptions import BadRequest, NotFound, AgogeValidationError
 from common.models.agoge import RubricModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.models.users import AgogeUser
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.pubsub_manager import PubSubManager
+
+from core.unit_access import UnitAccess
 
 
 class Rubric:
@@ -44,6 +46,16 @@ class Rubric:
         self.model_validator = ModelValidator(model=RubricModel)
 
     def get(
+        self,
+        build_id: str,
+        requester: AgogeUser,
+        as_dict: bool = False
+    ) -> Optional[Union[RubricModel, dict]]:
+        """A rubric shares its Unit's ID, so only that Unit's instructors may read it."""
+        UnitAccess(self.db).unit(build_id, requester)
+        return self._get(build_id, as_dict=as_dict)
+
+    def _get(
         self,
         build_id: str,
         as_dict: bool = False
@@ -75,16 +87,15 @@ class Rubric:
         Raises:
             BadRequest: Missing or Invalid Data
             NotFound: Invalid or missing build_id
-            Unauthorized: User is not an admin
+            Unauthorized: User is not an admin or an instructor of the rubric's Unit
         """
-        if not requester.is_authorized:
-            raise Unauthorized(message=f"User is not authorized to make this request. {requester.uid}")
+        UnitAccess(self.db).unit(build_id, requester)
 
         json_data = await request.json()
         if not json_data:
             raise BadRequest(message="Rubric update request made but no data was found")
 
-        rubric = self.get(build_id, as_dict=True)
+        rubric = self._get(build_id, as_dict=True)
         if not rubric:
             raise NotFound(message=f"Rubric with ID {build_id} not found")
 
@@ -92,7 +103,8 @@ class Rubric:
         self.logger.info(f'processing update for rubric with id {build_id}',
                          user=requester.uid, input_data=json_data)
         for key, value in json_data.items():
-            if key in rubric:
+            # The rubric ID is the Unit ID and must not be moved to another Unit
+            if key in rubric and key != 'build_id':
                 update = True
 
                 # Handle specific field updates if necessary
@@ -106,7 +118,11 @@ class Rubric:
 
         # Save updated entity back to datastore
         if update:
-            self.db.update(collection_name=self.collection, doc_id=build_id, data=rubric)
+            try:
+                validated = self.model_validator.load(data=rubric)
+            except (AgogeValidationError, ValidationError) as e:
+                raise BadRequest(message=f"Rubric update failed validation: {e}")
+            self.db.update(collection_name=self.collection, doc_id=build_id, data=validated.model_dump())
             return
 
         # Raise an error if no valid data was updated
