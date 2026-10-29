@@ -59,8 +59,9 @@ class CtfSetup:
             PubSub.Handlers.CONTROL, PubSub.Actions.START, False,
         ),
         # Never while RUNNING: stopping a team's VMs mid-exercise is a host reset, not setup.
+        # ARCHIVED is allowed so leftover VMs can still be shut down after the event is filed away.
         'stop': (
-            {S.DRAFT, S.ARMED, S.BROKEN, S.PAUSED, S.ENDED},
+            {S.DRAFT, S.ARMED, S.BROKEN, S.PAUSED, S.ENDED, S.ARCHIVED},
             PubSub.Handlers.CONTROL, PubSub.Actions.STOP, False,
         ),
     }

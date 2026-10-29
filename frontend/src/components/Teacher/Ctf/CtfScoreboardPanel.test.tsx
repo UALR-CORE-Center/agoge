@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import {ThemeProvider} from "@mui/material/styles";
-import {act, cleanup, render, screen, within} from "@testing-library/react";
+import {act, cleanup, fireEvent, render, screen, within} from "@testing-library/react";
 import React from "react";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {CtfScoreboardRow, CtfStates} from "../../../services/Ctf/ctf.model";
@@ -11,7 +11,7 @@ import HttpError from "../../Common/Errors/HttpError";
 import CtfScoreboardPanel, {SCOREBOARD_POLL_INTERVAL_MS} from "./CtfScoreboardPanel";
 
 vi.mock("../../../services/Ctf/ctf.service", () => ({
-    ctfService: {getScoreboard: vi.fn()},
+    ctfService: {getScoreboard: vi.fn(), adjustScore: vi.fn()},
 }));
 
 const CTF_ID = "eventevent";
@@ -150,5 +150,57 @@ describe("CtfScoreboardPanel", () => {
         await flush();
         expect(screen.queryByText("500: boom")).not.toBeInTheDocument();
         expect(teamOrder()).toEqual(["Red", "Blue", "Green", "Gold"]);
+    });
+
+    describe("Adjust score", () => {
+        const openDialog = async (team: string) => {
+            render(panel());
+            await flush();
+            fireEvent.click(screen.getByRole("button", {name: `Adjust score for ${team}`}));
+            return screen.getByRole("dialog", {name: `Adjust score for ${team}`});
+        };
+
+        it("sends the signed delta and trimmed reason for that board, then re-reads the scoreboard", async () => {
+            vi.mocked(ctfService.adjustScore).mockResolvedValue({workout_id: "boardbbbbb", score: 150});
+            const dialog = await openDialog("Blue");
+            fireEvent.change(within(dialog).getByLabelText(/^Points/), {target: {value: "-50"}});
+            fireEvent.change(within(dialog).getByLabelText(/^Reason/), {target: {value: "  late start  "}});
+            fireEvent.click(within(dialog).getByRole("button", {name: "Adjust"}));
+            await flush();
+
+            expect(ctfService.adjustScore).toHaveBeenCalledWith(CTF_ID, "boardbbbbb", {delta: -50, reason: "late start"});
+            expect(ctfService.getScoreboard).toHaveBeenCalledTimes(2);
+            expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+        });
+
+        it("needs a non-zero delta within +/-10000 and a reason", async () => {
+            const dialog = await openDialog("Red");
+            const submit = within(dialog).getByRole("button", {name: "Adjust"});
+            expect(submit).toBeDisabled();
+            fireEvent.change(within(dialog).getByLabelText(/^Reason/), {target: {value: "bonus"}});
+            expect(submit).toBeDisabled();
+            fireEvent.change(within(dialog).getByLabelText(/^Points/), {target: {value: "10001"}});
+            expect(submit).toBeDisabled();
+            fireEvent.change(within(dialog).getByLabelText(/^Points/), {target: {value: "25"}});
+            expect(submit).toBeEnabled();
+        });
+
+        it("keeps the dialog open with the API error when the adjustment is refused", async () => {
+            vi.mocked(ctfService.adjustScore).mockRejectedValue(new HttpError(400, "The reason must not contain a flag value."));
+            vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const dialog = await openDialog("Red");
+            fireEvent.change(within(dialog).getByLabelText(/^Points/), {target: {value: "10"}});
+            fireEvent.change(within(dialog).getByLabelText(/^Reason/), {target: {value: "agoge{x}"}});
+            fireEvent.click(within(dialog).getByRole("button", {name: "Adjust"}));
+            await flush();
+
+            expect(within(dialog).getByText("400: The reason must not contain a flag value.")).toBeInTheDocument();
+        });
+
+        it("disables Adjust on an archived event", async () => {
+            render(panel({state: CtfStates.ARCHIVED}));
+            await flush();
+            expect(screen.getByRole("button", {name: "Adjust score for Red"})).toBeDisabled();
+        });
     });
 });

@@ -205,6 +205,17 @@ def test_flags_returns_one_row_per_spec_flag_including_decoys(db):
     ]
 
 
+def test_flags_rows_name_the_nested_guest_holding_the_flag(db):
+    seed(db)
+    spec = db.collection(DbCollections.CTF)[CTF_ID]["spec"]
+    spec["nested_guests"] = [{"name": "deb", "server": "web", "domain": "debian", "operating_system": "linux"}]
+    spec["flags"] = [{**FLAGS[0], "guest": "deb"}, FLAGS[1]]
+
+    rows = ctf(db).flags(CTF_ID, user())
+
+    assert [(r.flag_id, r.server, r.guest) for r in rows] == [("web1", "web", "deb"), ("dc-decoy", "dc", None)]
+
+
 def test_flags_rows_carry_each_boards_plant_status(db):
     seed(db)
     db.collection(DbCollections.CTF_BOARD)[f"{CTF_ID}-{WB}"]["flags"][0]["solved"] = True

@@ -116,6 +116,15 @@ describe("ScoreboardSettings", () => {
         expect(screen.getByText("Choose a time in the future.")).toBeInTheDocument();
     });
 
+    it("does not flag the stored end time of an ended event as an error", () => {
+        const endedAt = new Date(2026, 9, 16, 9, 0, 0).getTime() / 1000;
+        renderSettings(baseEvent({state: CtfStates.ENDED, ends_at: endedAt}));
+
+        expect(endsInput()).toHaveValue("10/16/2026 09:00 AM");
+        expect(screen.queryByText("Choose a time in the future.")).not.toBeInTheDocument();
+        expect(saveEnd()).toBeDisabled();
+    });
+
     it("shows the stored end time, keeps Save disabled until it changes, and clears it with null", async () => {
         vi.mocked(ctfService.update).mockResolvedValue({} as never);
         const endsAt = new Date(2026, 9, 16, 18, 0, 0).getTime() / 1000;

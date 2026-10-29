@@ -6,6 +6,7 @@ from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.utilities.nested_build_monitor import NestedBuildMonitor
 from ..course_objects.workout.factory_workout import WorkoutFactory
 from ..lms.lms_synchronizer_factory import LMSSynchronizerFactory
+from .ctf_boards import live_ctf_workout_ids
 
 
 class QuarterHourlyMaintenance:
@@ -31,8 +32,12 @@ class QuarterHourlyMaintenance:
 
     def _stop_lapsed(self) -> None:
         workouts = self.db_queries.get_ready_for_shutoff(collection_name=DbCollections.WORKOUT)
+        # A CTF board's run timer must not stop it mid-event; the overnight stop exempts it the same way.
+        ctf_workout_ids = live_ctf_workout_ids(self.db) if workouts else set()
         for workout in workouts:
             workout_id = workout['id']
+            if workout_id in ctf_workout_ids:
+                continue
             if self.debug:
                 workout_obj = WorkoutFactory.create_workout_object(workout_id=workout_id, env_dict=self.env_dict)
                 workout_obj.stop()

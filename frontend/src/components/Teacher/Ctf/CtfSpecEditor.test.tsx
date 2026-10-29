@@ -6,7 +6,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {CtfEvent, CtfFlagSpec, CtfSpec, CtfStates} from "../../../services/Ctf/ctf.model";
 import {ctfService} from "../../../services/Ctf/ctf.service";
 import HttpError from "../../Common/Errors/HttpError";
-import CtfSpecEditor, {blankFlag, flagProblems, SPEC_EDIT_STATES, STANDARD_CATEGORIES} from "./CtfSpecEditor";
+import CtfSpecEditor, {blankFlag, flagNotices, flagProblems, IntegerField, SPEC_EDIT_STATES, STANDARD_CATEGORIES} from "./CtfSpecEditor";
 
 vi.mock("../../../services/Ctf/ctf.service", () => ({
     ctfService: {updateSpec: vi.fn()},
@@ -397,5 +397,56 @@ describe("flagProblems Windows user", () => {
         expect(flagProblems({...base, windows_access: "user", windows_user: "bad name!"}, [])[0]).toMatch(/^Windows user/);
         expect(flagProblems({...base, windows_access: "user", windows_user: "student"}, [])).toEqual([]);
         expect(flagProblems({...base, windows_access: "everyone"}, [])).toEqual([]);
+    });
+});
+
+describe("IntegerField", () => {
+    afterEach(cleanup);
+
+    it("keeps an empty box while typing a negative number instead of snapping it to 0", () => {
+        const onChange = vi.fn();
+        const Points = () => {
+            const [value, setValue] = React.useState(100);
+            return <IntegerField label="Points" value={value} onChange={(next) => { onChange(next); setValue(next); }} />;
+        };
+        render(<Points />);
+        const input = screen.getByLabelText("Points");
+
+        // A number input reports a lone '-' as ''
+        fireEvent.change(input, {target: {value: ""}});
+        expect(input).toHaveValue(null);
+        expect(onChange).not.toHaveBeenCalled();
+
+        fireEvent.change(input, {target: {value: "-50"}});
+        expect(input).toHaveValue(-50);
+        expect(onChange).toHaveBeenLastCalledWith(-50);
+    });
+
+    it("shows a value the parent changed, such as a clamp", () => {
+        const Clamped = () => {
+            const [value, setValue] = React.useState(10);
+            return <IntegerField label="Hint cost" value={value} onChange={(next) => setValue(Math.max(0, next))} />;
+        };
+        render(<Clamped />);
+        const input = screen.getByLabelText("Hint cost");
+
+        fireEvent.change(input, {target: {value: "-5"}});
+        expect(input).toHaveValue(0);
+    });
+});
+
+describe("flagNotices", () => {
+    it("warns about Linux file flags in directories cleared on reboot, without blocking", () => {
+        for (const path of ["/tmp/decoy.txt", "/run/flag", "/var/run/x", "/dev/shm/f"]) {
+            expect(flagNotices(flag({path}))[0]).toMatch(/cleared when the host reboots/);
+            expect(flagProblems(flag({path}), [])).toEqual([]);
+        }
+    });
+
+    it("says nothing for persistent paths, env flags and Windows files", () => {
+        expect(flagNotices(flag({path: "/var/tmp/flag.txt"}))).toEqual([]);
+        expect(flagNotices(flag({path: "/root/tmp/flag.txt"}))).toEqual([]);
+        expect(flagNotices(flag({location_type: "env", path: "AGOGE_FLAG"}))).toEqual([]);
+        expect(flagNotices(flag({operating_system: "windows", path: "C:\\tmp\\flag.txt"}))).toEqual([]);
     });
 });

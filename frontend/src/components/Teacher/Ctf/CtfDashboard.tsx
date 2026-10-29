@@ -9,6 +9,7 @@ import HttpError from "../../Common/Errors/HttpError";
 import CtfEventControl from "./CtfEventControl";
 import CtfEventLogPanel from "./CtfEventLogPanel";
 import CtfFlagsPanel from "./CtfFlagsPanel";
+import CtfGuideDialog from "./CtfGuideDialog";
 import CtfHostsPanel from "./CtfHostsPanel";
 import CtfScoreboardPanel from "./CtfScoreboardPanel";
 import CtfSetupPanel from "./CtfSetupPanel";
@@ -107,9 +108,12 @@ const CtfDashboard: React.FC = () => {
                     <Skeleton variant="rectangular" width="100%" height={150} animation="wave" />
                 ) : (
                     <Paper elevation={2} component="section" aria-labelledby="ctf-event-control-heading" sx={{width: '100%', p: 2}}>
-                        <Typography id="ctf-event-control-heading" variant="h6" component="h1" sx={{mb: 1}}>
-                            Event Control
-                        </Typography>
+                        <Box sx={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1}}>
+                            <Typography id="ctf-event-control-heading" variant="h6" component="h1">
+                                Event Control
+                            </Typography>
+                            <CtfGuideDialog />
+                        </Box>
                         <CtfStateChip state={event.state} />
                         <RemainingTime event={event} />
                         <CtfEventControl

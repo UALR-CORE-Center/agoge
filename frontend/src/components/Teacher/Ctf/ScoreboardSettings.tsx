@@ -67,8 +67,9 @@ const ScoreboardSettings: React.FC<ScoreboardSettingsProps> = ({ctfId, event, on
 
     const draftValid = endsDraft !== null && !Number.isNaN(endsDraft.getTime());
     // An end time already in the past would stop a running clock at once; End is the action for that.
-    const draftInPast = draftValid && endsDraft.getTime() <= Date.now();
     const draftUnchanged = draftValid && event.ends_at !== null && toSeconds(endsDraft) === Math.floor(event.ends_at);
+    // The saved end time of an ended event is in the past by design; only a time the game master picked is an error.
+    const draftInPast = draftValid && !draftUnchanged && endsDraft.getTime() <= Date.now();
     const canSaveEnd = draftValid && !draftInPast && !draftUnchanged;
 
     const handleSaveEnd = () => {

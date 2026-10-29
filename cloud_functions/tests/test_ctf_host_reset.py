@@ -174,6 +174,74 @@ def test_replant_plants_only_the_named_server(factory, plant):
     factory.create_manager_object.assert_not_called()
 
 
+def _arm(board, arm_status, arm_error=None, failed=()):
+    """A board dict with the given arm outcome; flag ids in `failed` are left failed."""
+    board = {**board, 'arm_status': arm_status, 'arm_error': arm_error}
+    board['flags'] = [{**f, 'plant_status': 'failed', 'plant_error': 'boom', 'planted_at': None}
+                      if f['flag_id'] in failed else f for f in board['flags']]
+    return board
+
+
+def _arm_writes(db):
+    return [w for w in db.writes if 'arm_status' in w[2]]
+
+
+@pytest.mark.parametrize("stored_status, stored_error", [
+    ('failed', 'No flags planted: boom'), ('armed', '1 of 3 flags failed to plant'),
+])
+def test_replant_that_plants_every_flag_clears_a_stale_arm_failure(factory, plant, stored_status, stored_error):
+    stored = _arm(_board(BOARD_A, WORKOUT_A), stored_status, stored_error, failed={'web-user'})
+    db = FakeDb(board_a=stored)
+    plant.return_value = CtfBoardModel(**_board(BOARD_A, WORKOUT_A))
+
+    _reset(db, 'replant')
+
+    assert _arm_writes(db) == [
+        (DbCollections.CTF_BOARD.value, BOARD_A, {'arm_status': 'armed', 'arm_error': None}),
+    ]
+
+
+def test_replant_that_plants_some_flags_reports_the_remaining_failures(factory, plant):
+    db = FakeDb(board_a=_arm(_board(BOARD_A, WORKOUT_A), 'failed', 'No flags planted: boom',
+                             failed={'web-user', 'db-root', 'web-root'}))
+    plant.return_value = CtfBoardModel(**_arm(_board(BOARD_A, WORKOUT_A), 'failed', failed={'db-root'}))
+
+    _reset(db, 'replant')
+
+    assert _arm_writes(db) == [
+        (DbCollections.CTF_BOARD.value, BOARD_A, {'arm_status': 'armed', 'arm_error': '1 of 3 flags failed to plant'}),
+    ]
+
+
+def test_replant_that_plants_nothing_leaves_the_arm_status_alone(factory, plant):
+    failed = {'web-user', 'db-root', 'web-root'}
+    db = FakeDb(board_a=_arm(_board(BOARD_A, WORKOUT_A), 'armed', failed=failed))
+    plant.return_value = CtfBoardModel(**_arm(_board(BOARD_A, WORKOUT_A), 'armed', failed=failed))
+
+    _reset(db, 'replant')
+
+    assert _arm_writes(db) == []
+
+
+@pytest.mark.parametrize("stored_status", ['pending', 'arming'])
+def test_replant_never_overrides_an_arm_still_in_progress(factory, plant, stored_status):
+    db = FakeDb(board_a=_arm(_board(BOARD_A, WORKOUT_A), stored_status))
+    plant.return_value = CtfBoardModel(**_board(BOARD_A, WORKOUT_A))
+
+    _reset(db, 'replant')
+
+    assert _arm_writes(db) == []
+
+
+def test_replant_of_an_already_clean_board_writes_no_arm_status(factory, plant):
+    db = FakeDb(board_a=_arm(_board(BOARD_A, WORKOUT_A), 'armed'))
+    plant.return_value = CtfBoardModel(**_board(BOARD_A, WORKOUT_A))
+
+    _reset(db, 'replant')
+
+    assert _arm_writes(db) == []
+
+
 # ---- restart (G6) ----
 
 def test_restart_stops_then_starts_the_board_instance(factory, plant):

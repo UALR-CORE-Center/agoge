@@ -255,6 +255,19 @@ def test_guest_replant_plants_only_that_guests_flags(factory):
     assert db.flag('host-root')['planted_at'] == 5.0 and db.flag('dc-file')['planted_at'] == 5.0
 
 
+def test_guest_replant_that_fixes_the_last_failed_flag_clears_the_arm_failure(factory):
+    db = FakeDb()
+    board = db.docs[(DbCollections.CTF_BOARD, BOARD_A)]
+    board['arm_status'], board['arm_error'] = 'armed', '1 of 4 flags failed to plant'
+    db.flag('web-user').update(plant_status='failed', plant_error='web: no watcher', planted_at=None)
+    _compute()
+
+    _reset(db, 'replant', 'web')
+
+    stored = db.docs[(DbCollections.CTF_BOARD, BOARD_A)]
+    assert (stored['arm_status'], stored['arm_error']) == ('armed', None)
+
+
 # ---- rebuild ----
 
 def test_guest_rebuild_reverts_then_plants_in_one_payload(factory):

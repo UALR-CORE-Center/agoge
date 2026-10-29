@@ -195,6 +195,8 @@ export interface CtfFlagBoardStatus {
 export interface CtfFlagRow {
     flag_id: string;
     server: string;
+    // The nested guest holding the flag; null (or absent from older APIs) for the server itself.
+    guest?: string | null;
     slot: number;
     category: string | null;
     location_type: LocationType;

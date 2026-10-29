@@ -5,7 +5,6 @@ from common.utilities.gcp.cloud_logger import LoggerNames
 from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.constants.pub_sub import PubSub
 from common.constants.database import DbCollections, DbOperators, DATABASE_NAME, DatabaseTypes
-from common.constants.states import CtfStates
 from common.models.agoge import UnitModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.nested_build_monitor import ACTIVE_PHASES as NESTED_ACTIVE_PHASES, is_active_nested_build
@@ -17,12 +16,12 @@ from ..course_objects.compute.google_image_sync_manager import GoogleImageSyncMa
 from ..course_objects.compute.project_server_manager import ProjectServerManager
 from ..course_objects.compute.factory import ComputeManagerFactory
 from ..send_mail.send_mail import SendMail
+from .ctf_boards import CTF_KEEP_RUNNING_STATES, live_ctf_workout_ids
 
 
 class DailyMaintenance:
-    # A board in one of these event states must stay up overnight: the game master
-    # has armed it or the clock is running, and a stop would break the plant.
-    CTF_KEEP_RUNNING_STATES = (CtfStates.ARMING, CtfStates.ARMED, CtfStates.RUNNING, CtfStates.PAUSED)
+    # A board in one of these event states must stay up overnight (ctf_boards.CTF_KEEP_RUNNING_STATES).
+    CTF_KEEP_RUNNING_STATES = CTF_KEEP_RUNNING_STATES
 
     def __init__(
         self,
@@ -102,18 +101,7 @@ class DailyMaintenance:
 
     def _ctf_workout_ids(self) -> set:
         """Workout ids of the active boards in every event that is armed or in play"""
-        events = self.db.query(
-            collection_name=DbCollections.CTF,
-            filters=[('state', DbOperators.IN, [state.value for state in self.CTF_KEEP_RUNNING_STATES])]
-        )
-        workout_ids = set()
-        for event in events:
-            boards = self.db.query(
-                collection_name=DbCollections.CTF_BOARD,
-                filters=[('ctf_id', DbOperators.EQUAL, event['id']), ('active', DbOperators.EQUAL, True)]
-            )
-            workout_ids.update(board['workout_id'] for board in boards)
-        return workout_ids
+        return live_ctf_workout_ids(self.db)
 
     def _notify_expiring_units(self):
         """

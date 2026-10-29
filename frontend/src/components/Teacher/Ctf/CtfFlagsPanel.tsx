@@ -138,6 +138,7 @@ const CtfFlagsPanel: React.FC<CtfFlagsPanelProps> = ({ctfId, state, active}) => 
     const columns: GridColDef<CtfFlagRow>[] = [
         {field: 'flag_id', headerName: 'Flag', width: 140, minWidth: 110},
         {field: 'server', headerName: 'Server', width: 140, minWidth: 110},
+        {field: 'guest', headerName: 'Guest', width: 110, minWidth: 90, valueGetter: (_value, row) => row.guest ?? ''},
         {field: 'slot', headerName: 'Slot', type: 'number', width: 70, minWidth: 60},
         {field: 'points', headerName: 'Points', type: 'number', width: 80, minWidth: 70},
         {
@@ -227,7 +228,8 @@ const CtfFlagsPanel: React.FC<CtfFlagsPanelProps> = ({ctfId, state, active}) => 
                 title={targets.length > 1 ? `Replant ${targets.length} servers` : `Replant ${targets[0] ?? ''}`}
                 message={
                     `Plant every flag on ${targets.join(', ') || 'this server'} again, on every board. ` +
-                    `Each copy of ${targets.length > 1 ? 'these servers' : 'the server'} restarts; the flag values stay the same.`
+                    // A nested lab host's plant watcher plants without a restart (FlagPlanter); other servers restart.
+                    `A server restarts to plant, except a nested lab host, which keeps running. The flag values stay the same.`
                 }
                 confirmLabel="Replant"
                 onConfirm={handleConfirm}

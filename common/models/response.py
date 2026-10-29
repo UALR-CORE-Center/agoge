@@ -232,6 +232,7 @@ class CtfFlagBoardStatus(BaseModel):
 class CtfFlagRow(BaseModel):               # GET /ctf/{id}/flags/ items
     flag_id: str
     server: str
+    guest: Optional[str] = None             # the nested guest holding the flag; None for the server itself
     slot: int
     category: Optional[str]
     location_type: LocationType

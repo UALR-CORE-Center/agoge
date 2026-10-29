@@ -1,18 +1,77 @@
 import AcUnitIcon from "@mui/icons-material/AcUnit";
 import LeaderboardIcon from "@mui/icons-material/Leaderboard";
-import {Alert, Box} from "@mui/material";
+import {LoadingButton} from "@mui/lab";
+import {Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack, TextField} from "@mui/material";
 import {GridColDef} from "@mui/x-data-grid";
-import React, {useCallback, useEffect, useState} from "react";
+import React, {useCallback, useEffect, useId, useState} from "react";
 import {usePolling} from "../../../hooks/usePolling";
 import {CtfScoreboardRow, CtfStates} from "../../../services/Ctf/ctf.model";
 import {ctfService} from "../../../services/Ctf/ctf.service";
 import StyledDataGrid from "../../Common/DataGrid/StyledDataGrid";
 import HttpError from "../../Common/Errors/HttpError";
+import {IntegerField} from "./CtfSpecEditor";
 
 // PRD performance budget: the dashboard polls the scoreboard every 30 s.
 export const SCOREBOARD_POLL_INTERVAL_MS = 30000;
 
+// CtfScoreAdjustRequest bounds.
+export const MAX_SCORE_ADJUSTMENT = 10000;
+const MAX_REASON_LENGTH = 500;
+
 const formatTimestamp = (seconds: number) => new Date(seconds * 1000).toLocaleString();
+
+interface AdjustScoreDialogProps {
+    ctfId: string;
+    row: CtfScoreboardRow;
+    onAdjusted: () => void;
+    onClose: () => void;
+}
+
+/** Adds or deducts points for one team, with the reason the event log keeps. */
+const AdjustScoreDialog: React.FC<AdjustScoreDialogProps> = ({ctfId, row, onAdjusted, onClose}) => {
+    const titleId = useId();
+    const [delta, setDelta] = useState(0);
+    const [reason, setReason] = useState('');
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const deltaValid = delta !== 0 && Math.abs(delta) <= MAX_SCORE_ADJUSTMENT;
+    const valid = deltaValid && reason.trim().length > 0;
+
+    const handleSave = async () => {
+        setSaving(true);
+        try {
+            await ctfService.adjustScore(ctfId, row.workout_id, {delta, reason: reason.trim()});
+            onAdjusted();
+        } catch (err) {
+            const {status, message} = (err ?? {}) as Partial<HttpError>;
+            setError(`${status || "Unknown Status"}: ${message || "Could not adjust the score."}`);
+            console.error(err);
+            setSaving(false);
+        }
+    };
+
+    return (
+        <Dialog open onClose={onClose} aria-labelledby={titleId} fullWidth maxWidth="xs">
+            <DialogTitle id={titleId}>Adjust score for {row.team_name}</DialogTitle>
+            <DialogContent>
+                <Stack spacing={2} sx={{mt: 1}}>
+                    <IntegerField required label="Points" value={delta} onChange={setDelta}
+                                  inputProps={{min: -MAX_SCORE_ADJUSTMENT, max: MAX_SCORE_ADJUSTMENT}}
+                                  error={delta !== 0 && !deltaValid}
+                                  helperText={`Current score ${row.score}. Negative to deduct; -${MAX_SCORE_ADJUSTMENT} to ${MAX_SCORE_ADJUSTMENT}.`} />
+                    <TextField required label="Reason" value={reason} onChange={(e) => setReason(e.target.value)}
+                               multiline inputProps={{maxLength: MAX_REASON_LENGTH}}
+                               helperText="Kept in the event log. Never paste a flag value here." />
+                    {error && <Alert severity="error">{error}</Alert>}
+                </Stack>
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={onClose} disabled={saving}>Cancel</Button>
+                <LoadingButton onClick={handleSave} loading={saving} disabled={!valid}>Adjust</LoadingButton>
+            </DialogActions>
+        </Dialog>
+    );
+};
 
 interface CtfScoreboardPanelProps {
     ctfId: string;
@@ -27,6 +86,7 @@ const CtfScoreboardPanel: React.FC<CtfScoreboardPanelProps> = ({ctfId, state, sc
     const [rows, setRows] = useState<CtfScoreboardRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [adjusting, setAdjusting] = useState<CtfScoreboardRow | null>(null);
 
     const fetchScoreboard = useCallback(async () => {
         try {
@@ -66,6 +126,22 @@ const CtfScoreboardPanel: React.FC<CtfScoreboardPanelProps> = ({ctfId, state, sc
             valueGetter: (value?: number | null) => (value === null || value === undefined ? 'No solves' : formatTimestamp(value)),
             sortable: false,
         },
+        {
+            field: 'actions',
+            headerName: '',
+            width: 110,
+            minWidth: 100,
+            sortable: false,
+            filterable: false,
+            // CtfScoring.adjust accepts every state but ARCHIVED, so scores can be corrected after the end.
+            renderCell: (params) => (
+                <Button size="small" variant="outlined" disabled={archived}
+                        aria-label={`Adjust score for ${params.row.team_name}`}
+                        onClick={() => setAdjusting(params.row)}>
+                    Adjust
+                </Button>
+            ),
+        },
     ];
 
     return (
@@ -89,6 +165,17 @@ const CtfScoreboardPanel: React.FC<CtfScoreboardPanelProps> = ({ctfId, state, sc
                 density={"comfortable"}
                 loading={loading}
             />
+            {adjusting && (
+                <AdjustScoreDialog
+                    ctfId={ctfId}
+                    row={adjusting}
+                    onClose={() => setAdjusting(null)}
+                    onAdjusted={() => {
+                        setAdjusting(null);
+                        fetchScoreboard();
+                    }}
+                />
+            )}
         </Box>
     );
 };

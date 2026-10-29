@@ -162,6 +162,8 @@ Notes on `windows_access`:
 
 On Linux, an `env` flag is written to `/etc/environment`. On Windows, it is set as a machine-scope variable.
 
+Avoid Linux `file` flags under `/tmp`, `/run`, `/var/run`, or `/dev/shm`. Those directories are cleared when the host reboots (on Debian 13 and most current distributions `/tmp` is a RAM disk), so a **Restart**, a **Rebuild**, or the overnight stop removes the flag while the **Flags** tab still shows it `planted`. The editor warns about these paths but still saves them; if you use one, replant after every reboot.
+
 The validator rejects any path that does not match its pattern. A rejected specification cannot be saved, and a CTF event cannot be created from it.
 
 ### Flag values
@@ -213,7 +215,7 @@ Participants join at `/join` with the event's **join code** (shown on the Setup 
 
 **Flags.** Review or change the event's name, description, rules link, scoring, and flags. The same rules as the `ctf` block apply, and the server rejects an invalid path or server. Saving regenerates every team's flag values. Flags can be edited only in `DRAFT`.
 
-**Servers.** Shows the Lab's servers. **Build all** builds every team that is not built yet, and **Start all** and **Stop all** act on every team. Running VMs cost money until they are stopped. Stop is not offered while the event is running.
+**Servers.** Shows the Lab's servers. **Build all** builds every team that is not built yet, and **Start all** and **Stop all** act on every team. Running VMs cost money until they are stopped. Stop is not offered while the event is running, but stays available after the event ends and after it is archived, so leftover VMs can still be shut down.
 
 ### 3. Arm
 
@@ -309,11 +311,11 @@ Common `failed` reasons:
 | An error reported by the host | The script could not write the location, for example because the directory is missing from the image. Fix the image or the `path`. |
 | "CTF flag seed is not configured" | Ask an administrator to enable CTF through `setup.py`. |
 
-Replanting writes the same value again, so it is safe to repeat.
+Replanting writes the same value again, so it is safe to repeat. When a replant leaves a team's board playable, the board's recorded arm status is updated too, so a board whose arm failed earlier no longer reports `failed`. The event's own state does not change: a `BROKEN` event stays `BROKEN` until you click **Arm** again.
 
-## Overnight-stop exemption
+## Automatic-stop exemption
 
-Agoge's daily maintenance normally stops every running Workout overnight to save cost. A Workout is **not** stopped if it is on an active board of an event in `ARMING`, `ARMED`, `RUNNING`, or `PAUSED`. This way, a multi-day exercise keeps its planted flags and in-game progress on running servers.
+Agoge normally stops every running Workout overnight, and also stops a Workout when its run timer (the **Time Remaining** countdown on the student page) lapses, to save cost. A Workout is **not** stopped by either if it is on an active board of an event in `ARMING`, `ARMED`, `RUNNING`, or `PAUSED`. This way, a long or multi-day exercise keeps its planted flags and in-game progress on running servers.
 
 Workouts on `DRAFT`, `ENDED`, `ARCHIVED`, or `BROKEN` events get no exemption and are stopped as usual. Exempt VMs keep running and keep costing money, so **End** and **Archive** the event promptly when the exercise is over.
 

@@ -7,6 +7,7 @@ from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 
 from cloud_fn_utilities.course_objects.compute.factory import ComputeManagerFactory
+from cloud_fn_utilities.course_objects.ctf.arm_worker import ArmWorker
 from cloud_fn_utilities.course_objects.ctf.flag_planter import FlagPlanter
 
 
@@ -82,7 +83,8 @@ class HostReset:
         return mode
 
     def _replant_guest(self, event: CtfEventModel, board: CtfBoardModel, server: str, guest: str) -> None:
-        FlagPlanter(event, env_dict=self.env_dict, db=self.db).plant(board, [server], guest=guest)
+        board = FlagPlanter(event, env_dict=self.env_dict, db=self.db).plant(board, [server], guest=guest)
+        self._refresh_arm_status(board)
 
     def _restart_guest(self, event: CtfEventModel, board: CtfBoardModel, server: str, guest: str) -> None:
         # Flags stay on the guest's disk, as with a server restart
@@ -93,7 +95,7 @@ class HostReset:
         board_flag_ids = {flag.flag_id for flag in board.flags}
         if any(f.server == server and f.guest == guest and f.id in board_flag_ids for f in event.spec.flags):
             # Revert and plant in one payload; a missing snapshot fails the guest's flags with its own message
-            planter.plant(board, [server], guest=guest, revert=True)
+            self._refresh_arm_status(planter.plant(board, [server], guest=guest, revert=True))
         else:
             # Nothing to plant, so only the revert runs
             self._guest_action(planter, board, server, guest, 'revert')
@@ -106,7 +108,35 @@ class HostReset:
             raise RuntimeError(f"Guest {guest} {action} failed: {failure}")
 
     def _replant(self, event: CtfEventModel, board: CtfBoardModel, server: str) -> None:
-        FlagPlanter(event, env_dict=self.env_dict, db=self.db).plant(board, [server])
+        board = FlagPlanter(event, env_dict=self.env_dict, db=self.db).plant(board, [server])
+        self._refresh_arm_status(board)
+
+    def _refresh_arm_status(self, board: CtfBoardModel) -> None:
+        """
+        After a plant, re-judges a board that finished arming the way ArmWorker.arm_result would, so a board
+        whose arm failed (or partly failed) stops reporting that once a replant makes it playable. Only ever
+        moves to `armed`; a pending or arming board is left to ArmWorker, and a failed replant changes nothing.
+        """
+        arm_status, arm_error = ArmWorker.arm_result(board)
+        if arm_status != 'armed':
+            return
+        board_ref = self.db.db.collection(DbCollections.CTF_BOARD.value).document(board.id)
+
+        def operation(transaction):
+            snapshot = board_ref.get(transaction=transaction)
+            if not snapshot.exists:
+                return False
+            stored = snapshot.to_dict()
+            if stored.get('arm_status') not in ArmWorker.TERMINAL_STATUSES:
+                return False
+            if (stored.get('arm_status'), stored.get('arm_error')) == (arm_status, arm_error):
+                return False
+            transaction.update(board_ref, {'arm_status': arm_status, 'arm_error': arm_error})
+            return True
+
+        if self.db.transaction(operation):
+            self.logger.info(f"{self.class_name}:{board.id} - arm status refreshed after replant",
+                             arm_status=arm_status, arm_error=arm_error)
 
     def _restart(self, event: CtfEventModel, board: CtfBoardModel, server: str) -> None:
         # Flags stay on disk: the plant key was removed after the last plant, so the loader does nothing at boot

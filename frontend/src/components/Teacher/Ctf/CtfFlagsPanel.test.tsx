@@ -106,6 +106,13 @@ describe("CtfFlagsPanel", () => {
         expect(ctfService.getFlags).toHaveBeenCalledWith(CTF_ID);
     });
 
+    it("shows the nested guest holding a flag, and nothing for a flag on the server itself", async () => {
+        vi.mocked(ctfService.getFlags).mockResolvedValue([flag({guest: "deb"}), flag({flag_id: "db-1", server: "db"})]);
+        renderPanel();
+        expect(within(await rowFor("web-1")).getByRole("gridcell", {name: "deb"})).toBeInTheDocument();
+        expect(within(await rowFor("db-1")).queryByRole("gridcell", {name: "deb"})).not.toBeInTheDocument();
+    });
+
     it("shows a warning icon and text only on rows with failed or stale boards", async () => {
         renderPanel();
         const bad = await rowFor("db-1");

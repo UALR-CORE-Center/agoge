@@ -195,3 +195,67 @@ def test_stop_everything_without_exemptions_stops_all():
 
     stopped = [call.kwargs['resource_name'] for call in manager.compute_instance.stop.call_args_list]
     assert stopped == ['boardwkaaa-web', 'plainwkccc-web']
+
+
+# --- Run-timer stop (quarter-hourly) ------------------------------------------------------------------------------
+
+def _quarter_hourly(events, boards, lapsed_workout_ids):
+    from cloud_fn_utilities.periodic_maintenance.quarter_hourly_maintenance import QuarterHourlyMaintenance
+    maintenance = object.__new__(QuarterHourlyMaintenance)
+    maintenance.debug = False
+    maintenance.env_dict = {}
+    maintenance.db = FakeDb({DbCollections.CTF: events, DbCollections.CTF_BOARD: boards})
+    maintenance.db_queries = Mock()
+    maintenance.db_queries.get_ready_for_shutoff.return_value = [{'id': w} for w in lapsed_workout_ids]
+    maintenance.pub_sub_mgr = Mock()
+    return maintenance
+
+
+def _quarter_hourly_stopped(maintenance):
+    return [call.kwargs['build_id'] for call in maintenance.pub_sub_mgr.msg.call_args_list]
+
+
+@pytest.mark.parametrize('state', [CtfStates.ARMING, CtfStates.ARMED, CtfStates.RUNNING, CtfStates.PAUSED])
+def test_run_timer_does_not_stop_an_active_board_in_a_live_event(state):
+    maintenance = _quarter_hourly(
+        events=[_event('ctfeventaa', state)],
+        boards=[_board('ctfeventaa', 'boardwkaaa')],
+        lapsed_workout_ids=['boardwkaaa', 'plainwkccc'],
+    )
+
+    maintenance._stop_lapsed()
+
+    assert _quarter_hourly_stopped(maintenance) == ['plainwkccc']
+
+
+@pytest.mark.parametrize('state', [CtfStates.DRAFT, CtfStates.ENDED, CtfStates.ARCHIVED, CtfStates.BROKEN])
+def test_run_timer_stops_a_board_whose_event_is_not_live(state):
+    maintenance = _quarter_hourly(
+        events=[_event('ctfeventaa', state)],
+        boards=[_board('ctfeventaa', 'boardwkaaa')],
+        lapsed_workout_ids=['boardwkaaa'],
+    )
+
+    maintenance._stop_lapsed()
+
+    assert _quarter_hourly_stopped(maintenance) == ['boardwkaaa']
+
+
+def test_run_timer_stops_an_inactive_board_of_a_live_event():
+    maintenance = _quarter_hourly(
+        events=[_event('ctfeventaa', CtfStates.RUNNING)],
+        boards=[_board('ctfeventaa', 'boardwkaaa', active=False)],
+        lapsed_workout_ids=['boardwkaaa'],
+    )
+
+    maintenance._stop_lapsed()
+
+    assert _quarter_hourly_stopped(maintenance) == ['boardwkaaa']
+
+
+def test_run_timer_skips_the_ctf_query_when_nothing_lapsed():
+    maintenance = _quarter_hourly(events=[], boards=[], lapsed_workout_ids=[])
+
+    maintenance._stop_lapsed()
+
+    assert maintenance.db.queries == []

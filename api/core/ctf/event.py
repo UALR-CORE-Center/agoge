@@ -348,6 +348,7 @@ class CtfEvent:
             rows.append(CtfFlagRow(
                 flag_id=flag.id,
                 server=flag.server,
+                guest=flag.guest,
                 slot=flag.slot,
                 category=flag.category,
                 location_type=flag.location_type,

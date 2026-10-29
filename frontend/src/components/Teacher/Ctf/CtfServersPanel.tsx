@@ -38,7 +38,7 @@ export const SERVER_ACTION_RULES: Record<CtfServersAction, ServerActionRule> = {
     },
     stop: {
         label: 'Stop all',
-        legalStates: [S.DRAFT, S.ARMED, S.BROKEN, S.PAUSED, S.ENDED],
+        legalStates: [S.DRAFT, S.ARMED, S.BROKEN, S.PAUSED, S.ENDED, S.ARCHIVED],
         message: "Stop every team's servers. Arming needs them running again.",
     },
 };

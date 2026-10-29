@@ -39,6 +39,34 @@ const RequiredTextField = styled(TextField)(({theme}) => ({
     '& .MuiFormLabel-asterisk': {color: theme.palette.error.main},
 }));
 
+type IntegerFieldProps = Omit<React.ComponentProps<typeof TextField>, 'value' | 'onChange' | 'type'> & {
+    value: number;
+    onChange: (value: number) => void;
+};
+
+/**
+ * A whole-number field that keeps the text being typed. A number input reports a lone '-' or an empty box
+ * as '', and committing Number('') would snap it to 0, so '-50' could not be typed. Only whole numbers are
+ * committed; a value changed by the parent (e.g. clamped) replaces the text.
+ */
+export const IntegerField: React.FC<IntegerFieldProps> = ({value, onChange, ...props}) => {
+    const [text, setText] = useState(String(value));
+    const [committed, setCommitted] = useState(value);
+    if (value !== committed) {
+        setCommitted(value);
+        setText(String(value));
+    }
+    const handleChange = (raw: string) => {
+        setText(raw);
+        const parsed = Number(raw);
+        if (raw.trim() !== '' && Number.isInteger(parsed)) {
+            setCommitted(parsed);
+            onChange(parsed);
+        }
+    };
+    return <RequiredTextField {...props} type="number" value={text} onChange={(e) => handleChange(e.target.value)} />;
+};
+
 // CtfSetup.update_spec runs only in DRAFT: once arming starts the planted flags are fixed.
 export const SPEC_EDIT_STATES: readonly number[] = [CtfStates.DRAFT];
 
@@ -173,6 +201,22 @@ export const flagProblems = (flag: CtfFlagSpec, others: CtfFlagSpec[], guests: C
     return problems;
 };
 
+// Linux directories that are cleared on reboot (tmpfs on Debian 13 and most current distros).
+const VOLATILE_LINUX_DIRS = ['/tmp/', '/run/', '/var/run/', '/dev/shm/'];
+
+/** Non-blocking advice: the flag is valid but may not survive the way the event runs. */
+export const flagNotices = (flag: CtfFlagSpec): string[] => {
+    const notices: string[] = [];
+    const path = flag.path.trim();
+    if (flag.location_type === 'file' && flag.operating_system === 'linux' && VOLATILE_LINUX_DIRS.some((dir) => path.startsWith(dir))) {
+        notices.push(
+            `${path} is cleared when the host reboots, so a Restart, Rebuild or overnight stop removes this flag ` +
+            `while its status still shows planted. Replant after any reboot, or use a persistent directory.`
+        );
+    }
+    return notices;
+};
+
 interface FlagDialogProps {
     initial: CtfFlagSpec;
     others: CtfFlagSpec[];
@@ -187,6 +231,7 @@ const FlagDialog: React.FC<FlagDialogProps> = ({initial, others, serverNames, gu
     const [flag, setFlag] = useState<CtfFlagSpec>(initial);
     const set = <K extends keyof CtfFlagSpec>(key: K, value: CtfFlagSpec[K]) => setFlag((prev) => ({...prev, [key]: value}));
     const problems = flagProblems(flag, others, guests);
+    const notices = flagNotices(flag);
     const serverGuests = guests.filter((guest) => guest.server === flag.server);
     const selectedGuest = serverGuests.find((guest) => guest.name === flag.guest);
     // A guest that is no longer declared stays selectable, so the problem list can name it.
@@ -260,8 +305,8 @@ const FlagDialog: React.FC<FlagDialogProps> = ({initial, others, serverNames, gu
                             {staleGuest && <MenuItem value={staleGuest}>{staleGuest} (not declared)</MenuItem>}
                         </TextField>
                     )}
-                    <RequiredTextField required label="Slot" type="number" value={flag.slot}
-                               onChange={(e) => set('slot', Number(e.target.value))}
+                    <IntegerField required label="Slot" value={flag.slot}
+                               onChange={(value) => set('slot', value)}
                                inputProps={{min: 1, max: 9}} helperText="1-9, unique per server; slot 1 is the foothold" />
                     <RequiredTextField required select label="Operating system" value={flag.operating_system}
                                onChange={(e) => set('operating_system', e.target.value as OperatingSystem)}
@@ -276,8 +321,8 @@ const FlagDialog: React.FC<FlagDialogProps> = ({initial, others, serverNames, gu
                     </RequiredTextField>
                     <RequiredTextField required label="Path" value={flag.path} onChange={(e) => set('path', e.target.value)}
                                helperText={example ? `e.g. ${example}` : undefined} sx={{gridColumn: {sm: '1 / -1'}}} />
-                    <RequiredTextField required label="Points" type="number" value={flag.points}
-                               onChange={(e) => set('points', Number(e.target.value))} />
+                    <IntegerField required label="Points" value={flag.points}
+                               onChange={(value) => set('points', value)} />
                     <RequiredTextField required select label="Access level" value={flag.access_level}
                                onChange={(e) => set('access_level', e.target.value as CtfFlagSpec['access_level'])}
                                helperText="Documentation only">
@@ -287,8 +332,8 @@ const FlagDialog: React.FC<FlagDialogProps> = ({initial, others, serverNames, gu
                     </RequiredTextField>
                     <TextField label="Hint" value={flag.hint ?? ''} onChange={(e) => set('hint', e.target.value)}
                                multiline inputProps={{maxLength: 1000}} sx={{gridColumn: {sm: '1 / -1'}}} />
-                    <TextField label="Hint cost" type="number" value={flag.hint_cost}
-                               onChange={(e) => set('hint_cost', Math.max(0, Number(e.target.value)))} inputProps={{min: 0}} />
+                    <IntegerField label="Hint cost" value={flag.hint_cost}
+                               onChange={(value) => set('hint_cost', Math.max(0, value))} inputProps={{min: 0}} />
                     <TextField
                         select
                         label="Unlocks after"
@@ -341,6 +386,9 @@ const FlagDialog: React.FC<FlagDialogProps> = ({initial, others, serverNames, gu
                         sx={{gridColumn: {sm: '1 / -1'}}}
                     />
                 </Box>
+                {notices.length > 0 && (
+                    <Alert severity="info" sx={{mt: 2}}>{notices.map((n) => <div key={n}>{n}</div>)}</Alert>
+                )}
                 {problems.length > 0 && (
                     <Alert severity="warning" sx={{mt: 2}}>{problems.map((p) => <div key={p}>{p}</div>)}</Alert>
                 )}

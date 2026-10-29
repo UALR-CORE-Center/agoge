@@ -850,6 +850,23 @@ def test_servers_stop_is_refused_while_the_event_is_running(db, pubsub):
     pubsub.msg.assert_not_called()
 
 
+@pytest.mark.parametrize("state", [CtfStates.ENDED, CtfStates.ARCHIVED])
+def test_servers_stop_is_allowed_after_the_event_ends(db, pubsub, state):
+    setup, red, blue = two_teams(db, pubsub)
+    set_states(db, WorkoutStates.RUNNING, red, blue)
+    db.collection(DbCollections.CTF)[CTF_ID]["state"] = state.value
+    assert setup.servers(CTF_ID, "stop", user()) == 2
+
+
+@pytest.mark.parametrize("action", ["build", "start"])
+def test_servers_build_and_start_are_refused_once_archived(db, pubsub, action):
+    setup, *_ = two_teams(db, pubsub)
+    db.collection(DbCollections.CTF)[CTF_ID]["state"] = CtfStates.ARCHIVED.value
+    with pytest.raises(Conflict, match="ARCHIVED"):
+        setup.servers(CTF_ID, action, user())
+    pubsub.msg.assert_not_called()
+
+
 def test_servers_start_is_allowed_while_the_event_is_running(db, pubsub):
     setup, red, blue = two_teams(db, pubsub)
     set_states(db, WorkoutStates.READY, red, blue)

@@ -35,7 +35,7 @@ const mixedTeams = [
 const EXPECTED_LEGAL: Record<CtfServersAction, (keyof typeof CtfStates)[]> = {
     build: ["DRAFT", "ARMED", "BROKEN", "RUNNING", "PAUSED"],
     start: ["DRAFT", "ARMED", "BROKEN", "RUNNING", "PAUSED"],
-    stop: ["DRAFT", "ARMED", "BROKEN", "PAUSED", "ENDED"],
+    stop: ["DRAFT", "ARMED", "BROKEN", "PAUSED", "ENDED", "ARCHIVED"],
 };
 const LABELS: Record<CtfServersAction, string> = {build: "Build all", start: "Start all", stop: "Stop all"};
 

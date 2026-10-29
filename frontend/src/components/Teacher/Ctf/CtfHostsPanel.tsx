@@ -260,7 +260,7 @@ const CtfHostsPanel: React.FC<CtfHostsPanelProps> = ({ctfId, state, active}) => 
                         : `Plant every flag on ${pendingTarget} again. The parent VM keeps running; the flag values stay the same.`)
                     : (pending?.mode === 'restart'
                         ? `Stop and start ${pendingTarget}. The flags stay on disk, and the team loses access until it is back.`
-                        : `Plant every flag on ${pendingTarget} again. The VM restarts; the flag values stay the same.`)}
+                        : `Plant every flag on ${pendingTarget} again. The VM restarts, unless it is a nested lab host; the flag values stay the same.`)}
                 confirmLabel={pendingLabel}
                 onConfirm={handleConfirm}
                 onClose={handleClose}
