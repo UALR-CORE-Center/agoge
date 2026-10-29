@@ -26,7 +26,7 @@ from cloud_fn_utilities.gcp.dns_manager import DnsManager
 from cloud_fn_utilities.server_specific.agoge_user_startup_script import AgogeUserStartupScript, MetadataKey
 from cloud_fn_utilities.server_specific.nested_scripts import render_builder_bootstrap, render_finalize_bootstrap
 
-from .base_compute_manager import BaseComputeManager
+from .base_compute_manager import BaseComputeManager, is_zone_stockout
 from .snapshot_manager import SnapshotManager
 from ...state_managers import ImageStateManager
 
@@ -158,7 +158,19 @@ class ImageTemplateManager(BaseComputeManager):
     def build(self) -> None:
         """Builds an individual server based on the image template specifications."""
         self._require_image_management()
-        self._build_server()
+        self._build_server(zone_fallback=True)
+
+    def _on_instance_created(self, zone: str) -> None:
+        """Record the zone before anything else can fail, so stop, check-in, and delete find the VM.
+
+        The zone is kept after check-in: the DELETE that check-in publishes still needs it. The write is best
+        effort, so a Firestore error cannot turn a created VM into a failed build.
+        """
+        try:
+            self.db.update(collection_name=self.collection, doc_id=self.server_name, data={'zone': zone})
+        except Exception as error:
+            self.logger.error(f'{self.class_name}:{self.server_name} - Could not record zone {zone}: {error}',
+                              zone=zone)
 
     def check_in(self) -> None:
         """
@@ -656,9 +668,10 @@ class ImageTemplateManager(BaseComputeManager):
 
     def _build_failure_message(self, error: Exception) -> str:
         """What the Server Manager shows for a first nested build whose check-out failed."""
-        if 'ZONE_RESOURCE_POOL_EXHAUSTED' in str(error):
-            zone = getattr(self.env, 'zone', None) or 'this zone'
-            return (f'Google Cloud has no {self.server_spec.machine_type} capacity in {zone} right now. This is a '
+        if is_zone_stockout(error):
+            region = getattr(self.env, 'region', None)
+            where = f'any {region} zone' if region else 'any zone of this region'
+            return (f'Google Cloud has no {self.server_spec.machine_type} capacity in {where} right now. This is a '
                     f'temporary shortage, not a quota. Delete this image and create it again later.')
         # Not only the insert: DNS or the timeout can fail the check-out after the server exists.
         return f'The build could not start: {error}'
@@ -698,7 +711,7 @@ class ImageTemplateManager(BaseComputeManager):
         accepted, so duplicate build deliveries can still be reconciled.
         """
         disk_name = boot_disk.initialize_params.disk_name
-        expected_disk = f'projects/{self.env.project}/zones/{self.env.zone}/disks/{disk_name}'
+        expected_disk = f'projects/{self.env.project}/zones/{self.server_zone}/disks/{disk_name}'
         expected_image = self._canonical_compute_resource(boot_disk.initialize_params.source_image)
         for attempt in range(4):
             try:

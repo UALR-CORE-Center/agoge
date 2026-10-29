@@ -39,10 +39,14 @@ def _manager(cls, machine_type, nested_host=False, ip_aliases=False, min_cpu_pla
     manager.s = base_module.ServerStates
     manager.logger = Mock()
     manager.state_manager = Mock()
+    manager.db = Mock()
+    manager.collection = 'images'
     manager.compute_instance = Mock()
     manager.compute_instance.create.return_value = True
+    manager.compute_instance.zones_with_instance.return_value = []
     manager.compute_machine_types = Mock()
     manager.compute_machine_types.get.return_value = SimpleNamespace(name=machine_type)
+    manager.compute_machine_types.zones_offering.return_value = ['us-central1-a']
     manager.server_spec = _spec(machine_type, min_cpu_platform)
     manager.nested_host = nested_host
     manager.ip_aliases = False

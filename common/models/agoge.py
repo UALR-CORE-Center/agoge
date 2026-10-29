@@ -953,6 +953,8 @@ class AgogeImageModel(BaseModel):
     architecture: Optional[str] = None
     nested: Optional[NestedHostSpecModel] = None
     nested_build: Optional[NestedBuildStatusModel] = None
+    # The zone the template server was created in; None means the deployment zone (records before zone fallback).
+    zone: Optional[str] = None
     # Response metadata is derived from the stored source and active project.
     is_shared: bool = False
     source_project: Optional[str] = None

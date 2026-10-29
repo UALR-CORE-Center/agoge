@@ -35,6 +35,13 @@ from cloud_fn_utilities.gcp.dns_manager import DnsManager
 
 ComputeApiClient = TypeVar('ComputeApiClient', bound=BaseComputeAPI)
 
+ZONE_STOCKOUT_CODE = 'ZONE_RESOURCE_POOL_EXHAUSTED'
+
+
+def is_zone_stockout(error: Exception) -> bool:
+    """Whether Compute refused an insert because the zone is out of capacity (not a quota)."""
+    return ZONE_STOCKOUT_CODE in str(error)
+
 
 # TODO: Focus here
 class BaseComputeManager:
@@ -158,6 +165,8 @@ class BaseComputeManager:
         self.nested_host = False
         # Set from the resolved machine type in _build_server, before any disk is created.
         self.disk_type = None
+        # The zone the server lives in. Template servers may sit outside env.zone after a zone fallback.
+        self._server_zone = None
         self.collection = DbCollections.SERVER
         self.primary_external_ip = None
 
@@ -199,6 +208,20 @@ class BaseComputeManager:
                 log_name=self.log_name
             )
         return None
+
+    @property
+    def server_zone(self) -> str:
+        """The zone the server lives in; the deployment zone unless a record or a fallback says otherwise."""
+        return getattr(self, '_server_zone', None) or self.env.zone
+
+    def _use_zone(self, zone: str | None) -> None:
+        """Point every zonal client, including DNS's instance lookups, at `zone` (None: the deployment zone)."""
+        self._server_zone = zone
+        clients = [getattr(self, name, None) for name in ('compute_disk', 'compute_instance', 'compute_machine_types')]
+        clients.append(getattr(getattr(self, 'dns_manager', None), 'compute_instance', None))
+        for client in clients:
+            if client is not None:
+                client.set_zone(self.server_zone)
 
     @abstractmethod
     def load(
@@ -303,9 +326,16 @@ class BaseComputeManager:
         self.server_spec.wireguard_endpoint_id = server_spec.get('wireguard_endpoint_id')
 
         self.server_spec.wireguard_managed = False
+        # A record without `zone` predates zone fallback, so its server is in the deployment zone. Always set:
+        # one manager loads many records in a warm process (stop_all_running).
+        self._use_zone(server_spec.get('zone'))
 
-    def _build_server(self, finalize_state: bool = True) -> None:
-        """Build a server, optionally deferring RUNNING until caller dependencies finish."""
+    def _build_server(self, finalize_state: bool = True, zone_fallback: bool = False) -> None:
+        """Build a server, optionally deferring RUNNING until caller dependencies finish.
+
+        With `zone_fallback`, an insert refused for zone capacity is retried in the region's other zones that
+        offer the machine type. The zone that took the VM is passed to `_on_instance_created`.
+        """
         # Reject before any disk or address is created for the server
         machine_type = self._lookup_machine_type(self.server_spec.machine_type)
         nested_host = getattr(self, 'nested_host', False)
@@ -314,6 +344,8 @@ class BaseComputeManager:
                 f'{self.class_name}:{self.server_name} - Nested hosts need an N1, N2, or N4 machine type, not {machine_type}'
             )
         self.disk_type = disk_type_for(machine_type)
+        zones = self._build_zones(machine_type) if zone_fallback else [self.server_zone]
+        self._use_zone(zones[0])
         self.state_manager.state_transition(self.s.BUILDING)
         self._add_disks()
         self._add_metadata()
@@ -338,63 +370,85 @@ class BaseComputeManager:
         if self.server_spec.min_cpu_platform and self.server_spec.min_cpu_platform != "":
             min_cpu_platform = self.server_spec.min_cpu_platform
 
-        instance = (
-            InstanceResource(zone=self.env.zone)
-            .new(
-                name=self.server_spec.name,
-                machine_type=machine_type,
-                tags=tags,
-                disks=self.server_spec.disks,
-                metadata=self.server_spec.metadata,
-                can_ip_forward=self.server_spec.can_ip_forward,
-                network_interfaces=self.server_spec.network_interfaces,
-                service_accounts=service_account,
-                min_cpu_platform=min_cpu_platform,
-                advanced_machine_features=advanced_machine_features,
-            )
-        )
+        if self.server_spec.build_type != BuildConstants.ServerBuildType.MACHINE_IMAGE and \
+                self.server_spec.delayed_start:
+            time.sleep(30)
 
-        if self.server_spec.build_type == BuildConstants.ServerBuildType.MACHINE_IMAGE:
-            instance.source_machine_image = (
-                f"projects/{self.project}/global/machineImages/{self.server_spec.machine_image}"
-            )
-        else:
-            if self.server_spec.delayed_start:
-                time.sleep(30)
+        for attempt, zone in enumerate(zones):
+            if attempt:
+                # A concurrent delivery may have created the VM since the zones were chosen. Build toward its
+                # zone instead, so the insert conflicts and reconciles rather than making a second VM.
+                if existing := self._instance_zones():
+                    zones[attempt:] = existing[:1]
+                    zone = zones[attempt]
+                # The boot disk's type path names the zone, so it is rebuilt for each zone tried.
+                self._use_zone(zone)
+                self._add_disks()
 
-        try:
-            created = (
-                self.compute_instance
-                .create(resource_name=self.server_spec.name, wait=True, instance_resource=instance)
+            instance = (
+                InstanceResource(zone=zone)
+                .new(
+                    name=self.server_spec.name,
+                    machine_type=machine_type,
+                    tags=tags,
+                    disks=self.server_spec.disks,
+                    metadata=self.server_spec.metadata,
+                    can_ip_forward=self.server_spec.can_ip_forward,
+                    network_interfaces=self.server_spec.network_interfaces,
+                    service_accounts=service_account,
+                    min_cpu_platform=min_cpu_platform,
+                    advanced_machine_features=advanced_machine_features,
+                )
             )
-        except Conflict as error:
-            self.logger.warning(f'{self.class_name}:{self.server_name} - Server already exists!')
-            # A create may have succeeded before a delivery was acknowledged.
-            # Continue only when the existing instance is the one this build
-            # requested. Concurrent Pub/Sub deliveries can observe the first
-            # insert in PROVISIONING/STAGING, so wait for that exact VM to reach
-            # RUNNING. A delayed BUILD must never relabel a stopped or
-            # differently configured VM as RUNNING.
-            existing = self.compute_instance.get(resource_name=self.server_spec.name)
-            if not self._reconcile_existing_build(existing, instance):
-                raise Conflict(
-                    f"Existing instance {self.server_spec.name} does not match the requested build"
-                ) from error
-            created = True
-        except Exception as error:
-            # Google refused the insert (a zone out of capacity, a quota, a bad request). Nothing retries
-            # it, so the server must not stay BUILDING with no VM behind it.
-            self.logger.error(f'{self.class_name}:{self.server_name} - Could not create the server: {error}')
-            self.state_manager.state_transition(self.s.BROKEN)
-            raise
+
+            if self.server_spec.build_type == BuildConstants.ServerBuildType.MACHINE_IMAGE:
+                instance.source_machine_image = (
+                    f"projects/{self.project}/global/machineImages/{self.server_spec.machine_image}"
+                )
+
+            try:
+                created = (
+                    self.compute_instance
+                    .create(resource_name=self.server_spec.name, wait=True, instance_resource=instance)
+                )
+            except Conflict as error:
+                self.logger.warning(f'{self.class_name}:{self.server_name} - Server already exists!')
+                # A create may have succeeded before a delivery was acknowledged.
+                # Continue only when the existing instance is the one this build
+                # requested. Concurrent Pub/Sub deliveries can observe the first
+                # insert in PROVISIONING/STAGING, so wait for that exact VM to reach
+                # RUNNING. A delayed BUILD must never relabel a stopped or
+                # differently configured VM as RUNNING.
+                existing = self.compute_instance.get(resource_name=self.server_spec.name)
+                if not self._reconcile_existing_build(existing, instance):
+                    raise Conflict(
+                        f"Existing instance {self.server_spec.name} does not match the requested build"
+                    ) from error
+                created = True
+            except Exception as error:
+                if attempt + 1 < len(zones) and is_zone_stockout(error):
+                    self.logger.warning(
+                        f'{self.class_name}:{self.server_name} - Zone {zone} has no {machine_type} capacity. '
+                        f'Trying {zones[attempt + 1]}.'
+                    )
+                    continue
+                # Google refused the insert (a zone out of capacity, a quota, a bad request), so the server
+                # must not stay BUILDING with no VM behind it.
+                self.logger.error(f'{self.class_name}:{self.server_name} - Could not create the server: {error}')
+                self.state_manager.state_transition(self.s.BROKEN)
+                raise
+            break
 
         if created:
+            self._on_instance_created(self.server_zone)
             self.logger.info(f'{self.class_name}:{self.server_name} - Successfully built server!')
             if finalize_state:
                 self.state_manager.state_transition(self.s.RUNNING)
         else:
             msg = f'{self.class_name}:{self.server_name} - Timeout in trying to build server.'
             self.logger.error(msg)
+            # The zone accepted the insert, so the VM may still appear there; delete and stop must find it.
+            self._on_instance_created(self.server_zone)
             self.state_manager.state_transition(self.s.BROKEN)
             raise TimeoutError(msg)
 
@@ -407,6 +461,36 @@ class BaseComputeManager:
                 self.server_name,
                 ip_address=self.primary_external_ip,
             )
+
+    def _build_zones(self, machine_type: str) -> list[str]:
+        """The zones a zone-fallback build tries, in order.
+
+        Instance names are unique per zone only, so a VM a duplicate delivery already created pins the build
+        to its zone. Otherwise the deployment zone comes first, not a zone recorded by an earlier check-out,
+        then the region's other zones that offer the machine type. A failed lookup narrows the build to the
+        deployment zone.
+        """
+        if existing := self._instance_zones():
+            return existing[:1]
+        home = self.env.zone
+        try:
+            offered = self.compute_machine_types.zones_offering(machine_type) if self.compute_machine_types else []
+        except Exception as error:
+            self.logger.warning(f'{self.class_name}:{self.server_name} - Cannot list fallback zones: {error}')
+            return [home]
+        return [home] + [zone for zone in offered if zone != home]
+
+    def _instance_zones(self) -> list[str]:
+        """The region's zones already holding this server's VM; empty when none or unreadable."""
+        try:
+            return self.compute_instance.zones_with_instance(self.server_spec.name)
+        except Exception as error:
+            self.logger.warning(f'{self.class_name}:{self.server_name} - Cannot look up existing VMs: {error}')
+            return []
+
+    def _on_instance_created(self, zone: str) -> None:
+        """Hook for a subclass to record the zone that took the VM."""
+        pass
 
     @classmethod
     def _existing_instance_matches(cls, existing, desired) -> bool:
@@ -675,7 +759,7 @@ class BaseComputeManager:
             image = image_source
 
         # Generate boot disk from existing image
-        attached_disk_resource = AttachedDiskResource(zone=self.env.zone)
+        attached_disk_resource = AttachedDiskResource(zone=self.server_zone)
         disk_init_params = attached_disk_resource.initialized_params(
             disk_name=f'{self.server_name}-disk',
             source=image,

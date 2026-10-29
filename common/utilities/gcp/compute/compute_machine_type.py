@@ -1,6 +1,7 @@
 from typing import Any, List, Union
 
 from google.cloud.compute_v1 import (
+    AggregatedListMachineTypesRequest,
     MachineType,
     MachineTypesClient,
     ListMachineTypesRequest,
@@ -147,6 +148,11 @@ class ComputeMachineTypesAPI(BaseComputeAPI):
         if not m_type:
             return None
         return self._machine_type_object(m_type, nested=True) or self._machine_type_object(m_type)
+
+    def zones_offering(self, machine_type: str) -> List[str]:
+        """The zones of this region that offer `machine_type`, sorted."""
+        request = AggregatedListMachineTypesRequest(project=self.project, filter=f'name = "{machine_type}"')
+        return self._region_zones(self.client().aggregated_list, request, 'machine_types')
 
     def get_resource(self, resource: str, project: str = None, zone: str = None) -> MachineType:
         """Read complete machine metadata without dropping its architecture."""

@@ -411,9 +411,9 @@ class SnapshotManager(BaseComputeManager):
         # Attached disk
         disk_source = (
             self.compute_disk
-            .get_source(project_id=self.env.project, zone=self.env.zone, disk_name=disk_name)
+            .get_source(project_id=self.env.project, zone=self.server_zone, disk_name=disk_name)
         )
-        attached_disk_resource = AttachedDiskResource(zone=self.env.zone)
+        attached_disk_resource = AttachedDiskResource(zone=self.server_zone)
         new_boot_disk = attached_disk_resource.new(
             boot=True,
             auto_delete=True,

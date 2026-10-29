@@ -209,18 +209,19 @@ class ComputeImage:
         if image_source_project({'self_link': source_image.self_link}) != source_project:
             raise BadRequest('The source image does not match the shared template project.')
 
-        # Reusing a VM/disk name could attach old contents on the first checkout.
-        lookups = [
-            lambda: image_api.get(resource=local_image_name, project=self.env.project, fallback_to_shared=False),
-            lambda: ComputeInstanceAPI(self.env.project, self.env.region, self.env.zone).get(resource_name=server_name),
-            lambda: ComputeDiskAPI(self.env.project, self.env.region, self.env.zone).get(resource_name=f'{server_name}-disk'),
-        ]
-        for lookup in lookups:
-            try:
-                lookup()
-            except NotFound:
-                continue
-            raise Conflict(f'A local image, server, or disk already uses {server_name}. Choose a different name.')
+        # Reusing a VM/disk name could attach old contents on the first checkout. A template server may sit in
+        # any zone of the region after a zone fallback, so the VM and disk are looked up region-wide.
+        in_use_message = f'A local image, server, or disk already uses {server_name}. Choose a different name.'
+        try:
+            image_api.get(resource=local_image_name, project=self.env.project, fallback_to_shared=False)
+        except NotFound:
+            pass
+        else:
+            raise Conflict(in_use_message)
+        instance_api = ComputeInstanceAPI(self.env.project, self.env.region, self.env.zone)
+        disk_api = ComputeDiskAPI(self.env.project, self.env.region, self.env.zone)
+        if instance_api.zones_with_instance(server_name) or disk_api.zones_with_disk(f'{server_name}-disk'):
+            raise Conflict(in_use_message)
 
         local_source = ComputeImageAPI.self_link(local_image_name, self.env.project)
         record = AgogeImageModel(**{

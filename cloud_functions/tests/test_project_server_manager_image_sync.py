@@ -5,6 +5,7 @@ from unittest.mock import Mock
 from cloud_fn_utilities.course_objects.compute.project_server_manager import ProjectServerManager
 from common.constants.database import DbCollections, DbOperationTypes
 from common.constants.states import ImageStatus, ServerStates
+from common.exceptions import NotFound
 from common.models.model_validators.model_validator import ModelValidator
 
 
@@ -73,3 +74,28 @@ def test_no_checked_out_images_writes_nothing():
     manager.stop_everything()
 
     assert manager.db.batches == []
+
+
+def test_template_servers_outside_the_deployment_zone_are_stopped_in_their_own_zone():
+    # A zone fallback leaves the VM out of the deployment-zone instance list, so the sweep stops it by record.
+    manager = _manager([
+        _image('fallback', zone='zone-b'),
+        _image('home', zone='zone'),
+        _image('legacy'),
+        _image('exempt', zone='zone-c'),
+        _image('ctf-host', zone='zone-c'),
+    ])
+
+    manager.stop_everything(exempt_prefixes=('ctf-',), exempt_names=('exempt',))
+
+    manager.compute_instance.stop.assert_called_once_with(resource_name='fallback', zone='zone-b', wait=False)
+
+
+def test_a_failed_stop_in_another_zone_does_not_block_the_state_sync():
+    manager = _manager([_image('fallback', zone='zone-b')])
+    manager.compute_instance.stop.side_effect = NotFound('gone')
+
+    manager.stop_everything()
+
+    manager.logger.warning.assert_called_once()
+    assert len(manager.db.batches) == 1

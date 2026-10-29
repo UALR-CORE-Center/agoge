@@ -1,6 +1,7 @@
 from typing import Any, List, Union, Tuple
 
 from google.cloud.compute_v1 import (
+    AggregatedListInstancesRequest,
     GetInstanceRequest,
     ListInstancesRequest,
     StartInstanceRequest,
@@ -81,6 +82,11 @@ class ComputeInstanceAPI(BaseComputeAPI):
             wait=False,
             request=get_request
         )
+
+    def zones_with_instance(self, resource_name: str) -> List[str]:
+        """The zones of this region holding an instance named `resource_name`. Names are unique per zone only."""
+        request = AggregatedListInstancesRequest(project=self.project, filter=f'name = "{resource_name}"')
+        return self._region_zones(self.client().aggregated_list, request, 'instances')
 
     def list(
         self,

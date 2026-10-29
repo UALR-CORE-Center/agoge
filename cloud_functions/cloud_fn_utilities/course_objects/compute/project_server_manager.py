@@ -41,9 +41,23 @@ class ProjectServerManager(BaseComputeManager):
 
             self.logger.info(f"{self.class_name} - All machines stopped (daily cleanup)")
 
-        # Sync Image database with new machine states
         filters = [('status', DbOperators.EQUAL, ImageStatus.CHECKED_OUT.value)]
         images = self.db.query(collection_name=self.collection.IMAGE, filters=filters)
+        # A template server built after a zone fallback is outside the zone listed above.
+        for image in images:
+            zone, name = image.get('zone'), image.get('name', '')
+            if not zone or zone == self.env.zone or name in exempt_names or \
+                    (exempt_prefixes and name.startswith(exempt_prefixes)):
+                continue
+            try:
+                self.compute_instance.stop(resource_name=image['name'], zone=zone, wait=False)
+            except (BadRequest, BaseAgogeException, NotFound) as e:
+                self.logger.warning(
+                    f'{self.class_name}:{image["name"]} - Error attempting to stop server in {zone}: {str(e)}',
+                    server=image['name']
+                )
+
+        # Sync Image database with new machine states
         operations = []
         for image in images:
             if image.get('name') in exempt_names:

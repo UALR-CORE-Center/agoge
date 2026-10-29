@@ -204,7 +204,7 @@ def test_a_zone_out_of_capacity_fails_the_first_build_with_a_readable_reason():
     # Google refused the build server; without this the record sat in provisioning, never CHECKED_OUT, so
     # the build monitor (which polls CHECKED_OUT records) never timed it out.
     manager, _ = _manager(_record())
-    manager.env = SimpleNamespace(project=PROJECT, zone='us-central1-a')
+    manager.env = SimpleNamespace(project=PROJECT, zone='us-central1-a', region='us-central1')
     manager.build = Mock(side_effect=RuntimeError(
         'Operation failed with errors: ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS: The zone does not have '
         'enough resources available to fulfill the request.'))
@@ -214,7 +214,9 @@ def test_a_zone_out_of_capacity_fails_the_first_build_with_a_readable_reason():
 
     stored = _stored(manager)
     assert stored['nested_build']['phase'] == 'failed'
-    assert stored['nested_build']['message'].startswith('Google Cloud has no n2-standard-8 capacity in us-central1-a')
+    # The build already tried every zone of the region before failing.
+    assert stored['nested_build']['message'].startswith(
+        'Google Cloud has no n2-standard-8 capacity in any us-central1 zone')
     assert 'not a quota' in stored['nested_build']['message']
 
 

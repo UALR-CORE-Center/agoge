@@ -80,6 +80,8 @@ class NestedBuildMonitor:
         if build.phase not in ACTIVE_PHASES:
             return build
         now = now or datetime.now(timezone.utc)
+        # Guest attributes and the secrets removal below read the zone the build landed in.
+        self.compute_instance.set_zone(image.get('zone') or self.env.zone)
 
         try:
             attributes = self.compute_instance.get_guest_attributes(name, query_path=ATTRIBUTE_NAMESPACE)

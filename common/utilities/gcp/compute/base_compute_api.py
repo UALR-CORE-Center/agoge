@@ -83,6 +83,27 @@ class BaseComputeAPI:
         self.addresses_client = None
         self.operations_client = None
 
+    def set_zone(self, zone: str) -> None:
+        """Point zonal requests and operation polling at `zone`.
+
+        A template server may live outside the deployment zone after a zone fallback. Methods that read
+        `self.zone` and the operation waits must both follow it, or a wait polls the wrong zone.
+        """
+        self.zone = zone
+        self.cloud_ops_mgr.zone = zone
+
+    def _region_zones(self, client_request: Any, request: Any, items_attr: str) -> List[str]:
+        """Zones of this region whose aggregatedList scope holds at least one item, sorted."""
+        pager = self._make_request(
+            client_request=client_request, action='list', resource=None, wait=False, request=request,
+        )
+        zones = []
+        for scope, scoped_list in pager:
+            zone = scope.removeprefix('zones/')
+            if scope.startswith('zones/') and zone.startswith(f'{self.region}-') and getattr(scoped_list, items_attr):
+                zones.append(zone)
+        return sorted(zones)
+
     @abstractmethod
     def client(self, **kwargs) -> Union[Resource, Any]:
         raise NotImplemented

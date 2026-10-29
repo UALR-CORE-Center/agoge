@@ -1,6 +1,7 @@
-from typing import Any, Union
+from typing import Any, List, Union
 
 from google.cloud.compute_v1 import (
+    AggregatedListDisksRequest,
     GetDiskRequest,
     DeleteDiskRequest,
     ResizeDiskRequest,
@@ -51,6 +52,11 @@ class ComputeDiskAPI(BaseComputeAPI):
         if not self.disk_client:
             self.disk_client = DisksClient()
         return self.disk_client
+
+    def zones_with_disk(self, resource_name: str) -> List[str]:
+        """The zones of this region holding a disk named `resource_name`."""
+        request = AggregatedListDisksRequest(project=self.project, filter=f'name = "{resource_name}"')
+        return self._region_zones(self.client().aggregated_list, request, 'disks')
 
     def get(
         self,
