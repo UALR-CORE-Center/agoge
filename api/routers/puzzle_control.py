@@ -1,112 +1,131 @@
-from fastapi import APIRouter, HTTPException, Request
+from typing import Any, Optional
 
+import requests
+from fastapi import APIRouter, Body, Depends, HTTPException
+
+from common.exceptions.agoge import AgogeValidationError
+from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from core.puzzle_control import PuzzleControl
-from dependencies import get_cloud_env
+from dependencies import get_cloud_env, teacher_required
 
-puzzle_control_router = APIRouter(prefix="/puzzle-control")
+logger = Logger(LoggerNames.API)
+
+# Every route drives the Govee devices or reads/writes trivia tests (including join codes),
+# and the player pages are instructor-only, so the whole router requires an instructor.
+puzzle_control_router = APIRouter(prefix="/puzzle-control", dependencies=[Depends(teacher_required)])
+
+# Handlers are sync so FastAPI runs them in its threadpool: PuzzleControl makes blocking
+# Firestore, Secret Manager and Govee (requests) calls.
+
+
+def _failed(action: str, e: Exception) -> HTTPException:
+    """Log an unexpected failure and return an error that does not echo its text, which can
+    carry Govee responses or internal details."""
+    if isinstance(e, requests.RequestException):
+        logger.error(f"Govee request failed: {action}", error=str(e))
+        return HTTPException(status_code=502, detail=f"Failed to {action}: lighting service error")
+    logger.error(f"Puzzle control failed: {action}", error=str(e))
+    return HTTPException(status_code=500, detail=f"Failed to {action}")
 
 
 @puzzle_control_router.get("/")
-async def list_devices() -> dict:
+def list_devices(env_dict: dict = Depends(get_cloud_env)) -> dict:
     """
     Returns all Govee devices linked to the API key stored in Google Secret Manager.
     """
     try:
-        lamp = PuzzleControl()
-        devices = lamp.list_devices()
-
-        if not devices:
-            return {"message": "No devices found or API key not valid", "devices": []}
-
-        return {"devices": devices}
-
+        devices = PuzzleControl(env_dict=env_dict).list_devices()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list devices: {e}")
+        raise _failed("list devices", e)
+
+    if not devices:
+        return {"message": "No devices found or API key not valid", "devices": []}
+    return {"devices": devices}
+
 
 @puzzle_control_router.post("/test/")
-async def create_test(
-        request: Request,
+def create_test(
+        title: str = Body(...),
+        questions: list[dict] = Body(...),
+        sku: str = Body(...),
+        device: str = Body(...),
+        env_dict: dict = Depends(get_cloud_env),
 ) -> dict:
-    json_data = await request.json()
-    title = json_data["title"]
-    questions = json_data["questions"]
-    sku = json_data["sku"]
-    device = json_data["device"]
     try:
-        puzzle = PuzzleControl()
-        response = puzzle.create_test(
+        return PuzzleControl(env_dict=env_dict).create_test(
             title=title,
             questions=questions,
             sku=sku,
             device=device,
         )
+    except AgogeValidationError as e:
+        raise HTTPException(status_code=400, detail=e.message)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create test: {e}")
-    return response
+        raise _failed("create test", e)
+
 
 @puzzle_control_router.get("/test/")
-async def get_tests() -> dict:
+def get_tests(env_dict: dict = Depends(get_cloud_env)) -> dict:
     try:
-        puzzle = PuzzleControl()
-        tests = puzzle.get_tests()
-        if not tests:
-            raise HTTPException(status_code=404, detail="No tests found or API key not valid")
-        return {"tests": tests}
+        tests = PuzzleControl(env_dict=env_dict).get_tests()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get tests: {e}")
+        raise _failed("get tests", e)
+    return {"tests": tests}
+
 
 @puzzle_control_router.get("/test/{join_code}")
-async def get_test(join_code: str) -> dict:
+def get_test(join_code: str, env_dict: dict = Depends(get_cloud_env)) -> dict:
     try:
-        puzzle = PuzzleControl()
-        test = puzzle.get_test(join_code)
-        if not test:
-            raise HTTPException(status_code=404, detail="No tests found")
-        return {"test": test}
+        test = PuzzleControl(env_dict=env_dict).get_test(join_code)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get test: {e}")
+        raise _failed("get test", e)
+
+    if not test:
+        raise HTTPException(status_code=404, detail="No tests found")
+    return {"test": test}
+
 
 @puzzle_control_router.post("/question/check")
-async def check_question_answer(request: Request) -> dict:
+def check_question_answer(
+        test_id: Optional[str] = Body(None),
+        question_id: Optional[str] = Body(None),
+        answer: Optional[str] = Body(None),
+        env_dict: dict = Depends(get_cloud_env),
+) -> dict:
     """
     Check if a student's submitted answer is correct.
     Expects JSON body:
     {
-        "id": "question-id",
+        "test_id": "test-id",
+        "question_id": "question-id",
         "answer": "student's submitted answer"
     }
     """
-    data = await request.json()
-    test_id = data.get("test_id")
-    question_id = data.get("question_id")
-    submitted_answer = data.get("answer")
-    if not question_id or submitted_answer is None:
-        raise HTTPException(status_code=400, detail="Both 'id' and 'answer' are required.")
+    if not test_id or not question_id or answer is None:
+        raise HTTPException(status_code=400, detail="'test_id', 'question_id' and 'answer' are required.")
 
     try:
-        puzzle = PuzzleControl()
-        result = puzzle.check_answer(question_id, submitted_answer, test_id)
-        if not result:
-            raise HTTPException(status_code=404, detail="Question not found")
-        return result
-    except HTTPException:
-        raise
+        result = PuzzleControl(env_dict=env_dict).check_answer(question_id, answer, test_id)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to check answer: {e}")
+        raise _failed("check answer", e)
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Question not found")
+    return result
+
 
 @puzzle_control_router.post("/control")
-async def control_device(request: Request) -> dict:
-    json_data = await request.json()
-
-    sku = json_data.get("sku")
-    device_id = json_data.get("device")
-
-    if not sku or not device_id:
+def control_device(
+        sku: Optional[str] = Body(None),
+        device: Optional[str] = Body(None),
+        action: Optional[Any] = Body(None),
+        actions: Optional[list] = Body(None),
+        env_dict: dict = Depends(get_cloud_env),
+) -> dict:
+    if not sku or not device:
         raise HTTPException(status_code=400, detail="Missing 'sku' or 'device'")
 
     # Accept one action or many
-    action = json_data.get("action")
-    actions = json_data.get("actions")
     if action and actions:
         raise HTTPException(status_code=400, detail="Use either 'action' or 'actions', not both.")
     if action:
@@ -239,27 +258,24 @@ async def control_device(request: Request) -> dict:
 
         raise HTTPException(status_code=400, detail=f"Unsupported action type: {name}")
 
-    try:
-        caps = [to_capability(a) for a in actions]
+    caps = [to_capability(a) for a in actions]
 
-        lamp = PuzzleControl()
+    try:
+        lamp = PuzzleControl(env_dict=env_dict)
         results = []
         for cap in caps:
-            res = lamp.control_device(sku=sku, device=device_id, capability=cap)
+            res = lamp.control_device(sku=sku, device=device, capability=cap)
             results.append({"capability": cap, "result": res})
-
-        return {
-            "status": "ok",
-            "applied": {
-                "sku": sku,
-                "device": device_id,
-                "count": len(caps),
-                "capabilities": caps,
-            },
-            "results": results,
-        }
-
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to control device: {e}")
+        raise _failed("control device", e)
+
+    return {
+        "status": "ok",
+        "applied": {
+            "sku": sku,
+            "device": device,
+            "count": len(caps),
+            "capabilities": caps,
+        },
+        "results": results,
+    }

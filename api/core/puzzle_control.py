@@ -22,11 +22,11 @@ from common.utilities.timestamps import Timestamps
 BASE = "https://openapi.api.govee.com/router/api/v1"
 
 class PuzzleControl:
-    def __init__(self):
+    def __init__(self, env_dict: dict = None):
         self.class_name = self.__class__.__name__
         self.log_name = LoggerNames.API
         self.collection_name = DbCollections.PUZZLE
-        self.env = CloudEnv(log_name=self.log_name)
+        self.env = CloudEnv(log_name=self.log_name, env_dict=env_dict)
         self.env_dict = self.env.get_env()
         self.db = DocumentDatabaseFactory.create_db_object(
             db_type=DatabaseTypes.firestore,

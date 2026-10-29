@@ -36,7 +36,7 @@ const create_test = async (
     return await apiService.post<LampTest>(
         `${URL_PUZZLE_CONTROL_API_BASE}test`,
         payload,
-        false,
+        true,
         null,
         transformToPuzzleTest
     )
@@ -46,7 +46,7 @@ const get_tests = async () => {
     return await apiService.get<GetTestsResponse>(
         `${URL_PUZZLE_CONTROL_API_BASE}test`,
         null,
-        false,
+        true,
         transformToPuzzleTests
     );
 };
@@ -55,7 +55,7 @@ const get_test = async (join_code: string) => {
     return await apiService.get<LampTest>(
         `${URL_PUZZLE_CONTROL_API_BASE}test/${join_code}`,
         null,
-        false,
+        true,
         transformToPuzzleTest
     )
 }
@@ -70,7 +70,7 @@ const check_answer = async (
     return await apiService.post<LampQuestion>(
         `${URL_PUZZLE_CONTROL_API_BASE}question/check`,
         payload,
-        false,
+        true,
         null,
         transformToPuzzleQuestion
     );

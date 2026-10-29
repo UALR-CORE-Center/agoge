@@ -119,16 +119,16 @@ const AppRouter: React.FC = () => {
             { path: URL_STUDENT_JOIN, element: <JoinWorkout /> },
             {
                 path: URL_PUZZLE_ADMIN,
-                element: <PuzzleAdminPanel />,
+                element: <ProtectedRoute element={<PuzzleAdminPanel />} level={"instructor"} />,
                 errorElement: <AppError />,
             },
             {
                 path: URL_PUZZLE_PLAYER,
-                element: <PlayerHomePage />,
+                element: <ProtectedRoute element={<PlayerHomePage />} level={"instructor"} />,
             },
             {
                 path: `${URL_PUZZLE_PLAYER}/:join_code`,
-                element: <PuzzleQuestionPage/>
+                element: <ProtectedRoute element={<PuzzleQuestionPage />} level={"instructor"} />,
             },
         ],
         {basename: BASENAME}

@@ -1,4 +1,4 @@
-from fastapi import Depends, Security, Request, HTTPException, Path
+from fastapi import Depends, Security, Request, HTTPException, Path, Query, WebSocketException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from firebase_admin import auth
 from typing import Optional
@@ -65,6 +65,26 @@ def admin_required(
         logger.error("Insufficient permissions")
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     return current_user
+
+
+def websocket_admin_required(
+    token: Optional[str] = Query(None, description="Firebase ID token")
+) -> AgogeUser:
+    """admin_required for WebSocket routes. Browsers cannot set an Authorization header on a
+    WebSocket, so the ID token arrives as ?token=. Raising before accept() rejects the handshake."""
+    user = None
+    if token:
+        try:
+            user = verify_token(
+                request=None,
+                token=HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+            )
+        except (Unauthorized, BadRequest):
+            user = None
+    if not user or not user.is_admin:
+        logger.error("Insufficient permissions")
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Insufficient permissions")
+    return user
 
 
 def ctf_enabled_required() -> None:
