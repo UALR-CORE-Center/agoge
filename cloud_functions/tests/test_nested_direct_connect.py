@@ -180,3 +180,16 @@ def test_direct_connect_nested_host_gets_the_forward_once():
 ])
 def test_no_forward_without_direct_connect_or_a_jumpbox(nic, connections):
     assert 'agoge-nested-direct-connect' not in _startup_script(_manager([nic], connections))
+
+
+def test_a_loaded_server_record_gets_the_forward():
+    # The build path: the server record goes through _load_lab_server, which must carry human_interaction
+    manager = object.__new__(LabServerManager)
+    manager.server_spec = SimpleNamespace(guacamole_startup_script=None)
+    manager.assessment = MagicMock()
+    manager.assessment.get_startup_scripts.return_value = None
+    manager._load_lab_server('abcdefghij-nestedhost', server_spec={
+        'parent_id': 'abcdefghij', 'details': {'os': 'linux'}, 'nics': [DIRECT_NIC],
+        'human_interaction': [PARENT_SSH, KALI_SSH],
+    })
+    assert render_direct_connect(0).strip() in _startup_script(manager)

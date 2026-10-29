@@ -61,6 +61,29 @@ describe('WorkoutConnectButton on a nested host', () => {
 
         expect(screen.getByText('ssh student@kali.agoge-labs.com')).toBeInTheDocument();
     });
+
+    it('tunnels the jumpbox RDP over its direct SSH', () => {
+        openDialog(nestedHost('nestedhost.agoge-labs.com', [PARENT_SSH, KALI_SSH, KALI_RDP]));
+
+        expect(screen.getByText('ssh -L 13389:localhost:3389 kali@nestedhost.agoge-labs.com')).toBeInTheDocument();
+        expect(screen.getByText('localhost:13389')).toBeInTheDocument();
+    });
+
+    it('offers no tunnel for RDP without a direct-connect hostname', () => {
+        openDialog(nestedHost(null, [PARENT_SSH, KALI_SSH, KALI_RDP]));
+
+        expect(screen.queryByText(/ssh -L/)).not.toBeInTheDocument();
+    });
+
+    it('keeps the plain RDP hostname on a direct-connect server', () => {
+        openDialog({
+            name: 'win', state: WorkoutStates.RUNNING, hostname: 'win.agoge-labs.com',
+            nics: [{network: 'external'}], human_interaction: [{protocol: 'rdp', username: 'student', password: 'spw'}],
+        });
+
+        expect(screen.getByText('win.agoge-labs.com')).toBeInTheDocument();
+        expect(screen.queryByText(/ssh -L/)).not.toBeInTheDocument();
+    });
 });
 
 describe('WorkoutConnectButton Guacamole links', () => {

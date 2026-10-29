@@ -133,6 +133,23 @@ export const directConnection = (interactions: HumanInteraction[] | null | undef
     (interactions ?? []).find(interaction =>
         interaction.display && interaction.protocol === 'ssh' && interaction.alias_index != null);
 
+export const RDP_TUNNEL_LOCAL_PORT = 13389;
+
+/**
+ * The host forwards only outside SSH to the jumpbox, so RDP to that same guest rides an SSH tunnel through it:
+ * port 22 lands on the jumpbox, where localhost:3389 is its own xrdp. null for every other connection, including
+ * all of a plain direct-connect server's, which carry no nested_guest.
+ */
+export const jumpboxRdpTunnel = (
+    interaction: HumanInteraction,
+    jumpbox: HumanInteraction | undefined,
+    hostname: string | null | undefined,
+): string | null =>
+    interaction.protocol === 'rdp' && jumpbox && hostname && interaction.nested_guest
+    && interaction.nested_guest === jumpbox.nested_guest
+        ? `ssh -L ${RDP_TUNNEL_LOCAL_PORT}:localhost:3389 ${jumpbox.username ?? '<user>'}@${hostname}`
+        : null;
+
 export const studentConnections = (
     interactions: HumanInteraction[] | null | undefined,
     nestedHost = false,

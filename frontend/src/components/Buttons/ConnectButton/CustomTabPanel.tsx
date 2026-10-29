@@ -1,7 +1,11 @@
 import {Box, Divider, Tab, Tabs, Typography} from "@mui/material";
 import React from "react";
 import {HumanInteraction} from "../../../services/Specification/specification.model";
-import {directConnection} from "../../Teacher/Specifications/NewEditor/ServerForm/nestedServer";
+import {
+    directConnection,
+    jumpboxRdpTunnel,
+    RDP_TUNNEL_LOCAL_PORT,
+} from "../../Teacher/Specifications/NewEditor/ServerForm/nestedServer";
 import {ConnectButtonProps} from "./BaseConnectButton";
 import {UserDetailField} from "./UserDetailField";
 
@@ -77,6 +81,7 @@ export const CustomTabPanel: React.FC<Props> = (props) => {
                 // A nested guest answers on an alias IP inside the lab; only the jumpbox is forwarded the
                 // parent's outside SSH, so only it can use the parent's hostname
                 const hostname = interaction.nested_guest && interaction !== jumpbox ? null : serverHostname;
+                const rdpTunnel = jumpboxRdpTunnel(interaction, jumpbox, serverHostname);
                 return (
                 <TabPanel
                     key={`panel-${interaction.protocol}-${index}`}
@@ -93,22 +98,27 @@ export const CustomTabPanel: React.FC<Props> = (props) => {
                             >
                                 RDP
                             </Typography>
-                            <Typography sx={{ mt: 2 }}>
-                                To connect to this server, connect using your system&#39;s RDP app with the server
-                                details provided below.
+                            <Typography sx={{ mt: 2, mb: 2 }}>
+                                On your machine, open your RDP app (Remote Desktop Connection on Windows, Microsoft
+                                Remote Desktop on Mac) and connect with the details listed below.
                             </Typography>
-                            <Box sx={{ mt: 2 }}>
-                                <ul>
-                                    <li>On Windows, this is Remote Desktop Connection</li>
-                                    <li>On Mac, it is Microsoft Remote Desktop.</li>
-                                </ul>
-                            </Box>
                             <Divider />
-                            <Box component="section" paddingTop={1}>
+                            {rdpTunnel && jumpbox ? (
+                                <>
+                                    <Typography sx={{mt: 2, mb: 2}}>
+                                        First open an SSH tunnel by running this command in a terminal/command prompt
+                                        and entering the SSH password. Leave it open, then connect your RDP app to the
+                                        hostname below.
+                                    </Typography>
+                                    <UserDetailField label="SSH Tunnel Command" value={rdpTunnel} />
+                                    <UserDetailField label="SSH Password" value={String(jumpbox.password ?? "")} />
+                                    <UserDetailField label="Hostname" value={`localhost:${RDP_TUNNEL_LOCAL_PORT}`} />
+                                </>
+                            ) : (
                                 <UserDetailField label="Hostname" value={String(hostname ?? "")} />
-                                <UserDetailField label="Username" value={String(interaction.username ?? "")} />
-                                <UserDetailField label="Password" value={String(interaction.password ?? "")} />
-                            </Box>
+                            )}
+                            <UserDetailField label="Username" value={String(interaction.username ?? "")} />
+                            <UserDetailField label="User Password" value={String(interaction.password ?? "")} />
                         </>
                     )}
 

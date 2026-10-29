@@ -251,6 +251,8 @@ class BaseComputeManager:
             self.server_spec.startup_script = '\n'.join(self.server_spec.startup_scripts)
         self.server_spec.guacamole_startup_script = server_spec.get('guacamole_startup_script', None)
         self.server_spec.hostname = server_spec.get('hostname', None)
+        # A nested host's direct-connect forward finds its jumpbox slot here
+        self.server_spec.human_interaction = server_spec.get('human_interaction', None)
         self.server_spec.image = server_spec.get('image')
         self.server_spec.machine_image = server_spec.get('machine_image', None)
         self.server_spec.machine_type = server_spec.get(

@@ -87,7 +87,9 @@ export const BaseConnectButton: React.FC<BaseConnectButtonProps> = ({ item, isDi
                         sx={{
                             padding: { xs: 2, sm: 4 },
                             minWidth: { xs: 0, sm: 300 },
-                            width: { xs: '100%', sm: 'auto' },
+                            // A fixed width on desktop keeps the modal the same size whichever connection tab is
+                            // shown; sized to its content, the SSH and RDP tabs came out different sizes.
+                            width: { xs: '100%', sm: 'auto', md: '66.667%' },
                             // Long tunnel commands would stretch it across the screen; two thirds is wide
                             // enough for them to wrap legibly. Phones keep the full width.
                             maxWidth: { xs: '100%', md: '66.667%' },
