@@ -1,4 +1,4 @@
-import {Unit, UnitFull, UnitRoster, UnitState} from "../../services/Unit/unit.model";
+import {Unit, UnitFull, UnitState} from "../../services/Unit/unit.model";
 import {transformToWorkout} from "./workout.transform";
 
 
@@ -41,13 +41,6 @@ export const transformToUnitState = (data: any): UnitState => {
     return {
         build_id: data.build_id,
         state: data?.state,
-    };
-};
-
-export const transformToUnitRoster = (data:any): UnitRoster =>{
-    return {
-        id: data.id,
-        roster: data.roster,
     };
 };
 

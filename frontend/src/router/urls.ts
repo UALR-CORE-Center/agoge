@@ -57,8 +57,6 @@ export const
     // API Routes
     URL_UNIT_API_BASE: string = "units/",
     URL_UNIT_API_ITEM: string = `${URL_UNIT_API_BASE}{ITEM_ID}/`,
-    URL_UNIT_API_ITEM_STATE: string = `${URL_UNIT_API_ITEM}state/`,
-    URL_UNIT_API_ITEM_ROSTER: string = `${URL_UNIT_API_ITEM}roster/`,
     URL_UNIT_API_ITEM_FULL: string = `${URL_UNIT_API_ITEM}full/`,
     URL_UNIT_API_ITEMS: string = `${URL_UNIT_API_BASE}{ITEM_ID}/workouts/`,
     URL_RUBRIC_API_BASE: string = "rubrics/",

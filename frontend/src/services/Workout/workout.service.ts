@@ -4,6 +4,7 @@ import {
     URL_WORKOUT_API_ITEM_STATE,
     URL_WORKOUT_QUESTION_API_ITEM
 } from "../../router/urls";
+import { PubSub } from "../../types/PubSub";
 import formatString from "../../utilities/formatString";
 import {
     transformToFullWorkout, transformToWorkoutId,
@@ -49,6 +50,9 @@ export const post = async (data: { [k: string]: FormDataEntryValue }) => {
     );
 }
 
+// The API requires the unit's instructor for these; students send START/STOP/EXTEND anonymously.
+const INSTRUCTOR_ACTIONS = [PubSub.Actions.NUKE, PubSub.Actions.DELETE, PubSub.Actions.BUILD].map(String);
+
 export const put_action = async (buildId: string, action: string, duration?: number, extIp?: string) => {
     const endpoint = formatString(URL_WORKOUT_API_ITEM, {"ITEM_ID": buildId});
     let payload;
@@ -59,7 +63,8 @@ export const put_action = async (buildId: string, action: string, duration?: num
     } else {
         payload = {'action': action}
     }
-    return await apiService.put<WorkoutState>(endpoint, payload, false, transformToWorkoutState);
+    const includeAuth = INSTRUCTOR_ACTIONS.includes(String(action));
+    return await apiService.put<WorkoutState>(endpoint, payload, includeAuth, transformToWorkoutState);
 }
 
 export const configure = async (buildId: string, extIp: string) => {

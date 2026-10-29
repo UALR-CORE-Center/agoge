@@ -2,8 +2,6 @@ import {
     URL_UNIT_API_BASE,
     URL_UNIT_API_ITEM,
     URL_UNIT_API_ITEM_FULL,
-    URL_UNIT_API_ITEM_ROSTER,
-    URL_UNIT_API_ITEM_STATE,
     URL_UNIT_API_ITEMS,
     URL_WORKOUT_API_BASE
 } from "../../router/urls";
@@ -13,28 +11,17 @@ import {
     transformToFullUnit,
     transformToUnit,
     transformToUnitList,
-    transformToUnitRoster,
     transformToUnitState,
 } from "../../utilities/transformers/unit.transform";
 import {transformToWorkoutList} from "../../utilities/transformers/workout.transform";
 import {Workout} from "../Workout/workout.model";
 import {apiService} from "../api-request.service";
-import {Unit, UnitFull, UnitRoster, UnitState} from "./unit.model";
+import {Unit, UnitFull, UnitState} from "./unit.model";
 
 
 const get = async (buildId: string) => {
     const endpoint = formatString(URL_UNIT_API_ITEM, {"ITEM_ID": buildId});
     return await apiService.get<Unit>(endpoint, null, true, transformToUnit);
-}
-
-const get_state = async (buildId: string) => {
-    const endpoint = formatString(URL_UNIT_API_ITEM_STATE, {"ITEM_ID": buildId});
-    return await apiService.get<UnitState>(endpoint, null, true, transformToUnitState);
-}
-
-const get_roster = async(buildId: string)=>{
-    const endpoint = formatString(URL_UNIT_API_ITEM_ROSTER, {"ITEM_ID": buildId});
-    return await apiService.get<UnitRoster>(endpoint,null,true, transformToUnitRoster);
 }
 
 const get_full = async(buildId: string)=>{
@@ -133,8 +120,6 @@ const patch = async (buildId: string, formData: {[key: string]: any}) => {
 
 export const unitService = {
     get,
-    get_state,
-    get_roster,
     post_action,
     get_full,
     list,

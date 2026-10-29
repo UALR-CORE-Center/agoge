@@ -11,6 +11,7 @@ from core.ctf.config import is_ctf_enabled
 from core.users import Users
 
 security = HTTPBearer()
+optional_security = HTTPBearer(auto_error=False)
 logger = Logger(log_name=LoggerNames.API)
 
 
@@ -36,6 +37,15 @@ def get_current_user(
         except BadRequest as e:
             raise HTTPException(status_code=400, detail=e.message)
     return AnonymousAppUser()
+
+
+def get_optional_user(
+    request: Request,
+    token: Optional[HTTPAuthorizationCredentials] = Security(optional_security)
+) -> AgogeUser:
+    """Like get_current_user, but a missing Authorization header yields AnonymousAppUser
+    instead of a 403, for routes that serve both anonymous students and instructors."""
+    return get_current_user(request=request, token=token)
 
 
 def teacher_required(

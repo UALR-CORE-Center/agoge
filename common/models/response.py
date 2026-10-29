@@ -134,16 +134,6 @@ class UnitFullResponse(BaseModel):
     rubric_support: bool
 
 
-class UnitStateResponse(BaseModel):
-    exists: bool
-    items: List[WorkoutStateResponse]
-    total: int
-
-
-class UnitRosterResponse(BaseModel):
-    roster: int
-
-
 class UsersListResponse(BaseModel):
     items: List[SafeAgogeUser]
 

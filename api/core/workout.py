@@ -27,10 +27,17 @@ from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.utilities.id_generator import IdGenerator
 from common.utilities.timestamps import Timestamps
 
+from core.unit import Unit
 from utilities.lms.lms_canvas import LMSCanvas
 
 
 class Workout:
+    INSTRUCTOR_ACTIONS = (
+        PubSub.Actions.NUKE.value,
+        PubSub.Actions.DELETE.value,
+        PubSub.Actions.BUILD.value,
+    )
+
     def __init__(
         self,
         env_dict: dict = None,
@@ -192,6 +199,7 @@ class Workout:
         self,
         build_id: str,
         request: Request,
+        requester: AgogeUser | AnonymousAppUser,
     ) -> dict:
         valid_actions = [
             PubSub.Actions.START.value,
@@ -220,6 +228,11 @@ class Workout:
         workout = self.get(build_id, as_dict=True)
         if not workout:
             raise NotFound(message=f"Requested workout with id {build_id} not found")
+
+        # The workout ID alone authorizes START/STOP/EXTEND for students; destructive
+        # actions need the unit's instructor so a leaked ID cannot destroy the lab.
+        if action in self.INSTRUCTOR_ACTIONS:
+            self._require_unit_instructor(workout, requester)
 
         # Make sure the action is safe to do
         if not self._safe_to_perform_action(action, workout):
@@ -617,6 +630,21 @@ class Workout:
         if dispatcher is None:
             raise BadRequest('Local debug execution requires a configured local dispatcher')
         dispatcher(message_attrs)
+
+    def _require_unit_instructor(
+        self,
+        workout: dict,
+        requester: AgogeUser | AnonymousAppUser
+    ) -> None:
+        """Raise Unauthorized unless the requester is an admin or an instructor of the workout's unit."""
+        if not requester.is_authorized:
+            raise Unauthorized(message="Instructor access is required for this workout action")
+        if requester.is_admin:
+            return
+        unit = self.db.get(collection_name=DbCollections.UNIT, doc_id=workout.get('parent_id'))
+        if not unit:
+            raise Unauthorized(message="Instructor access is required for this workout action")
+        Unit._require_instructor_access(unit, requester)
 
     @staticmethod
     def _safe_to_perform_action(

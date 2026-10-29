@@ -591,28 +591,6 @@ class Unit:
             return instructor_units
         return units
 
-    def get_states(
-        self,
-        build_id: str,
-    ) -> tuple[bool, list]:
-        """
-        Retrieves states for all workouts in a unit sorted by workout id
-        Args:
-            build_id (str): ID of Unit
-
-        Returns: exists (bool), states (list)
-
-        """
-        workouts = self._get_unit_workouts(build_id)
-        if workouts:
-            states = [
-                {'build_id': i['id'], 'state': WorkoutStates(i['state']).name.lower()}
-                for i in workouts
-            ]
-        else:
-            states = []
-        return bool(states), states
-
     def get_unit_roster_size(
         self,
         build_id: str = None,

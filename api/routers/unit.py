@@ -13,8 +13,7 @@ from common.models.response import (
     ActiveExpiredUnitListResponse,
     AgogeIDResponse,
     AgogeResponse,
-    UnitStateResponse,
-    WorkoutListResponse, UnitRosterResponse, UnitFullResponse, UnitListResponse
+    WorkoutListResponse, UnitFullResponse, UnitListResponse
 )
 from common.models.users import AgogeUser
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
@@ -120,25 +119,6 @@ async def get_unit(
     except Unauthorized as e:
         logger.error(e.message)
         raise HTTPException(status_code=403, detail=e.message)
-
-
-@unit_router.get("/{build_id}/state/")
-async def get_unit_state(
-    build_id: str = Depends(build_id_path),
-    env_dict: dict = Depends(get_cloud_env),
-) -> AgogeResponse[UnitStateResponse]:
-    exists, states = Unit(env_dict=env_dict).get_states(build_id)
-    total = len(states)
-    return AgogeResponse(data={'exists': exists, 'items': states, 'total': total})
-
-
-@unit_router.get("/{build_id}/roster/")
-async def get_unit_roster(
-    build_id: str = Depends(build_id_path),
-    env_dict: dict = Depends(get_cloud_env)
-) -> AgogeResponse[UnitRosterResponse]:
-    roster = Unit(env_dict=env_dict).get_unit_roster_size(build_id=build_id)
-    return AgogeResponse(data={'roster': roster})
 
 
 @unit_router.get(

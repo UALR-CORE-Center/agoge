@@ -30,6 +30,7 @@ from dependencies import (
     admin_required,
     get_cloud_env,
     get_current_user,
+    get_optional_user,
     build_id_path
 )
 
@@ -159,6 +160,7 @@ async def process_action(
     request: Request,
     build_id: str = Depends(build_id_path),
     env_dict: dict = Depends(get_cloud_env),
+    current_user: AgogeUser | AnonymousAppUser = Depends(get_optional_user),
 ) -> AgogeResponse[WorkoutStateResponse]:
     logger.workout_id = build_id
     log_args = {'origin': request.client.host}
@@ -169,6 +171,7 @@ async def process_action(
             .process_action(
                 build_id=build_id,
                 request=request,
+                requester=current_user,
             )
         )
         return AgogeResponse(data=workout_state)
@@ -178,6 +181,9 @@ async def process_action(
     except NotFound as e:
         logger.error(e.message, **log_args)
         raise HTTPException(status_code=404)
+    except Unauthorized as e:
+        logger.warning(e.message, **log_args)
+        raise HTTPException(status_code=403, detail=e.message)
 
 
 @workout_router.patch("/{build_id}/")
