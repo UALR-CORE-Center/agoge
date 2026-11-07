@@ -317,6 +317,8 @@ def test_display_proxy_build_prepares_its_record_before_compute_creation():
     display_proxy = object.__new__(DisplayProxy)
     lifecycle = MagicMock()
     display_proxy.server_id = "workout-a-display-guacamole-server"
+    display_proxy.db = MagicMock()
+    display_proxy.db.get.return_value = {}
     display_proxy.prepare_server_record = lifecycle.prepare_server_record
     display_proxy.compute_manager = lifecycle.compute_manager
 

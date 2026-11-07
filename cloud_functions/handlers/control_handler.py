@@ -1,14 +1,19 @@
 import json
+from datetime import datetime, timezone
 
 from cloud_fn_utilities.course_objects.compute.snapshot_manager import SnapshotManager
+from cloud_fn_utilities.build_execution import server_owner
 from cloud_fn_utilities.course_objects.vulnerabilities import Vulnerabilities
 from cloud_fn_utilities.lms.lms_synchronizer_factory import LMSSynchronizerFactory
 from common.constants.enumerators import SnapshotTypes
 from common.constants.pub_sub import PubSub
-from common.constants.database import DatabaseTypes, DATABASE_NAME
+from common.constants.database import DatabaseTypes, DATABASE_NAME, DbCollections
+from common.constants.states import ServerStates, UnitStates
 from common.document_database import DocumentDatabaseFactory
+from common.utilities.build_incidents import BuildIncidents
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
+from common.utilities.gcp.compute.quota_failure import ComputeQuotaFailure
 from common.utilities.gcp.pubsub_manager import PubSubManager
 
 from cloud_fn_utilities.course_objects.compute.google_image_sync_manager import GoogleImageSyncManager
@@ -26,6 +31,7 @@ class ControlHandler:
     ) -> None:
         self.class_name = self.__class__.__name__
         self.event_attributes = event_attributes
+        self.event_id = None
         self.env = CloudEnv(env_dict=env_dict) if env_dict else CloudEnv()
         self.env_dict = self.env.get_env()
         self.debug = debug
@@ -90,8 +96,84 @@ class ControlHandler:
             )
             raise ValueError
 
-        # Perform action
-        action_func()
+        if self.action == str(PubSub.Actions.DELETE.value):
+            self._tracked_delete(action_func)
+        elif self.action == str(PubSub.Actions.START.value) and self._lab_start_is_stale():
+            self.logger.info('Skipped starting a failed or deleted lab', build_id=self.build_id)
+        else:
+            action_func()
+
+    def _lab_start_is_stale(self):
+        if self.course_object == str(PubSub.CourseObjects.UNIT.value):
+            collection, target_id = DbCollections.UNIT, self.build_id
+        elif self.course_object == str(PubSub.CourseObjects.WORKOUT.value):
+            collection, target_id = DbCollections.WORKOUT, self.build_id
+        elif self.course_object == str(PubSub.CourseObjects.LAB_SERVER.value):
+            server = self.db.get(DbCollections.SERVER, self.build_id) or {}
+            if not server or (server.get('state') or 0) >= ServerStates.DELETING.value:
+                return True
+            collection, target_id = server_owner(self.db, self.build_id)
+            if not collection:
+                return True
+        else:
+            return False
+
+        def unavailable(record):
+            return (not record or record.get('build_failure_id')
+                    or (record.get('state') or 0) >= UnitStates.DELETING_SERVERS.value)
+
+        target = self.db.get(collection, target_id) or {}
+        if unavailable(target):
+            return True
+        if collection == DbCollections.WORKOUT and target.get('parent_id'):
+            return bool(unavailable(self.db.get(DbCollections.UNIT, target['parent_id'])))
+        return False
+
+    def _tracked_delete(self, delete):
+        unit_kind = str(PubSub.CourseObjects.UNIT.value)
+        workout_kind = str(PubSub.CourseObjects.WORKOUT.value)
+        server_kind = str(PubSub.CourseObjects.LAB_SERVER.value)
+        if self.course_object == unit_kind:
+            collection, target_id = DbCollections.UNIT, self.build_id
+        elif self.course_object == workout_kind:
+            collection, target_id = DbCollections.WORKOUT, self.build_id
+        elif self.course_object == server_kind:
+            collection, target_id = server_owner(self.db, self.build_id)
+        else:
+            collection, target_id = None, None
+        if not target_id:
+            delete()
+            return
+
+        target = self.db.get(collection, target_id) or {}
+        workout_id = target_id if collection == DbCollections.WORKOUT else None
+        unit_id = target.get('parent_id') if workout_id else target_id
+        if not unit_id:
+            delete()
+            return
+
+        location = {
+            'unit_id': unit_id,
+            'workout_id': workout_id,
+            'attempt_id': target.get('build_attempt_id'),
+        }
+        incidents = BuildIncidents(self.db, self.env.project)
+        try:
+            deleted = delete()
+            if deleted is False:
+                raise ConnectionError('Lab server deletion was not confirmed')
+            if self.course_object == server_kind:
+                # Only the owner knows whether the rest of the lab is gone.
+                return
+            target = self.db.get(collection, target_id) or {}
+            if target.get('state') != UnitStates.DELETED.value:
+                raise ConnectionError('Lab deletion was not confirmed')
+        except Exception:
+            incidents.record_cleanup_failure(**location, event_id=self.event_id,
+                                             stage='server_cleanup' if self.course_object == server_kind else 'cleanup')
+            raise
+
+        incidents.resolve_target(**location)
 
     def _start(self) -> None:
         if self.course_object == str(PubSub.CourseObjects.LAB_SERVER.value):
@@ -175,7 +257,7 @@ class ControlHandler:
         if self.course_object == str(PubSub.CourseObjects.LAB_SERVER.value):
             cm = ComputeManagerFactory.create_manager_object(env_dict=self.env_dict)
             cm.load(server_name=self.build_id)
-            cm.delete()
+            return cm.delete()
         elif self.course_object == str(PubSub.CourseObjects.WORKOUT.value):
             workout = WorkoutFactory.create_workout_object(
                 workout_id=self.build_id,
@@ -237,13 +319,31 @@ class ControlHandler:
                 server_name=self.build_id,
                 network_prefix=self.network_prefix,
             )
-            cm.nuke()
+            try:
+                cm.nuke()
+            except ComputeQuotaFailure as error:
+                if error.category != 'allocation' or not getattr(self, 'event_id', None):
+                    raise
+                collection, target_id = server_owner(self.db, self.build_id)
+                if not target_id:
+                    raise
+                target = self.db.get(collection, target_id) or {}
+                workout_id = target_id if collection == DbCollections.WORKOUT else None
+                unit_id = target.get('parent_id') if workout_id else target_id
+                BuildIncidents(self.db, self.env.project).record_quota(
+                    error, unit_id=unit_id, workout_id=workout_id, stage='server_rebuild',
+                    event_id=self.event_id, attempt_id=target.get('build_attempt_id'),
+                    target_patch={'state': UnitStates.BROKEN.value,
+                                  'state_timestamp': datetime.now(timezone.utc).isoformat(),
+                                  **({'active': False} if workout_id else {})},
+                )
         elif self.course_object == str(PubSub.CourseObjects.WORKOUT.value):
             workout = WorkoutFactory.create_workout_object(
                 workout_id=self.build_id,
                 debug=self.debug,
                 env_dict=self.env_dict
             )
+            workout.rebuild_event_id = getattr(self, 'event_id', None)
             workout.nuke()
         else:
             self.logger.error(

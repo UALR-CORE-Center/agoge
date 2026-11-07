@@ -18,6 +18,7 @@ from common.models.agoge import (
     CtfTeamRequest, UnitModel,
 )
 from common.models.users import AgogeUser
+from common.utilities.build_incidents import BuildIncidents, BuildQuotaHold, LabBuildUnavailable
 from common.utilities.ctf_flags import derive_flag_value, flag_digest
 from core.ctf.event import NOT_PROVISIONED_MESSAGE, CtfEvent
 from core.ctf.setup import CtfSetup
@@ -26,6 +27,7 @@ SEED = "s" * 64
 GM = "gm@example.edu"
 SPEC_ID = "web-lab"
 CTF_ID = "ctfaaaaaaa"
+PROJECT_ID = "example-training-project"
 
 
 def merge(target, data):
@@ -165,6 +167,7 @@ def catalog_doc(spec_id=SPEC_ID, ctf="default", **kw):
 def make_env(seed=SEED):
     env = MagicMock()
     env.ctf_flag_seed = seed
+    env.project = PROJECT_ID
     return env
 
 
@@ -772,7 +775,44 @@ def test_servers_build_publishes_one_build_per_not_built_workout(db, pubsub):
     assert sent(pubsub) == [{
         attrs.HANDLER: str(PubSub.Handlers.BUILD.value), attrs.ACTION: str(PubSub.Actions.BUILD.value),
         attrs.COURSE_OBJECT: str(PubSub.CourseObjects.WORKOUT.value), attrs.BUILD_ID: workout_id,
+        attrs.BUILD_ATTEMPT_ID: db.get(DbCollections.WORKOUT, workout_id)['build_attempt_id'],
     } for workout_id in (red, blue)]
+    assert len({message[attrs.BUILD_ATTEMPT_ID] for message in sent(pubsub)}) == 2
+
+
+def test_servers_build_checks_network_quota_before_recording_attempts_or_publishing(db, pubsub):
+    setup, red, blue = two_teams(db, pubsub)
+    db.collection(DbCollections.WORKOUT)[red]['networks'] = [{'name': 'team-network'}]
+    BuildIncidents(db, PROJECT_ID).update_verified_quota(None, usage=30, limit=30, verified_by='admin')
+
+    with pytest.raises(BuildQuotaHold):
+        setup.servers(CTF_ID, 'build', user())
+
+    pubsub.msg.assert_not_called()
+    assert all('build_attempt_id' not in db.get(DbCollections.WORKOUT, workout_id) for workout_id in (red, blue))
+
+
+def test_servers_start_skips_the_failed_team_even_during_a_network_quota_hold(db, pubsub):
+    setup, red, blue = two_teams(db, pubsub)
+    set_states(db, WorkoutStates.READY, red, blue)
+    db.collection(DbCollections.WORKOUT)[red]['build_failure_id'] = 'failed-build'
+    BuildIncidents(db, PROJECT_ID).update_verified_quota(None, usage=30, limit=30, verified_by='admin')
+
+    assert setup.servers(CTF_ID, 'start', user()) == 1
+    assert [message[PubSub.EventAttributes.BUILD_ID] for message in sent(pubsub)] == [blue]
+
+
+def test_servers_start_refuses_a_failed_lab_but_stop_is_available(db, pubsub):
+    setup, red, blue = two_teams(db, pubsub)
+    set_states(db, WorkoutStates.READY, red, blue)
+    [unit_id] = db.collection(DbCollections.UNIT)
+    db.collection(DbCollections.UNIT)[unit_id]['build_failure_id'] = 'failed-lab'
+
+    with pytest.raises(LabBuildUnavailable):
+        setup.servers(CTF_ID, 'start', user())
+    pubsub.msg.assert_not_called()
+
+    assert setup.servers(CTF_ID, 'stop', user()) == 2
 
 
 def test_servers_build_skips_workouts_that_are_already_built(db, pubsub):
@@ -895,6 +935,13 @@ def test_servers_publish_failure_is_raised(db, pubsub):
     pubsub.msg.return_value.result.side_effect = RuntimeError("topic missing")
     with pytest.raises(RuntimeError, match="topic missing"):
         setup.servers(CTF_ID, "build", user())
+
+    first_messages = sent(pubsub)
+    pubsub.msg.reset_mock()
+    pubsub.msg.return_value.result.side_effect = None
+
+    assert setup.servers(CTF_ID, "build", user()) == 2
+    assert sent(pubsub) == first_messages
 
 
 # --- arm with zero boards ----------------------------------------------------------

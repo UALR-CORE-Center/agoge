@@ -84,6 +84,7 @@ def cleanup(monkeypatch):
     unit.wireguard_endpoint = WireGuardEndpointModel(
         id='10000', server_name=f'{unit_id}-wireguard',
         hostname='wg10000.example.edu', external_ip_name='legacy-address')
+    db.collections[DbCollections.UNIT.value] = {unit_id: unit.model_dump()}
     db.collections[DbCollections.SERVER.value] = {}
     db.collections[DbCollections.WIREGUARD_KIT.value] = {
         'remote-lab-01': {'assigned_unit_id': unit_id}}
@@ -192,7 +193,7 @@ def test_failed_resource_delete_preserves_lease_and_prevents_network_teardown(cl
     cleanup.secrets.delete.assert_not_called()
     cleanup.identity.return_value.delete.assert_not_called()
     cleanup.unit.vpc_manager.delete.assert_not_called()
-    assert cleanup.state.value == UnitStates.BROKEN.value
+    assert cleanup.state.value == UnitStates.DELETING_SERVERS.value
 
 
 def test_completed_delete_stays_idempotent(cleanup):

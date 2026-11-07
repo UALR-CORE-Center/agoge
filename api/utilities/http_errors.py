@@ -12,6 +12,7 @@ from common.exceptions.agoge import (
     Unauthorized,
 )
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
+from common.utilities.build_incidents import BuildQuotaHold, LabBuildUnavailable
 
 logger = Logger(LoggerNames.API, class_name='HttpErrors')
 
@@ -36,6 +37,18 @@ _MAPPING = (
     (ServiceUnavailable, 503, SERVICE_UNAVAILABLE_DETAIL),
 )
 
+def build_unavailable_response(error: LabBuildUnavailable) -> HTTPException:
+    if error.public:
+        detail = 'New workspaces are temporarily unavailable. Contact your instructor.'
+    elif isinstance(error, BuildQuotaHold):
+        detail = {
+            'code': 'build_quota_hold', 'message': error.message,
+            'incident_id': error.hold.get('incident_id') or error.hold.get('id'),
+        }
+    else:
+        detail = error.message
+    return HTTPException(status_code=503, detail=detail, headers={'Cache-Control': 'no-store'})
+
 
 def to_http_exception(e: Exception) -> HTTPException:
     """
@@ -46,6 +59,8 @@ def to_http_exception(e: Exception) -> HTTPException:
     if isinstance(e, HTTPException):
         # Already translated (e.g. raised by a dependency); pass it through unchanged.
         return e
+    if isinstance(e, LabBuildUnavailable):
+        return build_unavailable_response(e)
 
     for exception_type, status_code, detail in _MAPPING:
         if isinstance(e, exception_type):

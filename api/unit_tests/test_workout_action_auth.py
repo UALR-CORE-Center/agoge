@@ -1,15 +1,17 @@
 """C-1 follow-up: a workout ID alone may start/stop/extend a lab, but destroying or
 rebuilding it needs the unit's instructor."""
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
+from google.api_core.exceptions import NotFound as GoogleNotFound
 
 from common.constants.pub_sub import PubSub
 from common.constants.states import WorkoutStates
 from common.exceptions import Unauthorized
 from common.models.users import AgogeUser, AnonymousAppUser
+from common.utilities.build_incidents import BuildQuotaHold
 from common.utilities.id_generator import IdGenerator
 from core.workout import Workout
 from dependencies import get_optional_user
@@ -86,6 +88,29 @@ async def test_unit_instructor_or_admin_can_nuke(requester):
     await workout.process_action(WORKOUT_ID, _request(PubSub.Actions.NUKE.value), requester=requester)
 
     workout._send_or_debug.assert_called_once()
+
+
+@pytest.mark.parametrize('existing_network', [False, True])
+async def test_quota_hold_allows_rebuild_only_when_existing_network_is_confirmed(existing_network):
+    workout = _workout()
+    doc = workout.db.get(None, WORKOUT_ID)
+    doc['networks'] = [{'name': 'lab'}]
+    workout.env = MagicMock(project='test-project')
+    workout._build_incidents = MagicMock()
+    workout._build_incidents.return_value.active_hold.return_value = {'id': 'quota-hold'}
+    with patch('core.workout.NetworksClient') as client:
+        if not existing_network:
+            client.return_value.get.side_effect = GoogleNotFound('network does not exist')
+            with pytest.raises(BuildQuotaHold):
+                await workout.process_action(
+                    WORKOUT_ID, _request(PubSub.Actions.NUKE.value), requester=_user(INSTRUCTOR),
+                )
+            workout._send_or_debug.assert_not_called()
+        else:
+            await workout.process_action(
+                WORKOUT_ID, _request(PubSub.Actions.NUKE.value), requester=_user(INSTRUCTOR),
+            )
+            workout._send_or_debug.assert_called_once()
 
 
 def test_optional_user_is_anonymous_without_a_header():

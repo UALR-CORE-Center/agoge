@@ -1,7 +1,10 @@
 import json
 from enum import Enum
 from json import JSONDecodeError
+from uuid import uuid4
 from fastapi import Request
+from google.api_core.exceptions import GoogleAPIError
+from google.cloud.compute_v1 import NetworksClient
 from pydantic import ValidationError
 from typing import Callable, List, Union
 
@@ -21,6 +24,7 @@ from common.models.agoge import WorkoutModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.models.response import ServerResponse
 from common.models.users import AgogeUser, AnonymousAppUser
+from common.utilities.build_incidents import BuildIncidents, BuildQuotaHold, LabBuildUnavailable
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.pubsub_manager import PubSubManager
@@ -238,6 +242,16 @@ class Workout:
         if not self._safe_to_perform_action(action, workout):
             raise BadRequest(f"Not safe to perform action: {action}")
 
+        if action == PubSub.Actions.START.value:
+            if workout.get('build_failure_id'):
+                raise LabBuildUnavailable('This workout failed to build. Contact your instructor.')
+            parent_id = workout.get('parent_id')
+            unit = (self.db.get(collection_name=DbCollections.UNIT, doc_id=parent_id) or {}) if parent_id else {}
+            if unit.get('build_failure_id'):
+                raise LabBuildUnavailable('This lab failed to build. Contact your instructor.')
+        elif action == PubSub.Actions.NUKE.value and workout.get('networks'):
+            self._require_rebuild_capacity(workout)
+
         # Build a base message attributes dictionary
         message_attrs = {
             self.pubsub_keys.HANDLER: None,
@@ -278,6 +292,12 @@ class Workout:
             message_attrs[self.pubsub_keys.HANDLER] = str(PubSub.Handlers.CONTROL.value)
 
         elif action == PubSub.Actions.BUILD.value:
+            unit = self.db.get(collection_name=DbCollections.UNIT, doc_id=workout.get('parent_id')) or {}
+            incidents = self._build_incidents()
+            incidents.require_lab_build(unit, needs_network=self._needs_network(unit, workout))
+            attempt = incidents.begin_attempt(self.collection, build_id, retry=True)
+            if not attempt:
+                return {"build_id": build_id, "state": workout.get('state')}
             self.logger.info(
                 f'received request to {PubSub.Actions.BUILD.name} workout with id {build_id}',
                 **log_args
@@ -285,6 +305,7 @@ class Workout:
             # For BUILD, we might need a different handler or extra attributes
             message_attrs[self.pubsub_keys.HANDLER] = str(PubSub.Handlers.BUILD.value)
             message_attrs[self.pubsub_keys.KEY_TYPE] = str(DbCollections.WORKOUT.value)
+            message_attrs[self.pubsub_keys.BUILD_ATTEMPT_ID] = attempt
 
         # After building the message_attrs, call a single function that decides
         # whether to invoke directly or via Pub/Sub.
@@ -369,16 +390,47 @@ class Workout:
                          workout_id=build_id, user=requester.uid)
         self.db.update(collection_name=self.collection, doc_id=build_id, data=workout)
 
-    def _claim_workout(self, workout: dict, debug_mode: bool) -> str:
+    def _build_incidents(self):
+        return BuildIncidents(self.db, self.env.project)
+
+    def _require_rebuild_capacity(self, workout):
+        unit = self.db.get(collection_name=DbCollections.UNIT, doc_id=workout['parent_id']) or {}
+        if not self._needs_network(unit, workout):
+            return
+        if hold := self._build_incidents().active_hold():
+            networks = NetworksClient()
+            try:
+                for network in workout['networks']:
+                    networks.get(
+                        project=self.env.project, network=f"{workout['id']}-{network['name']}",
+                        retry=None, timeout=5,
+                    )
+            except GoogleAPIError as error:
+                raise BuildQuotaHold(hold) from error
+
+    @staticmethod
+    def _needs_network(unit, workout=None):
+        return (unit.get('unit_type') != BuildConstants.UnitType.COMMUNITY
+                and bool((workout or {}).get('networks') or unit.get('networks')))
+
+    def _claim_workout(self, workout: dict, debug_mode: bool, *, unit: dict | None = None) -> str:
         """Returns the workout id, first publishing its BUILD if it has not been built yet."""
         workout_id = workout['id']
         if workout.get('state', WorkoutStates.NOT_BUILT.value) == WorkoutStates.NOT_BUILT.value:
+            if unit is None:
+                unit = self.db.get(collection_name=DbCollections.UNIT, doc_id=workout.get('parent_id')) or {}
+            incidents = self._build_incidents()
+            incidents.require_lab_build(unit, needs_network=self._needs_network(unit, workout), public=True)
+            attempt = incidents.begin_attempt(self.collection, workout_id)
+            if not attempt:
+                return workout_id
             message_attrs = {
                 self.pubsub_keys.HANDLER: str(PubSub.Handlers.BUILD.value),
                 self.pubsub_keys.ACTION: str(PubSub.Actions.BUILD.value),
                 self.pubsub_keys.COURSE_OBJECT: str(PubSub.CourseObjects.WORKOUT.value),
                 self.pubsub_keys.KEY_TYPE: str(DbCollections.WORKOUT.value),
-                self.pubsub_keys.BUILD_ID: str(workout_id)
+                self.pubsub_keys.BUILD_ID: str(workout_id),
+                self.pubsub_keys.BUILD_ATTEMPT_ID: attempt,
             }
             self._send_or_debug(message_attrs, debug_mode=debug_mode)
         return workout_id
@@ -420,17 +472,20 @@ class Workout:
             team_workout_id = self._ctf_team_workout_id(ctf_event_id, student_email)
             for workout in workout_list:
                 if team_workout_id and workout.get('id') == team_workout_id:
-                    return self._claim_workout(workout, debug_mode), True
+                    return self._claim_workout(workout, debug_mode, unit=unit), True
             raise NotOnRoster(message=f"{student_email} is not on the roster of CTF event {ctf_event_id}")
 
         for workout in workout_list:
             if workout.get('student_email', '').lower() == student_email:
-                return self._claim_workout(workout, debug_mode), True
+                return self._claim_workout(workout, debug_mode, unit=unit), True
 
         # No workout found. Determine if a new one should be built. If not, return None.
         max_builds = min(int(self.env.max_workspaces), int(unit['workspace_settings'].get('count', 10000)))
         lms_build = bool(unit.get("lms_integration"))
         if len(workout_list) < max_builds and not lms_build:
+            self._build_incidents().require_lab_build(
+                unit, needs_network=self._needs_network(unit), public=True,
+            )
             claimed_by = json.dumps({
                 'student_email': student_email.lower(),
                 'accessibility_features': accessibility_features
@@ -442,8 +497,11 @@ class Workout:
                 self.pubsub_keys.COURSE_OBJECT: str(PubSub.CourseObjects.UNIT.value),
                 self.pubsub_keys.BUILD_ID: str(unit['id']),
                 self.pubsub_keys.CHILD_ID: workout_id,
-                self.pubsub_keys.CLAIMED_BY: claimed_by
+                self.pubsub_keys.CLAIMED_BY: claimed_by,
+                self.pubsub_keys.CHILD_BUILD_ATTEMPT_ID: uuid4().hex,
             }
+            if parent_attempt := unit.get('build_attempt_id'):
+                message_attrs[self.pubsub_keys.BUILD_ATTEMPT_ID] = parent_attempt
             self._send_or_debug(message_attrs, debug_mode=debug_mode)
             return workout_id, False
         else:
@@ -655,9 +713,12 @@ class Workout:
         s = WorkoutStates
         state = workout.get('state')
         if action == PubSub.Actions.NUKE.value:
-            return state in [s.READY.value, s.RUNNING.value, s.READY.BROKEN.value]
+            return state in [s.READY.value, s.RUNNING.value, s.BROKEN.value]
         elif action == PubSub.Actions.DELETE.value:
-            return state in [s.READY.value, s.NOT_BUILT.value, s.BROKEN.value, s.RUNNING.value]
+            return state in (
+                s.READY.value, s.NOT_BUILT.value, s.BROKEN.value, s.RUNNING.value,
+                s.DELETING_SERVERS.value, s.COMPLETED_DELETING_SERVERS.value,
+            )
         elif action == PubSub.Actions.STOP.value:
             return state in [s.RUNNING.value, s.BROKEN.value]
         elif action == PubSub.Actions.START.value:

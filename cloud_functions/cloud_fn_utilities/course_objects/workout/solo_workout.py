@@ -1,9 +1,14 @@
+from common.constants.build_constants import BuildConstants
 from common.constants.database import DbCollections
 from common.constants.pub_sub import PubSub
+from common.constants.states import ServerStates
 from common.utilities.timestamps import Timestamps
 from common.models.agoge import ServerModel, UnitModel, WorkoutModel
 
 from cloud_fn_utilities.server_specific.guacamole.display_proxy import DisplayProxy
+from cloud_fn_utilities.build_execution import (
+    build_message_attempt, current_build_execution, ensure_current_build, wait_for_pending_creates,
+)
 from ...server_specific.firewall_server import FirewallServer
 from .base_workout import BaseWorkout
 from ...gcp.packet_mirroring.packet_mirror_factory import PacketMirrorFactory
@@ -59,17 +64,27 @@ class SoloWorkout(BaseWorkout):
                                   f"Unit is already expired!")
                 return
 
-        if self.state_manager.get_state() < self.s.BUILDING_NETWORKS.value:
-            self.state_manager.state_transition(self.s.BUILDING_NETWORKS)
+        if self.state_manager.get_state() < self.s.COMPLETED_NETWORKS.value:
+            if self.state_manager.get_state() != self.s.BUILDING_NETWORKS.value:
+                self.state_manager.state_transition(self.s.BUILDING_NETWORKS)
             networks = self.workout.networks or []
             for network in networks:
                 self.__set_promiscuous_mode(network=network)
                 self.vpc_manager.build(network=network)
             self.state_manager.state_transition(self.s.COMPLETED_NETWORKS)
 
-        # Servers are built asynchronously and kicked off through pubsub messages.
-        if self.state_manager.get_state() < self.s.BUILDING_SERVERS.value:
-            self.state_manager.state_transition(self.s.BUILDING_SERVERS)
+        servers = self.workout.servers or []
+        firewalls = self.workout.firewalls or []
+        self.state_manager.expected_build_servers = {
+            f'{self.workout_id}-{server.name}' for server in [*servers, *firewalls]
+        } | {f'{self.workout_id}-display-guacamole-server'}
+        if any(fw.type == BuildConstants.Firewalls.FirewallTypes.FORTINET for fw in firewalls):
+            self.state_manager.expected_build_servers.add(f'{self.workout_id}-fortimanager')
+
+        # Reissue idempotent child requests if a delivery ended mid-publish.
+        if self.state_manager.get_state() < self.s.BUILDING_FIREWALL_RULES.value:
+            if self.state_manager.get_state() != self.s.BUILDING_SERVERS.value:
+                self.state_manager.state_transition(self.s.BUILDING_SERVERS)
             # Build the Guacamole Proxy first, so it will be ready when the students hit the landing page.
             if self.debug:
                 DisplayProxy(
@@ -84,12 +99,16 @@ class SoloWorkout(BaseWorkout):
                     action=str(PubSub.Actions.BUILD.value),
                     key_type=str(DbCollections.WORKOUT.value),
                     build_id=str(self.workout_id),
-                    course_object=str(PubSub.CourseObjects.DISPLAY_PROXY.value)
+                    course_object=str(PubSub.CourseObjects.DISPLAY_PROXY.value),
+                    **build_message_attempt(),
                 )
 
-            servers = self.workout.servers or []
             for server in servers:
+                ensure_current_build()
                 server_name = f"{self.workout_id}-{server.name}"
+                existing = self.db.get(DbCollections.SERVER, server_name) or {}
+                if existing.get('state') == ServerStates.RUNNING.value:
+                    continue
                 server.parent_id = self.workout_id
                 server.parent_build_type = self.workout.build_type
                 server.firewall_rules = self.workout.firewall_rules or []
@@ -98,11 +117,11 @@ class SoloWorkout(BaseWorkout):
                 if self._configure_direct_connect_server(server, server_name):
                     self.update_record(doc_id=self.workout_id, data=self.workout, update_keys=['servers'])
 
-                self.db.update(
-                    collection_name=DbCollections.SERVER,
-                    doc_id=server_name,
-                    data=server.model_dump()
-                )
+                server_data = server.model_dump(exclude_none=True)
+                if execution := current_build_execution():
+                    execution.update(DbCollections.SERVER, server_name, server_data)
+                else:
+                    self.db.update(DbCollections.SERVER, server_name, server_data)
 
                 if self.debug:
                     self.compute_manager.load(server_name=server_name)
@@ -112,7 +131,8 @@ class SoloWorkout(BaseWorkout):
                         handler=str(PubSub.Handlers.BUILD.value),
                         action=str(PubSub.Actions.BUILD.value),
                         server_name=str(server_name),
-                        course_object=str(PubSub.CourseObjects.LAB_SERVER.value)
+                        course_object=str(PubSub.CourseObjects.LAB_SERVER.value),
+                        **build_message_attempt(),
                     )
 
             # Check if we need to build a firewall server on network
@@ -124,8 +144,9 @@ class SoloWorkout(BaseWorkout):
                     debug=self.debug
                 ).build()
 
-        if self.state_manager.get_state() < self.s.BUILDING_FIREWALL_RULES.value:
-            self.state_manager.state_transition(self.s.BUILDING_FIREWALL_RULES)
+        if self.state_manager.get_state() < self.s.COMPLETED_FIREWALL_RULES.value:
+            if self.state_manager.get_state() != self.s.BUILDING_FIREWALL_RULES.value:
+                self.state_manager.state_transition(self.s.BUILDING_FIREWALL_RULES)
             if (firewall_rules := self.workout.firewall_rules) is not None:
                 self.firewall_manager.build(self.workout_id, firewall_rules)
             self.state_manager.state_transition(self.s.COMPLETED_FIREWALL_RULES)
@@ -134,9 +155,7 @@ class SoloWorkout(BaseWorkout):
             self.packet_mirroring.create()
 
         if not self.state_manager.are_server_builds_finished():
-            self.state_manager.state_transition(self.s.BROKEN)
-            self.logger.error(f"{self.class_name}:{self.workout_id} - Workout timed out waiting for server "
-                              f"builds to complete!")
+            raise TimeoutError(f'Workout {self.workout_id} is still waiting for server builds')
         else:
             self.state_manager.state_transition(self.s.RUNNING)
             self.logger.info(f"{self.class_name}:{self.workout_id} - Finished building Workout!")
@@ -220,8 +239,12 @@ class SoloWorkout(BaseWorkout):
                              f'Ignoring stop request...')
 
     def delete(self):
+        if self.state_manager.get_state() == self.s.DELETED.value:
+            return
         self._add_build_action(PubSub.Actions.DELETE.value, True)
         self.state_manager.state_transition(self.s.DELETING_SERVERS)
+        if db := getattr(self, 'db', None):
+            wait_for_pending_creates(db, DbCollections.WORKOUT, self.workout_id)
         servers_to_delete = self.db_queries.get_servers(parent_id=self.workout_id)
 
         # First we need to delete any packet mirroring resources
@@ -236,7 +259,9 @@ class SoloWorkout(BaseWorkout):
             firewall_names = [f'{self.workout_id}-{fw.name}' for fw in firewalls]
             FirewallServer(
                 initial_build_id=self.workout_id,
-                full_build_model=self.workout
+                full_build_model=self.workout,
+                env_dict=self.env_dict,
+                debug=self.debug,
             ).delete()
 
         # Delete remaining servers
@@ -259,14 +284,14 @@ class SoloWorkout(BaseWorkout):
                     )
 
         if self.state_manager.are_servers_deleted():
-            self.firewall_manager.delete(self.workout_id)
+            if not self.firewall_manager.delete(self.workout_id):
+                raise ConnectionError(f'Firewall deletion was not confirmed for workout {self.workout_id}')
             if self.workout.networks is not None:
                 for network in self.workout.networks:
                     self.vpc_manager.delete(network=network)
             self.state_manager.state_transition(self.s.DELETED)
             self.logger.info(f"{self.class_name}:{self.workout_id} - Finished deleting the Workout!")
         else:
-            self.state_manager.state_transition(self.s.BROKEN)
             self.logger.error(f"{self.class_name}:{self.workout_id} - Workout timed out waiting for server deletions "
                               f"to complete!")
 

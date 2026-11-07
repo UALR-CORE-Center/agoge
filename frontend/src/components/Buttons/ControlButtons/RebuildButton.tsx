@@ -5,6 +5,7 @@ import React, { useState } from 'react';
 import {workoutService} from "../../../services/Workout/workout.service";
 import {PubSub} from "../../../types/PubSub";
 import ConfirmationDialog from "../../Common/Dialogs/ConfirmationDialog/Confirmation";
+import HttpError from "../../Common/Errors/HttpError";
 import SimpleSnackbar from "../../Common/SnackBar/SnackBar";
 import {ControlButtonProps} from "./ControllerTypes"
 
@@ -24,6 +25,7 @@ export const RebuildButton: React.FC = (props: ControlButtonProps) => {
 
     
     const handleConfirmNuke = async () => {
+        if (isDisabled || loading) return;
         setOpenDialog(false);
         setLoading(true)
         try {
@@ -35,7 +37,8 @@ export const RebuildButton: React.FC = (props: ControlButtonProps) => {
         } catch (error) {
             console.error('Error performing rebuild action:', error);
             showModal(SimpleSnackbar, {
-                message: "Oops! Rebuild request failed. Is there a chip shortage?",
+                message: error instanceof HttpError && error.code === 'build_quota_hold'
+                    ? error.message : "Rebuild request failed.",
                 severity: 'error',
             });
         } finally {

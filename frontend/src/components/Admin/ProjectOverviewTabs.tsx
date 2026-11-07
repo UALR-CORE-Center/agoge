@@ -1,15 +1,22 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Box, ToggleButton, ToggleButtonGroup, Paper } from '@mui/material';
+import {useSearchParams} from "react-router-dom";
+import BuildIncidentsPanel from "./BuildIncidentsPanel";
 import UnitManagerTab from "./UnitManager";
 import WorkoutManagerTab from "./WorkoutManager";
 import {WireGuardRemotePeerManager} from "./WireGuard/WireGuardKitManager";
 
 const ProjectOverviewTabs: React.FC = () => {
-    const [view, setView] = useState('activeUnits');
+    const [params, setParams] = useSearchParams();
+    const view = params.get('view') || 'activeUnits';
 
-    const handleViewChange = (event: React.MouseEvent<HTMLElement>, newView: string) => {
+    const handleViewChange = (_event: React.MouseEvent<HTMLElement>, newView: string) => {
         if (newView) {
-            setView(newView);
+            setParams(previous => {
+                const next = new URLSearchParams(previous);
+                next.set('view', newView);
+                return next;
+            });
         }
     };
 
@@ -43,9 +50,10 @@ const ProjectOverviewTabs: React.FC = () => {
                 <ToggleButton value="activeWorkouts">Active Workouts</ToggleButton>
                 <ToggleButton value="allWorkouts">All Workouts</ToggleButton>
                 <ToggleButton value="wireguardRemotePeers">Remote Labs</ToggleButton>
+                <ToggleButton value="incidents">Incidents</ToggleButton>
             </ToggleButtonGroup>
             <Paper elevation={1} sx={{width:'100%', minWidth: 0}}>
-                {view === 'wireguardRemotePeers' ? <WireGuardRemotePeerManager /> : view === 'activeUnits' || view === 'allUnits' ? (
+                {view === 'incidents' ? <BuildIncidentsPanel /> : view === 'wireguardRemotePeers' ? <WireGuardRemotePeerManager /> : view === 'activeUnits' || view === 'allUnits' ? (
                     <UnitManagerTab key="unitManager" viewType={view === 'activeUnits' ? 'active' : 'all'} />
                 ) : (
                     <WorkoutManagerTab viewType={view === 'activeWorkouts' ? 'active' : 'all'} />

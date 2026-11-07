@@ -1,9 +1,15 @@
+from datetime import datetime, timezone
+
 from common.constants.database import DbCollections, DatabaseTypes, DATABASE_NAME
 from common.constants.pub_sub import PubSub
+from common.constants.states import UnitStates, WorkoutStates
 from common.document_database import DocumentDatabaseFactory
+from common.utilities.build_incidents import BuildIncidents, BuildQuotaHold
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
+from common.utilities.gcp.compute.quota_failure import ComputeQuotaFailure
 
+from cloud_fn_utilities.build_execution import BuildExecution, BuildSuperseded, build_execution, server_owner
 from cloud_fn_utilities.course_objects.compute.factory import ComputeManagerFactory
 from cloud_fn_utilities.server_specific.guacamole.display_proxy import DisplayProxy
 from cloud_fn_utilities.course_objects.unit.factory_unit import UnitFactory
@@ -25,12 +31,119 @@ class BuildHandler:
         self.logger = Logger(self.log_name, class_name=self.class_name)
         self.event_attr_keys = PubSub.EventAttributes
         self.event_attributes = event_attributes
+        self.event_id = None
         self.db = DocumentDatabaseFactory.create_db_object(
             db_type=DatabaseTypes.firestore,
             database_name=DATABASE_NAME
         )
 
     def route(self) -> None:
+        try:
+            execution, stage = self._execution()
+        except BuildSuperseded:
+            self.logger.info('Skipped a lab server build with no current owner')
+            return
+        if execution is None:
+            self._dispatch()
+            return
+
+        incidents = BuildIncidents(self.db, self.env.project)
+        workout_id = execution.target_id if execution.collection == DbCollections.WORKOUT else None
+        location = {
+            'unit_id': execution.unit_id,
+            'workout_id': workout_id,
+            'attempt_id': execution.attempt_id,
+        }
+        joins_workout = self.event_attributes.get(self.event_attr_keys.CHILD_ID)
+        resolves_owner = not execution.server_id and not joins_workout
+        with build_execution(execution):
+            try:
+                owner = execution.check()
+                if (
+                    owner.get('state') in (UnitStates.READY.value, UnitStates.RUNNING.value)
+                    and not joins_workout
+                ):
+                    if resolves_owner:
+                        incidents.resolve_target(**location, resolution='build_succeeded')
+                    return
+                self._dispatch()
+                owner = execution.check()
+                if (resolves_owner
+                        and owner.get('state') in (UnitStates.READY.value, UnitStates.RUNNING.value)):
+                    incidents.resolve_target(**location, resolution='build_succeeded')
+            except BuildSuperseded:
+                self.logger.info('Skipped an obsolete lab build', **location)
+            except (ComputeQuotaFailure, BuildQuotaHold) as error:
+                if (getattr(error, '_lab_incident_recorded', False)
+                        or (isinstance(error, ComputeQuotaFailure) and (
+                            error.category != 'allocation'
+                            and not (error.category == 'rate' and error.action in ('create', 'insert'))
+                        ))):
+                    raise
+                details = {
+                    **location,
+                    'stage': self._failure_stage(error, stage),
+                    'event_id': self.event_id,
+                    'target_patch': {
+                        'state': WorkoutStates.BROKEN.value,
+                        'state_timestamp': datetime.now(timezone.utc).isoformat(),
+                        **({'active': False} if workout_id else {}),
+                    },
+                }
+                record = incidents.record_blocked if isinstance(error, BuildQuotaHold) else incidents.record_quota
+                record(error, **details)
+                if self.debug_mode:
+                    error._lab_incident_recorded = True
+                    raise
+
+    def _execution(self):
+        course_object = self.event_attributes.get(self.event_attr_keys.COURSE_OBJECT)
+        build_id = self.event_attributes.get(self.event_attr_keys.BUILD_ID)
+        server_id = None
+        if course_object == str(PubSub.CourseObjects.UNIT.value) and build_id:
+            collection, stage = DbCollections.UNIT, 'shared_lab'
+        elif course_object == str(PubSub.CourseObjects.WORKOUT.value) and build_id:
+            collection, stage = DbCollections.WORKOUT, 'workout'
+        elif course_object == str(PubSub.CourseObjects.DISPLAY_PROXY.value) and build_id:
+            if self.event_attributes.get(self.event_attr_keys.KEY_TYPE) != DbCollections.WORKOUT.value:
+                return None, None
+            collection, stage = DbCollections.WORKOUT, 'display_proxy'
+            server_id = f'{build_id}-display-guacamole-server'
+        elif course_object == str(PubSub.CourseObjects.LAB_SERVER.value):
+            server_id = self.event_attributes.get(self.event_attr_keys.SERVER_NAME)
+            if not server_id:
+                return None, None
+            collection, build_id = server_owner(self.db, server_id)
+            stage = 'server'
+            if not collection:
+                # A child whose owner was removed cannot safely provision.
+                raise BuildSuperseded()
+        else:
+            return None, None
+
+        unit_id = build_id
+        if collection == DbCollections.WORKOUT:
+            workout = self.db.get(collection, build_id) or {}
+            unit_id = workout.get('parent_id') or build_id
+        attempt_id = self.event_attributes.get(self.event_attr_keys.BUILD_ATTEMPT_ID)
+        return BuildExecution(self.db, collection, build_id, unit_id, attempt_id, server_id), stage
+
+    @staticmethod
+    def _failure_stage(error, stage):
+        if isinstance(error, BuildQuotaHold):
+            return 'network'
+        resource = (error.resource_type or '').lower()
+        return {
+            'networks': 'network',
+            'subnetworks': 'subnetwork',
+            'firewalls': 'firewall',
+            'instance': 'display_proxy' if stage == 'display_proxy' else 'server',
+            'routes': 'route',
+            'addresses': 'address',
+            'disk': 'disk',
+        }.get(resource, stage)
+
+    def _dispatch(self) -> None:
         action = self.event_attributes.get(self.event_attr_keys.ACTION, None)
         course_object = self.event_attributes.get(self.event_attr_keys.COURSE_OBJECT, None)
         if not course_object:
@@ -56,6 +169,7 @@ class BuildHandler:
                 env_dict=self.env_dict,
                 debug=self.debug_mode
             )
+            unit.child_build_attempt_id = self.event_attributes.get(self.event_attr_keys.CHILD_BUILD_ATTEMPT_ID)
             unit.build()
         elif course_object == str(PubSub.CourseObjects.WORKOUT.value):
             build_id = self.event_attributes.get(self.event_attr_keys.BUILD_ID, None)

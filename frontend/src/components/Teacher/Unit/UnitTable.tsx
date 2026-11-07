@@ -7,7 +7,9 @@ import {useModal} from "mui-modal-provider";
 import React, {useEffect, useState} from 'react';
 
 import {useAuthContext} from '../../../context/AuthContext';
+import {useBuildAvailability} from '../../../context/BuildAvailabilityContext';
 import {URL_STUDENT_WORKOUT} from '../../../router/urls';
+import {quotaHoldMessage} from '../../../services/BuildIncidents/build-incidents.model';
 import {snapshotService} from "../../../services/Server/snapshots.service";
 import {unitService} from '../../../services/Unit/unit.service';
 import {Workout} from '../../../services/Workout/workout.model';
@@ -21,6 +23,7 @@ import {StopButton} from "../../Buttons/ControlButtons/StopButton";
 import {LinkButton} from "../../Buttons/LinkButton";
 import {ExpandableCell} from "../../Common/DataGrid/ExpandableCell";
 import StyledDataGrid, {ButtonConfig} from "../../Common/DataGrid/StyledDataGrid";
+import HttpError from "../../Common/Errors/HttpError";
 import SimpleSnackbar from "../../Common/SnackBar/SnackBar";
 import {resolveStatus, StatusInfo} from "../../Common/Status/StateMapping";
 import StatusBadge from '../../Common/Status/StatusBadge';
@@ -32,6 +35,9 @@ interface UnitTableProps {
     lms_available?: boolean;
     isExpired?: boolean;
     refreshing?: boolean;
+    failedWorkoutIds: ReadonlySet<string>;
+    sharedBuildFailed: boolean;
+    workoutsNeedNetwork: boolean;
 
     onActionPerformed: (action: string, workouts: string[]) => void;
 }
@@ -53,6 +59,7 @@ type UnitActions = "build" | "start" | "stop" | "rebuild" | "snapshot";
 const UnitTable: React.FC<UnitTableProps> = (props) => {
     const {showModal} = useModal();
     const { agogeUser } = useAuthContext();
+    const quotaPaused = Boolean(useBuildAvailability()?.hold && props.workoutsNeedNetwork);
 
     const [selectedRows, setSelectedRows] = useState<string[]>([]);
     const [activeButton, setActiveButton] = useState<string | null>(null);
@@ -61,6 +68,7 @@ const UnitTable: React.FC<UnitTableProps> = (props) => {
     const [currentStudent, setCurrentStudent] = useState<Workout | null>(null);
 
     const [internalRefreshing, setInternalRefreshing] = useState(props.refreshing)
+    const unavailableForStart = (workoutId: string) => props.sharedBuildFailed || props.failedWorkoutIds.has(workoutId);
 
 
     useEffect(() => {
@@ -90,6 +98,7 @@ const UnitTable: React.FC<UnitTableProps> = (props) => {
     const buttonController = async (action: UnitActions) => {
         switch(action) {
             case 'build':
+                if (quotaPaused || props.sharedBuildFailed) return;
                 setActiveButton(action);
                 setLoading(true);
                 showModal(SimpleSnackbar, {
@@ -109,7 +118,8 @@ const UnitTable: React.FC<UnitTableProps> = (props) => {
                 } catch (error) {
                     console.error('Error building selected workouts:', error);
                     showModal(SimpleSnackbar, {
-                        message: "Failed to build selected workouts!",
+                        message: error instanceof HttpError && error.code === 'build_quota_hold'
+                            ? error.message : "Failed to build selected workouts!",
                         severity: 'error',
                     });
                 } finally {
@@ -118,6 +128,7 @@ const UnitTable: React.FC<UnitTableProps> = (props) => {
                 }
                 return;
             case 'start':
+                if (selectedRows.some(unavailableForStart)) return;
                 try{
                     setActiveButton(action);
 
@@ -203,7 +214,9 @@ const UnitTable: React.FC<UnitTableProps> = (props) => {
             headerAlign: 'center',
             minWidth: 150,
             renderCell: (params: any) => {
-                const status = resolveStatus("workout",params.value);
+                const status: StatusInfo = props.failedWorkoutIds.has(params.row.id)
+                    ? {text: 'Build incident', color: 'error'}
+                    : resolveStatus("workout", params.value);
                 return (
                     <Box sx={{
                         display: 'flex',
@@ -326,7 +339,9 @@ const UnitTable: React.FC<UnitTableProps> = (props) => {
         const areRowsSelected = selectedRows.length > 0;
         let isDisabled;
         if (action === "build") {
-            isDisabled = !props.lms_available;
+            isDisabled = !props.lms_available || quotaPaused || props.sharedBuildFailed;
+        } else if (action === "start") {
+            isDisabled = selectedRows.some(unavailableForStart);
         } else {
             isDisabled = props.workouts.length === 0;
         }
@@ -342,7 +357,7 @@ const UnitTable: React.FC<UnitTableProps> = (props) => {
                 requiresSelection: false,
                 icon: <BuildOutlined fontSize={"large"} />,
                 addTooltip: true,
-                tooltip: "Build all selected workouts",
+                tooltip: quotaPaused ? quotaHoldMessage : "Build all selected workouts",
                 onClick: () => buttonController('build'),
                 isDisabled: isTableHeaderButtonDisabled('build')
             },
@@ -399,7 +414,7 @@ const UnitTable: React.FC<UnitTableProps> = (props) => {
                         size: "medium",
                         label: "start workout button"
                     }}
-                    isDisabled={props.isExpired || loading}
+                    isDisabled={props.isExpired || loading || unavailableForStart(row.id)}
                     row={row}
                     onActionPerformed={(action: string) => {
                         props.onActionPerformed(action, [row.id])
@@ -434,7 +449,7 @@ const UnitTable: React.FC<UnitTableProps> = (props) => {
                     onActionPerformed={(action: string) => {
                         props.onActionPerformed(action, [row.id])
                     }}
-                    isDisabled={props.isExpired || loading}
+                    isDisabled={props.isExpired || loading || quotaPaused || props.sharedBuildFailed}
                     row={row}
                 />
                 <SnapshotButton

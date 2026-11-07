@@ -50,5 +50,6 @@ export const transformToFullUnit = (data: any): UnitFull => {
         ...transformToUnit(unit),
         workouts: workouts.map(transformToWorkout),
         roster: Number(roster),
+        build_incidents: data.build_incidents ?? [],
     };
 };

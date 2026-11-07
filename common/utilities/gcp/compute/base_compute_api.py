@@ -4,7 +4,6 @@ from collections.abc import Mapping
 from abc import abstractmethod
 
 from google.api_core.exceptions import GoogleAPICallError, AlreadyExists
-from google.api_core.exceptions import ResourceExhausted as GoogleResourceExhausted
 from google.api_core.exceptions import Conflict as GoogleConflict
 from google.api_core.exceptions import NotFound as GoogleNotFound
 from google.api_core.exceptions import BadRequest as GoogleBadRequest
@@ -14,8 +13,9 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from common.constants.google import ResourceType, OperationType
 from common.constants.build_constants import BuildConstants
-from common.exceptions import Conflict, BaseAgogeException, NotFound, BadRequest, ResourceExhausted, PreconditionFailed
+from common.exceptions import Conflict, BaseAgogeException, NotFound, BadRequest, PreconditionFailed
 from .compute_operations import ComputeOperationsAPI
+from .quota_failure import ComputeQuotaFailure, classify_compute_api_error
 from ..cloud_logger import LoggerNames, Logger
 
 
@@ -210,9 +210,9 @@ class BaseComputeAPI:
     ) -> Any:
         resource_type = self.resource_type.name
         request = kwargs.get('request')
-        request_project = (request.get('project') if isinstance(request, Mapping)
-                           else getattr(request, 'project', None))
-        request_project = request_project or kwargs.get('project') or self.project
+        request_field = request.get if isinstance(request, Mapping) else lambda name: getattr(request, name, None)
+        request_project = request_field('project') or kwargs.get('project') or self.project
+        request_location = request_field('zone') or request_field('region')
         log_args = {
             'resource': str(resource),
             'project': request_project,
@@ -228,44 +228,45 @@ class BaseComputeAPI:
         try:
             operation = self._send(client_request, action, resource, log_args, **kwargs)
             if wait:
-                return self.wait_for_operation(operation.name, operation_type)
+                return self.wait_for_operation(
+                    operation.name, operation_type, project=request_project, location=request_location, action=action,
+                )
             return operation
-        except AlreadyExists:
-            self.logger.error(f'Error {action} for {resource_type} {resource}', **log_args)
-            raise Conflict(f"Attempt to {action} {resource_type} failed. {resource_type}, {resource}, already exists!")
-        except GoogleNotFound:
-            if resource:
+        except ComputeQuotaFailure as failure:
+            failure.add_context(**log_args)
+            raise
+        except GoogleAPICallError as error:
+            if failure := classify_compute_api_error(error, **log_args):
+                self.logger.error(str(failure), **failure.as_dict())
+                raise failure from error
+            if isinstance(error, (AlreadyExists, GoogleConflict)) or error.code == 409:
+                self.logger.error(f'Error {action} for {resource_type} {resource}', **log_args)
+                raise Conflict(
+                    f"Attempt to {action} {resource_type} failed. {resource_type}, {resource}, already exists!"
+                ) from error
+            if isinstance(error, GoogleNotFound):
+                if resource:
+                    self.logger.error(
+                        f'Error {action} for {resource_type}, {resource}, in project {request_project}.',
+                        **log_args,
+                    )
+                    raise NotFound(message=f"The requested resource or endpoint, {resource}, "
+                                           f"was not found in project {request_project}.") from error
+                self.logger.error(f'Error {action} for {resource_type}', **log_args)
+                raise NotFound(message="The requested resource/s not found.") from error
+            if isinstance(error, GoogleBadRequest):
                 self.logger.error(
-                    f'Error {action} for {resource_type}, {resource}, in project {request_project}.',
+                    f"{self.class_name}:{resource} - {resource_type} is still building or request is malformed. "
+                    f"Details: {error}",
                     **log_args
                 )
-                raise NotFound(message=f"The requested resource or endpoint, {resource}, "
-                                       f"was not found in project {request_project}.")
-            else:
-                self.logger.error(f'Error {action} for {resource_type}', **log_args)
-                raise NotFound(message=f"The requested resource/s not found.")
-        except GoogleBadRequest as e:
-            self.logger.error(
-                f"{self.class_name}:{resource} - {resource_type} is still building or request is malformed. "
-                f"Details: {str(e)}",
-                **log_args
-            )
-            raise BadRequest
-        except GoogleResourceExhausted as e:
-            self.logger.error(f'QUOTA exceeded for {resource_type}', details=str(e), **log_args)
-            raise ResourceExhausted
-        except GooglePreconditionFailed as e:
-            # 412: a fingerprint-guarded write (e.g. setMetadata) lost a race; callers may re-read and retry.
-            self.logger.warning(f'{self.class_name}:{resource} - stale fingerprint on {action}', **log_args)
-            raise PreconditionFailed(str(e))
-        except GoogleAPICallError as e:
-            if '409' in str(e):
-                self.logger.error(f'Error {action} for {resource_type} {resource}', resource=resource)
-                raise Conflict(f"Attempt to {action} {resource_type} failed. "
-                               f"{resource_type}, {resource}, already exists!")
-            else:
-                self.logger.error(f"Error {action}: {e}", **log_args)
-                raise BaseAgogeException(str(e))
+                raise BadRequest from error
+            if isinstance(error, GooglePreconditionFailed):
+                # A fingerprint-guarded write lost a race. Callers may re-read and retry.
+                self.logger.warning(f'{self.class_name}:{resource} - stale fingerprint on {action}', **log_args)
+                raise PreconditionFailed(str(error)) from error
+            self.logger.error(f"Error {action}: {error}", **log_args)
+            raise BaseAgogeException(str(error)) from error
 
     def _send(self, client_request: Any, action: str, resource: str, log_args: dict, **kwargs) -> Any:
         """Send the request, resending a read whose connection dropped.
@@ -291,7 +292,11 @@ class BaseComputeAPI:
         self,
         operation_id,
         operation_type: OperationType = OperationType.ZONE,
-        wait_seconds: int = 150
+        wait_seconds: int = 150,
+        *,
+        project: str = None,
+        location: str = None,
+        action: str = None,
     ) -> bool:
         """Waits for a long-running operation to complete.
 
@@ -304,9 +309,15 @@ class BaseComputeAPI:
                 operation (e.g., ZONE, REGION, GLOBAL). Defaults to OperationType.ZONE.
             wait_seconds (int, optional): Maximum time in seconds to wait for
                 completion. Defaults to 150.
+            project (str, optional): Project used for the Compute request.
+            location (str, optional): Region or zone used for the Compute request.
+            action (str, optional): Action submitted before waiting.
 
         Returns:
             bool: True if the operation completed successfully within the
             specified time, False otherwise.
         """
-        return self.cloud_ops_mgr.wait(operation_id, type_=operation_type, wait_seconds=wait_seconds)
+        return self.cloud_ops_mgr.wait(
+            operation_id, type_=operation_type, wait_seconds=wait_seconds,
+            project=project, location=location, action=action,
+        )

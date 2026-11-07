@@ -20,6 +20,7 @@ from common.models.agoge import (
 from common.models.model_validators.model_validator import ModelValidator
 from common.models.response import CtfTeamRow, CtfTemplateRow, CtfTemplateServer
 from common.models.users import AgogeUser
+from common.utilities.build_incidents import BuildIncidents
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.id_generator import IdGenerator
 from common.utilities.workout_record import build_workout_record
@@ -332,14 +333,41 @@ class CtfSetup:
         if not event.board_ids:
             raise BadRequest(message="Add at least one team first")
         workouts = self._workouts(event.board_ids)
+        targets = [
+            workout for workout_id in event.board_ids
+            if (workout := workouts.get(workout_id))
+            and workout.get('parent_id') == event.unit_id
+            and self._targets(workout.get('state'), unbuilt_only)
+            and (action != 'start' or not workout.get('build_failure_id'))
+        ]
+        if not targets:
+            return 0
+
+        if action in ('build', 'start'):
+            unit = self.db.get(collection_name=DbCollections.UNIT, doc_id=event.unit_id)
+            if not unit:
+                raise NotFound(message="The CTF event's lab no longer exists")
+            incidents = BuildIncidents(self.db, self.events.env.project)
+            # CTF events use solo labs, so each networked workout needs its own VPC.
+            needs_network = action == 'build' and any(workout.get('networks') for workout in targets)
+            incidents.require_lab_build(unit, needs_network=needs_network)
+
         attrs = PubSub.EventAttributes
-        messages = [{
-            attrs.HANDLER: str(handler.value),
-            attrs.ACTION: str(pubsub_action.value),
-            attrs.COURSE_OBJECT: str(PubSub.CourseObjects.WORKOUT.value),
-            attrs.BUILD_ID: workout_id,
-        } for workout_id in event.board_ids
-            if workout_id in workouts and self._targets(workouts[workout_id].get('state'), unbuilt_only)]
+        messages = []
+        for workout in targets:
+            workout_id = workout['id']
+            message = {
+                attrs.HANDLER: str(handler.value),
+                attrs.ACTION: str(pubsub_action.value),
+                attrs.COURSE_OBJECT: str(PubSub.CourseObjects.WORKOUT.value),
+                attrs.BUILD_ID: workout_id,
+            }
+            if action == 'build':
+                attempt = incidents.begin_attempt(DbCollections.WORKOUT, workout_id)
+                if not attempt:
+                    continue
+                message[attrs.BUILD_ATTEMPT_ID] = attempt
+            messages.append(message)
         if messages:
             self.hosts._publish(ctf_id, messages)
         self.logger.info(f"{self.class_name}:{ctf_id} - Published server {action}", messages=len(messages))

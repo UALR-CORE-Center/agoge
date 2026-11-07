@@ -1,6 +1,8 @@
 import DnsIcon from "@mui/icons-material/Dns";
 import {Alert, Box, Button, Chip, Stack, Tooltip, Typography} from "@mui/material";
 import React, {useState} from "react";
+import {useBuildAvailability} from "../../../context/BuildAvailabilityContext";
+import {quotaHoldMessage} from "../../../services/BuildIncidents/build-incidents.model";
 import {CtfServersAction, CtfStates, CtfTeamRow} from "../../../services/Ctf/ctf.model";
 import {ctfService} from "../../../services/Ctf/ctf.service";
 import ActionConfirmDialog from "../../Common/Dialogs/ActionConfirmDialog/ActionConfirmDialog";
@@ -51,9 +53,11 @@ interface CtfServersPanelProps {
     servers: CtfServerSummary[];
     teams: CtfTeamRow[];
     onChanged: () => void | Promise<void>;
+    requiresNetwork?: boolean;
 }
 
-const CtfServersPanel: React.FC<CtfServersPanelProps> = ({ctfId, state, servers, teams, onChanged}) => {
+const CtfServersPanel: React.FC<CtfServersPanelProps> = ({ctfId, state, servers, teams, onChanged, requiresNetwork = true}) => {
+    const buildPaused = Boolean(useBuildAvailability()?.hold && requiresNetwork);
     const [selected, setSelected] = useState<CtfServersAction>('build');
     const [open, setOpen] = useState(false);
     const [busy, setBusy] = useState(false);
@@ -64,6 +68,11 @@ const CtfServersPanel: React.FC<CtfServersPanelProps> = ({ctfId, state, servers,
     const running = teams.filter((team) => team.workout_state === WORKOUT_RUNNING).length;
 
     const handleConfirm = async () => {
+        if (selected === 'build' && buildPaused) {
+            setError(quotaHoldMessage);
+            setOpen(false);
+            return;
+        }
         setBusy(true);
         setError(null);
         setNotice(null);
@@ -121,14 +130,16 @@ const CtfServersPanel: React.FC<CtfServersPanelProps> = ({ctfId, state, servers,
                 {ACTION_ORDER.map((action) => {
                     const rule = SERVER_ACTION_RULES[action];
                     const illegal = !rule.legalStates.includes(state);
-                    const reason = teams.length === 0 ? "Add at least one team first." : illegal ? "Not available in this state." : "";
+                    const blocked = action === 'build' && buildPaused;
+                    const reason = blocked ? quotaHoldMessage
+                        : teams.length === 0 ? "Add at least one team first." : illegal ? "Not available in this state." : "";
                     return (
                         <Tooltip key={action} title={reason}>
                             <span>
                                 <Button
                                     variant="outlined"
                                     color={action === 'stop' ? 'warning' : 'primary'}
-                                    disabled={busy || illegal || teams.length === 0}
+                                    disabled={busy || illegal || blocked || teams.length === 0}
                                     onClick={() => {
                                         setSelected(action);
                                         setOpen(true);

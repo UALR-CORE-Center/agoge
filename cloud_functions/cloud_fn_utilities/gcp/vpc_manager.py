@@ -4,8 +4,12 @@ from typing import TypeVar, Type, Union
 import googleapiclient.discovery
 from googleapiclient.errors import HttpError
 
+from common.constants.database import DATABASE_NAME, DatabaseTypes
+from common.constants.google import OperationType
+from common.document_database import DocumentDatabaseFactory
 from common.exceptions import Conflict, NotFound
 from common.models.agoge import NetworkModel, SubNetworkModel
+from common.utilities.build_incidents import BuildIncidents, BuildQuotaHold
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.compute.base_compute_api import BaseComputeAPI
@@ -13,6 +17,7 @@ from common.utilities.gcp.compute.compute_networks import ComputeNetworksAPI
 from common.utilities.gcp.compute.compute_subnetwork import ComputeSubnetworksAPI
 from common.utilities.gcp.compute.resources.network_resource import NetworkResource
 from common.utilities.gcp.compute.resources.subnetwork_resource import SubnetworkResource
+from cloud_fn_utilities.build_execution import current_build_execution, ensure_current_build, tracked_compute_create
 
 ComputeApiClient = TypeVar('ComputeApiClient', bound=BaseComputeAPI)
 
@@ -61,12 +66,25 @@ class VpcManager:
         self.logger.info(f"{self.class_name}:{network_name} - Building network")
 
         network_body = self.network_resource.new(name=network_name, auto_create_subnetworks=False)
-        try:
-            self.networks_client.create(network_name, network_resource=network_body)
-            time.sleep(3)
-        except Conflict:
-            # If the network already exists, then this may be a rebuild and ignore the error
-            pass
+        ensure_current_build()
+        if execution := current_build_execution():
+            db = execution.db
+        else:
+            db = DocumentDatabaseFactory.create_db_object(
+                db_type=DatabaseTypes.firestore, database_name=DATABASE_NAME,
+            )
+        hold = BuildIncidents(db, self.env.project).active_hold()
+        if hold:
+            # An existing VPC consumes no additional network quota. Confirm
+            # ownership by the deterministic resource name in this project.
+            try:
+                self.networks_client.get(resource=network_name)
+            except NotFound as error:
+                raise BuildQuotaHold(hold) from error
+        else:
+            self._create_and_confirm(
+                self.networks_client, network_name, OperationType.GLOBAL, network_resource=network_body,
+            )
 
         subnets = network.subnets or []
         for subnet in subnets:
@@ -78,10 +96,25 @@ class VpcManager:
                 network=network_path,
                 ip_cidr_range=subnet.ip_subnet
             )
+            self._create_and_confirm(
+                self.subnetworks_client, subnet_name, OperationType.REGION, subnet_resource=subnetwork_body,
+            )
+
+    @staticmethod
+    def _create_and_confirm(client, name, operation_type, **resource):
+        ensure_current_build()
+        try:
+            if tracked_compute_create(client, name, operation_type, **resource):
+                return
+        except Conflict:
+            # A prior delivery may have completed this idempotent creation.
             try:
-                self.subnetworks_client.create(resource_name=subnet_name, subnet_resource=subnetwork_body)
-            except Conflict:
-                pass
+                client.get(resource=name)
+            except NotFound as error:
+                raise ConnectionError(f'Creation of {name} has not been confirmed') from error
+            return
+
+        raise ConnectionError(f'Creation of {name} has not been confirmed')
 
     def delete(
         self,

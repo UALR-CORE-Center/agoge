@@ -46,6 +46,8 @@ class DbCollections(str, Enum):
     CATALOG = 'catalog'
     UNIT = 'unit'
     WORKOUT = 'workout'
+    BUILD_INCIDENT = 'build-incident'
+    BUILD_QUOTA_HOLD = 'build-quota-hold'
     WEBXR='web-xr'
     SERVER = 'agoge-server'
     SPECIFICATION_EDITS = 'specification-edits'

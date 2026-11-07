@@ -15,6 +15,7 @@ import AppError from "../components/Common/Errors/AppError";
 import {InfoDrawer} from "../components/Common/InfoDrawer/InfoDrawer";
 import {DrawerProvider} from "../components/Common/InfoDrawer/InfoDrawerContext";
 import Layout from "../components/Common/Layout";
+import ProjectQuotaBanner from "../components/Common/ProjectQuotaBanner";
 import SessionWaitDialog from "../components/Guacamole/SessionWaitDialog";
 import {HelpApp} from "../components/Help/HelpApp";
 import MarkdownEditor from "../components/Markdown/MarkdownEditor";
@@ -36,6 +37,7 @@ import CatalogEditTable from "../components/Teacher/Specifications/Specification
 import CatalogTable from "../components/Teacher/Specifications/SpecificationTables/CatalogTable";
 import TeacherUnit from "../components/Teacher/Unit/TeacherUnit";
 import {useAuthContext} from "../context/AuthContext";
+import {BuildAvailabilityProvider} from "../provider/BuildAvailabilityProvider";
 import {BASENAME} from "../utilities/appContext";
 import {ProtectedRoute} from "./ProtectedRoute";
 import {
@@ -75,6 +77,12 @@ const DefaultHome: React.FC = () => {
         );
 };
 
+const StandalonePage: React.FC<React.PropsWithChildren> = ({children}) => (
+    <>
+        <ProjectQuotaBanner />
+        {children}
+    </>
+);
 
 const AppRouter: React.FC = () => {
     const [, setSidebarOpen] = useState(true);
@@ -86,7 +94,7 @@ const AppRouter: React.FC = () => {
             {
                 path: "/",
                 element: <Layout onSidebarToggle={toggleSidebar} />,
-                errorElement: <AppError />,
+                errorElement: <StandalonePage><AppError /></StandalonePage>,
                 children: [
                     { index: true, element: <DefaultHome /> },
                     { path: URL_TEACHER_HOME, element: <ProtectedRoute element={<TeacherHome />} level={"instructor"} /> },
@@ -97,7 +105,7 @@ const AppRouter: React.FC = () => {
                     { path: URL_TEACHER_SPECIFICATIONS_BASE, element: <ProtectedRoute element={<CatalogTable />} level={"instructor"} /> },
                     { path: URL_TEACHER_SPECIFICATION_EDIT, element: <ProtectedRoute element={<CatalogEditTable />} level={"instructor"} /> },
                     { path: `${URL_TEACHER_SPECIFICATION_EDIT}/:edit_id`, element: <ProtectedRoute element={<Editor />} level={"instructor"} /> },
-                    { path: `${URL_TEACHER_UNIT}/:build_id`, element: <ProtectedRoute element={<TeacherUnit />} level={"instructor"} /> },
+                    { path: `${URL_TEACHER_UNIT}/:build_id`, element: <ProtectedRoute element={<TeacherUnit />} level={"staff"} /> },
                     { path: URL_TEACHER_CTF_BASE, element: <ProtectedRoute element={<CtfEventList />} level={"instructor"} /> },
                     { path: `${URL_TEACHER_CTF_EVENT}/:ctf_id`, element: <ProtectedRoute element={<CtfDashboard />} level={"instructor"} /> },
                     { path: URL_ADMIN_BASE, element: <ProtectedRoute element={<ProjectOverviewTabs />} level={"admin"} />},
@@ -112,33 +120,35 @@ const AppRouter: React.FC = () => {
                     { path: URL_DOCS_VIEWER, element: <MarkdownViewer /> },
                 ],
             },
-            { path: "error", element: <AppError /> },
+            { path: "error", element: <StandalonePage><AppError /></StandalonePage> },
             { path: URL_LOGIN, element: <Login /> },
             { path: URL_LOGOUT, element: <Logout /> },
-            { path: URL_STUDENT_GUACAMOLE, element: <SessionWaitDialog /> },
-            { path: URL_STUDENT_JOIN, element: <JoinWorkout /> },
+            { path: URL_STUDENT_GUACAMOLE, element: <StandalonePage><SessionWaitDialog /></StandalonePage> },
+            { path: URL_STUDENT_JOIN, element: <StandalonePage><JoinWorkout /></StandalonePage> },
             {
                 path: URL_PUZZLE_ADMIN,
-                element: <ProtectedRoute element={<PuzzleAdminPanel />} level={"instructor"} />,
-                errorElement: <AppError />,
+                element: <ProtectedRoute element={<StandalonePage><PuzzleAdminPanel /></StandalonePage>} level={"instructor"} />,
+                errorElement: <StandalonePage><AppError /></StandalonePage>,
             },
             {
                 path: URL_PUZZLE_PLAYER,
-                element: <ProtectedRoute element={<PlayerHomePage />} level={"instructor"} />,
+                element: <ProtectedRoute element={<StandalonePage><PlayerHomePage /></StandalonePage>} level={"instructor"} />,
             },
             {
                 path: `${URL_PUZZLE_PLAYER}/:join_code`,
-                element: <ProtectedRoute element={<PuzzleQuestionPage />} level={"instructor"} />,
+                element: <ProtectedRoute element={<StandalonePage><PuzzleQuestionPage /></StandalonePage>} level={"instructor"} />,
             },
         ],
         {basename: BASENAME}
     ));
 
     return (
-        <DrawerProvider>
-            <RouterProvider router={router} />
-            <InfoDrawer />
-        </DrawerProvider>
+        <BuildAvailabilityProvider>
+            <DrawerProvider>
+                <RouterProvider router={router} />
+                <InfoDrawer />
+            </DrawerProvider>
+        </BuildAvailabilityProvider>
     );
 };
 

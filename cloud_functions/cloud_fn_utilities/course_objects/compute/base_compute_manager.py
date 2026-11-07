@@ -8,7 +8,7 @@ from typing import Optional, Union, List, Any, Type, TypeVar
 
 from common.constants.build_constants import BuildConstants
 from common.constants.database import DatabaseTypes, DATABASE_NAME, DbCollections
-from common.constants.google import ImageSource
+from common.constants.google import ImageSource, OperationType
 from common.constants.pub_sub import PubSub
 from common.constants.states import ServerStates
 from common.document_database import DocumentDatabaseFactory
@@ -30,6 +30,7 @@ from common.utilities.gcp.compute.resources.attached_disk_resource import Attach
 from common.utilities.gcp.compute.resources.instance_resource import InstanceResource
 from common.utilities.gcp.pubsub_manager import PubSubManager
 
+from cloud_fn_utilities.build_execution import BuildSuperseded, tracked_compute_create
 from cloud_fn_utilities.gcp.dns_manager import DnsManager
 
 
@@ -409,9 +410,9 @@ class BaseComputeManager:
                 )
 
             try:
-                created = (
-                    self.compute_instance
-                    .create(resource_name=self.server_spec.name, wait=True, instance_resource=instance)
+                created = tracked_compute_create(
+                    self.compute_instance, self.server_spec.name, OperationType.ZONE,
+                    server_id=self.server_name, instance_resource=instance,
                 )
             except Conflict as error:
                 self.logger.warning(f'{self.class_name}:{self.server_name} - Server already exists!')
@@ -427,6 +428,8 @@ class BaseComputeManager:
                         f"Existing instance {self.server_spec.name} does not match the requested build"
                     ) from error
                 created = True
+            except BuildSuperseded:
+                raise
             except Exception as error:
                 if attempt + 1 < len(zones) and is_zone_stockout(error):
                     self.logger.warning(
