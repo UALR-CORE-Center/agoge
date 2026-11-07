@@ -95,9 +95,14 @@ def test_solo_build_guacamole_session_start_stop_and_delete(monkeypatch):
     monkeypatch.setattr(base_module, 'PubSubManager', lambda *_, **__: Mock())
     monkeypatch.setattr(base_module, 'VpcManager', lambda **_: SimpleNamespace(
         build=lambda network: networks.add(network.name), delete=lambda network: networks.remove(network.name)))
+
+    def delete_firewall(identifier):
+        events.append(('firewall_delete', identifier))
+        return True
+
     monkeypatch.setattr(base_module, 'FirewallManager', lambda **_: SimpleNamespace(
         build=lambda *args: events.append(('firewall_build', workout_id)),
-        delete=lambda identifier: events.append(('firewall_delete', identifier))))
+        delete=delete_firewall))
     monkeypatch.setattr(solo_module.PacketMirrorFactory, 'create_packet_mirror_object', lambda **_: None)
 
     def unexpected_wait(_):
