@@ -25,6 +25,7 @@ from routers.webgl import webgl_router
 # Routers
 from routers.compute_image import compute_image_router
 from routers.compute_snapshot import compute_snapshot_router
+from routers.cloud_monitoring import cloud_monitoring_router
 from routers.ctf import ctf_router
 from routers.ctf_board import ctf_board_router
 from routers.docs import docs_router
@@ -85,6 +86,7 @@ cloud_env = None
 app.include_router(health_router)
 app.include_router(compute_image_router)
 app.include_router(compute_snapshot_router)
+app.include_router(cloud_monitoring_router)
 app.include_router(ctf_router)
 app.include_router(ctf_board_router)
 app.include_router(docs_router)

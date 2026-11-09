@@ -12,6 +12,7 @@ from common.constants.states import ServerStates, WorkoutStates, UnitStates
 from common.document_database import DocumentDatabaseFactory, DatabaseQueries, DatabaseMask
 from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
+from common.utilities.workout_runtime import record_workout_runtime
 from cloud_fn_utilities.build_execution import current_build_execution, ensure_current_build
 
 
@@ -190,9 +191,32 @@ class BaseStateManager:
                 update_mask = data
             if execution := current_build_execution():
                 execution.update(self.collection, build_id, update_mask)
+            elif self.collection == DbCollections.WORKOUT and 'state' in update_mask:
+                self.build = self._update_workout_state(build_id, update_mask)
+                return
             else:
                 self.db.update(collection_name=self.collection, doc_id=build_id, data=update_mask)
             self.build = data
+
+    def _update_workout_state(self, build_id, patch):
+        client = self.db.db
+        ref = client.collection(DbCollections.WORKOUT.value).document(build_id)
+
+        def update(transaction):
+            current = ref.get(transaction=transaction).to_dict() or {}
+            if not current or (
+                (current.get('state') or 0) >= WorkoutStates.DELETING_SERVERS.value
+                and patch['state'] in (
+                    WorkoutStates.STARTING.value, WorkoutStates.RUNNING.value, WorkoutStates.READY.value,
+                )
+            ):
+                return current
+            state_patch = dict(patch)
+            record_workout_runtime(transaction, client, build_id, current, state_patch)
+            transaction.set(ref, state_patch, merge=True)
+            return {**current, **state_patch}
+
+        return self.db.transaction(update)
 
     def _server_state_check(
         self,

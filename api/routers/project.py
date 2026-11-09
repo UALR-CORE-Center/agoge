@@ -1,4 +1,6 @@
+from datetime import date
 from math import isfinite
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from google.cloud import compute_v1
@@ -8,9 +10,11 @@ from common.models.agoge import CloudEnvModel
 from common.models.response import AgogeResponse
 from common.models.users import AgogeUser
 from common.utilities.build_incidents import BuildIncidents
+from common.utilities.build_log import BuildLog
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 
 from core.project import Project
+from core.cloud_quotas import read_cloud_quotas
 from dependencies import (
     admin_required,
     get_cloud_env,
@@ -87,6 +91,43 @@ def list_build_incidents(
         data = incidents.list_recent(cursor=cursor, page_size=page_size, include_resolved=include_resolved)
     except ValueError as error:
         raise HTTPException(status_code=400, detail="Invalid incident cursor.") from error
+    response.headers["Cache-Control"] = "no-store"
+    return AgogeResponse(data=data)
+
+
+@project_router.get("/build-events/")
+def list_build_events(
+    response: Response,
+    cursor: str | None = Query(default=None, max_length=80),
+    kind: str | None = Query(default=None, max_length=30),
+    date_from: date | None = None,
+    date_to: date | None = None,
+    search: str | None = Query(default=None, max_length=160),
+    sort: Literal['asc', 'desc'] = 'desc',
+    _: AgogeUser = Depends(admin_required),
+    env: dict = Depends(get_cloud_env),
+) -> AgogeResponse[dict]:
+    if kind and kind not in BuildLog.KINDS:
+        raise HTTPException(status_code=400, detail="Unknown build event type.")
+    project = Project(env)
+    try:
+        data = BuildLog(project.db, project.env.project).list_events(
+            cursor=cursor, kind=kind, date_from=date_from, date_to=date_to, search=search, sort=sort,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    response.headers["Cache-Control"] = "no-store"
+    return AgogeResponse(data=data)
+
+
+@project_router.get("/cloud-quotas/")
+def list_cloud_quotas(
+    response: Response,
+    _: AgogeUser = Depends(admin_required),
+    env: dict = Depends(get_cloud_env),
+) -> AgogeResponse[dict]:
+    project = Project(env)
+    data = read_cloud_quotas(project.env.project, project.env.region)
     response.headers["Cache-Control"] = "no-store"
     return AgogeResponse(data=data)
 

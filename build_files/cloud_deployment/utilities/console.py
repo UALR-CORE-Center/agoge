@@ -131,7 +131,7 @@ def _ansi(text: Text) -> str:
 
 def prompt(message: str) -> str:
     """input() with a styled prompt. Kept on builtins.input so tests can patch it."""
-    return input(_ansi(Text.assemble(('› ', 'key'), message)))
+    return input(_ansi(Text.assemble(('› ', 'key'), message.rstrip())) + ' ')
 
 
 def duration(seconds: float) -> str:

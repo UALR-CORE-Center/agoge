@@ -1,3 +1,4 @@
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -16,6 +17,8 @@ HOLD_ID = 'a' * 32
 QUOTA_STATUS = '/project/build-availability/'
 RECHECK = f'{QUOTA_STATUS}recheck/'
 INCIDENTS = '/project/build-incidents/'
+BUILD_LOG = '/project/build-events/'
+CLOUD_QUOTAS = '/project/cloud-quotas/'
 HOLD = {
     'id': HOLD_ID, 'metric': 'NETWORKS', 'scope': 'global', 'limit': 30,
     'project': PROJECT_ID, 'generation': 'current-hold',
@@ -30,15 +33,19 @@ def routes(monkeypatch):
     active_hold = Mock(return_value=HOLD)
     update_verified = Mock(return_value=None)
     list_recent = Mock(return_value={'incidents': [], 'next_cursor': None})
+    list_events = Mock(return_value={'events': [], 'next_cursor': None})
+    read_quotas = Mock(return_value={'project': PROJECT_ID, 'region': 'us-central1', 'quotas': []})
 
     def load_project(project, config):
-        project.env = SimpleNamespace(project=config['project'])
+        project.env = SimpleNamespace(project=config['project'], region='us-central1')
         project.db = object()
 
     monkeypatch.setattr(project_router_module.Project, '__init__', load_project)
     monkeypatch.setattr(project_router_module.BuildIncidents, 'active_hold', active_hold)
     monkeypatch.setattr(project_router_module.BuildIncidents, 'update_verified_quota', update_verified)
     monkeypatch.setattr(project_router_module.BuildIncidents, 'list_recent', list_recent)
+    monkeypatch.setattr(project_router_module.BuildLog, 'list_events', list_events)
+    monkeypatch.setattr(project_router_module, 'read_cloud_quotas', read_quotas)
     monkeypatch.setattr(project_router_module.compute_v1, 'ProjectsClient', lambda: compute)
 
     app = FastAPI()
@@ -48,6 +55,7 @@ def routes(monkeypatch):
     return SimpleNamespace(
         client=TestClient(app), user=user, env=env, active_hold=active_hold,
         compute=compute, update_verified=update_verified, list_recent=list_recent,
+        list_events=list_events, read_quotas=read_quotas,
     )
 
 
@@ -62,8 +70,12 @@ def test_instructors_see_the_hold_but_cannot_recheck_or_read_incidents(routes):
     }
     assert routes.client.post(RECHECK).status_code == 403
     assert routes.client.get(INCIDENTS).status_code == 403
+    assert routes.client.get(BUILD_LOG).status_code == 403
+    assert routes.client.get(CLOUD_QUOTAS).status_code == 403
     routes.compute.get.assert_not_called()
     routes.list_recent.assert_not_called()
+    routes.list_events.assert_not_called()
+    routes.read_quotas.assert_not_called()
 
 
 def test_students_cannot_read_or_change_build_quota_state(routes):
@@ -125,3 +137,27 @@ def test_admin_incident_pagination_is_bounded_and_defaults_to_open(routes):
     routes.list_recent.assert_called_with(cursor=HOLD_ID, page_size=12, include_resolved=True)
     assert routes.client.get(INCIDENTS, params={'cursor': 'invalid'}).status_code == 422
     assert routes.client.get(INCIDENTS, params={'page_size': 101}).status_code == 422
+
+
+def test_build_log_accepts_filters_and_order(routes):
+    response = routes.client.get(BUILD_LOG, params={
+        'kind': 'build_completed', 'date_from': '2026-11-01', 'date_to': '2026-11-09',
+        'search': 'workout-a', 'sort': 'asc',
+    })
+
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'no-store'
+    routes.list_events.assert_called_once_with(
+        cursor=None, kind='build_completed', date_from=date(2026, 11, 1),
+        date_to=date(2026, 11, 9), search='workout-a', sort='asc',
+    )
+    assert routes.client.get(BUILD_LOG, params={'kind': 'unknown'}).status_code == 400
+
+
+def test_quota_snapshot_does_not_change_the_project_hold(routes):
+    response = routes.client.get(CLOUD_QUOTAS, params={'project': 'outside-deployment'})
+
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'no-store'
+    routes.read_quotas.assert_called_once_with(PROJECT_ID, 'us-central1')
+    routes.update_verified.assert_not_called()

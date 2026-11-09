@@ -1,14 +1,27 @@
 import React from 'react';
 import { Box, ToggleButton, ToggleButtonGroup, Paper } from '@mui/material';
 import {useSearchParams} from "react-router-dom";
-import BuildIncidentsPanel from "./BuildIncidentsPanel";
+import BuildLogPanel from "./BuildLogPanel";
+import CloudMonitoringPanel from "./CloudMonitoringPanel";
 import UnitManagerTab from "./UnitManager";
 import WorkoutManagerTab from "./WorkoutManager";
 import {WireGuardRemotePeerManager} from "./WireGuard/WireGuardKitManager";
 
+const views: Record<string, {label: string; panel: React.ReactElement}> = {
+    activeUnits: {label: 'Active Units', panel: <UnitManagerTab viewType="active" />},
+    allUnits: {label: 'All Units', panel: <UnitManagerTab viewType="all" />},
+    activeWorkouts: {label: 'Active Workouts', panel: <WorkoutManagerTab viewType="active" />},
+    allWorkouts: {label: 'All Workouts', panel: <WorkoutManagerTab viewType="all" />},
+    wireguardRemotePeers: {label: 'Remote Labs', panel: <WireGuardRemotePeerManager />},
+    buildLog: {label: 'Build Log', panel: <BuildLogPanel />},
+    cloudMonitoring: {label: 'Cloud Monitoring', panel: <CloudMonitoringPanel />},
+};
+
 const ProjectOverviewTabs: React.FC = () => {
     const [params, setParams] = useSearchParams();
-    const view = params.get('view') || 'activeUnits';
+    const requestedView = params.get('view') || '';
+    const view = requestedView === 'incidents' ? 'buildLog'
+        : Object.hasOwn(views, requestedView) ? requestedView : 'activeUnits';
 
     const handleViewChange = (_event: React.MouseEvent<HTMLElement>, newView: string) => {
         if (newView) {
@@ -45,19 +58,10 @@ const ProjectOverviewTabs: React.FC = () => {
                     maxWidth: '100%',
                 }}
             >
-                <ToggleButton value="activeUnits">Active Units</ToggleButton>
-                <ToggleButton value="allUnits">All Units</ToggleButton>
-                <ToggleButton value="activeWorkouts">Active Workouts</ToggleButton>
-                <ToggleButton value="allWorkouts">All Workouts</ToggleButton>
-                <ToggleButton value="wireguardRemotePeers">Remote Labs</ToggleButton>
-                <ToggleButton value="incidents">Incidents</ToggleButton>
+                {Object.entries(views).map(([value, {label}]) => <ToggleButton key={value} value={value}>{label}</ToggleButton>)}
             </ToggleButtonGroup>
             <Paper elevation={1} sx={{width:'100%', minWidth: 0}}>
-                {view === 'incidents' ? <BuildIncidentsPanel /> : view === 'wireguardRemotePeers' ? <WireGuardRemotePeerManager /> : view === 'activeUnits' || view === 'allUnits' ? (
-                    <UnitManagerTab key="unitManager" viewType={view === 'activeUnits' ? 'active' : 'all'} />
-                ) : (
-                    <WorkoutManagerTab viewType={view === 'activeWorkouts' ? 'active' : 'all'} />
-                )}
+                {views[view].panel}
             </Paper>
         </Box>
     );

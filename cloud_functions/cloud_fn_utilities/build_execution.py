@@ -12,8 +12,10 @@ from common.constants.google import OperationType
 from common.constants.pub_sub import PubSub
 from common.constants.states import ServerStates, UnitStates, WorkoutStates
 from common.exceptions import BadRequest, Conflict
+from common.utilities.build_log import BuildLog
 from common.utilities.gcp.compute.compute_operations import ComputeOperationsAPI
 from common.utilities.gcp.compute.quota_failure import ComputeQuotaFailure
+from common.utilities.workout_runtime import record_workout_runtime
 
 
 class BuildSuperseded(Exception):
@@ -113,7 +115,10 @@ class BuildExecution:
                         or existing.get('build_attempt_id') != patch.get('build_attempt_id')):
                     raise BuildSuperseded()
                 return
-            transaction.set(destination, patch, merge=True)
+            state_patch = dict(patch)
+            if collection == DbCollections.WORKOUT and next_state is not None:
+                record_workout_runtime(transaction, self.db.db, doc_id, existing, state_patch)
+            transaction.set(destination, state_patch, merge=True)
 
         self.db.transaction(write)
 
@@ -167,6 +172,15 @@ def build_message_attempt():
     if execution and execution.attempt_id:
         return {PubSub.EventAttributes.BUILD_ATTEMPT_ID: execution.attempt_id}
     return {}
+
+
+def record_build_event(db, project, logger, kind, *, event_id, **location):
+    """Keep activity logging from interrupting provisioning or cleanup."""
+    try:
+        BuildLog(db, project).record_event(kind, event_id=event_id, **location)
+    except Exception as error:
+        logger.warning('Could not write a build activity event', kind=kind, event_id=event_id,
+                       error_type=type(error).__name__)
 
 
 def _change_pending_create(db, collection, target_id, key, token, *, operation_id=None):

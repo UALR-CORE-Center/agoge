@@ -18,6 +18,7 @@ from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.compute.quota_failure import ComputeQuotaFailure
+from common.utilities.workout_runtime import record_workout_runtime
 from ..compute.factory import ComputeManagerFactory
 from ...gcp.vpc_manager import VpcManager
 from ...gcp.firewall_rule_manager import FirewallManager
@@ -339,16 +340,14 @@ class BaseWorkout(ABC):
         ):
             return False
 
-        transaction.set(
-            doc_ref,
-            {
-                "action": PubSub.Actions.NUKE.value,
-                "prev_state": existing_state,
-                "state": WorkoutStates.BUILDING_SERVERS.value,
-                "state_timestamp": datetime.now(timezone.utc).isoformat(),
-            },
-            merge=True,
-        )
+        patch = {
+            "action": PubSub.Actions.NUKE.value,
+            "prev_state": existing_state,
+            "state": WorkoutStates.BUILDING_SERVERS.value,
+            "state_timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        record_workout_runtime(transaction, self.db.db, self.workout_id, workout, patch)
+        transaction.set(doc_ref, patch, merge=True)
         return True
 
     @classmethod

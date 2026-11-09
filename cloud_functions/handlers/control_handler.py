@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 
 from cloud_fn_utilities.course_objects.compute.snapshot_manager import SnapshotManager
-from cloud_fn_utilities.build_execution import server_owner
+from cloud_fn_utilities.build_execution import record_build_event, server_owner
 from cloud_fn_utilities.course_objects.vulnerabilities import Vulnerabilities
 from cloud_fn_utilities.lms.lms_synchronizer_factory import LMSSynchronizerFactory
 from common.constants.enumerators import SnapshotTypes
@@ -173,6 +173,8 @@ class ControlHandler:
                                              stage='server_cleanup' if self.course_object == server_kind else 'cleanup')
             raise
 
+        record_build_event(self.db, self.env.project, self.logger, 'cleanup_completed', event_id=self.event_id,
+                           **location)
         incidents.resolve_target(**location)
 
     def _start(self) -> None:

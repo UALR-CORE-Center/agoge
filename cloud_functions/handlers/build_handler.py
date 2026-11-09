@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+from common.constants.build_constants import BuildConstants
 from common.constants.database import DbCollections, DatabaseTypes, DATABASE_NAME
 from common.constants.pub_sub import PubSub
 from common.constants.states import UnitStates, WorkoutStates
@@ -9,7 +10,9 @@ from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.compute.quota_failure import ComputeQuotaFailure
 
-from cloud_fn_utilities.build_execution import BuildExecution, BuildSuperseded, build_execution, server_owner
+from cloud_fn_utilities.build_execution import (
+    BuildExecution, BuildSuperseded, build_execution, record_build_event, server_owner,
+)
 from cloud_fn_utilities.course_objects.compute.factory import ComputeManagerFactory
 from cloud_fn_utilities.server_specific.guacamole.display_proxy import DisplayProxy
 from cloud_fn_utilities.course_objects.unit.factory_unit import UnitFactory
@@ -56,29 +59,35 @@ class BuildHandler:
         }
         joins_workout = self.event_attributes.get(self.event_attr_keys.CHILD_ID)
         resolves_owner = not execution.server_id and not joins_workout
+        log_owner = False
+        log_failure = False
+        ready_states = (UnitStates.READY.value, UnitStates.RUNNING.value)
         with build_execution(execution):
             try:
                 owner = execution.check()
-                if (
-                    owner.get('state') in (UnitStates.READY.value, UnitStates.RUNNING.value)
-                    and not joins_workout
-                ):
-                    if resolves_owner:
-                        incidents.resolve_target(**location, resolution='build_succeeded')
-                    return
-                self._dispatch()
-                owner = execution.check()
-                if (resolves_owner
-                        and owner.get('state') in (UnitStates.READY.value, UnitStates.RUNNING.value)):
-                    incidents.resolve_target(**location, resolution='build_succeeded')
+                # Solo Units launch independent Workouts and have no shared resources to build.
+                log_owner = resolves_owner and (
+                    workout_id is not None or owner.get('unit_type') == BuildConstants.UnitType.COMMUNITY.value
+                )
+                if owner.get('state') not in ready_states or joins_workout:
+                    if log_owner:
+                        self._record_event('build_started', location)
+                    log_failure = log_owner or execution.server_id is not None
+                    self._dispatch()
+                    log_failure = False
+                    owner = execution.check()
             except BuildSuperseded:
                 self.logger.info('Skipped an obsolete lab build', **location)
             except (ComputeQuotaFailure, BuildQuotaHold) as error:
-                if (getattr(error, '_lab_incident_recorded', False)
-                        or (isinstance(error, ComputeQuotaFailure) and (
-                            error.category != 'allocation'
-                            and not (error.category == 'rate' and error.action in ('create', 'insert'))
-                        ))):
+                if getattr(error, '_lab_incident_recorded', False):
+                    raise
+                if isinstance(error, ComputeQuotaFailure) and (
+                    error.category != 'allocation'
+                    and not (error.category == 'rate' and error.action in ('create', 'insert'))
+                ):
+                    if log_failure:
+                        self._record_event('build_error', location, stage=self._failure_stage(error, stage),
+                                           reason=type(error).__name__, resource=execution.server_id)
                     raise
                 details = {
                     **location,
@@ -95,6 +104,19 @@ class BuildHandler:
                 if self.debug_mode:
                     error._lab_incident_recorded = True
                     raise
+            except Exception as error:
+                if log_failure:
+                    self._record_event('build_error', location, stage=stage, reason=type(error).__name__,
+                                       resource=execution.server_id)
+                raise
+            else:
+                if resolves_owner and owner.get('state') in ready_states:
+                    if log_owner:
+                        self._record_event('build_completed', location)
+                    incidents.resolve_target(**location, resolution='build_succeeded')
+
+    def _record_event(self, kind, location, **details):
+        record_build_event(self.db, self.env.project, self.logger, kind, event_id=self.event_id, **location, **details)
 
     def _execution(self):
         course_object = self.event_attributes.get(self.event_attr_keys.COURSE_OBJECT)

@@ -87,4 +87,8 @@ def build_workout_record(
     if test:
         workout_record['test'] = True
 
-    return ModelValidator(model=WorkoutModel, log_location=log_name).load(workout_record, as_dict=True)
+    record = ModelValidator(model=WorkoutModel, log_location=log_name).load(workout_record, as_dict=True)
+    name = kwargs.get('student_name')
+    if isinstance(name, str) and name.strip() and name.casefold() != str(record.get('student_email')).casefold():
+        record['runtime_student_name'] = name.strip()
+    return record

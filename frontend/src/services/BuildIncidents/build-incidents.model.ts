@@ -36,8 +36,28 @@ export interface BuildIncident {
     resource?: string | null;
 }
 
-export interface BuildIncidentPage {
-    incidents: BuildIncident[];
+export type BuildEventKind = BuildIncident['kind'] | 'build_started' | 'build_completed' | 'build_error' | 'cleanup_completed';
+
+export interface BuildEvent extends Omit<BuildIncident, 'kind' | 'reason' | 'status' | 'stage'> {
+    kind: BuildEventKind;
+    reason?: string | null;
+    status?: BuildIncident['status'] | null;
+    stage?: string | null;
+    message?: string | null;
+    event_id?: string | null;
+    resource_type?: string | null;
+}
+
+export interface BuildEventFilters {
+    kind?: BuildEventKind;
+    search?: string;
+    date_from?: string;
+    date_to?: string;
+    sort: 'asc' | 'desc';
+}
+
+export interface BuildEventPage {
+    events: BuildEvent[];
     next_cursor?: string | null;
 }
 

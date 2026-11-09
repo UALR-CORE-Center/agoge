@@ -384,11 +384,14 @@ class Workout:
             raise BadRequest(message="Unsupported item for PATCH request")
 
         workout = self.get(build_id, as_dict=True)
-        workout['student_email'] = student_email.lower()
-        self._validate(workout, DbOperationTypes.UPDATE)
+        student_email = student_email.lower()
+        self._validate({**workout, 'student_email': student_email}, DbOperationTypes.UPDATE)
         self.logger.info(f'update workout with id {build_id} from user with id {requester.uid}',
                          workout_id=build_id, user=requester.uid)
-        self.db.update(collection_name=self.collection, doc_id=build_id, data=workout)
+        patch = {'student_email': student_email}
+        if workout.get('student_email') != student_email:
+            patch['runtime_student_name'] = None
+        self.db.update(collection_name=self.collection, doc_id=build_id, data=patch)
 
     def _build_incidents(self):
         return BuildIncidents(self.db, self.env.project)

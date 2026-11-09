@@ -10,6 +10,7 @@ from cloud_deployment.operations.env_and_quotas.gcloud_environment_manager impor
 )
 from cloud_deployment import setup_manager as setup_manager_module
 from cloud_deployment.setup_manager import SetupManager
+from cloud_deployment.utilities import console as ui
 from cloud_deployment.utilities.menu_options import SetupOptions
 from common.exceptions import AgogeValidationError
 
@@ -39,12 +40,7 @@ def test_refresh_credentials_keeps_interactive_prompts_visible(monkeypatch):
 
     assert manager._run_gcloud.call_args_list == [
         call(
-            ["auth", "login", "instructor@example.com", "--force",
-             "--project=agoge-shared-resources"],
-            interactive=True,
-        ),
-        call(
-            ["auth", "application-default", "login", "instructor@example.com",
+            ["auth", "login", "instructor@example.com", "--update-adc", "--force",
              "--project=agoge-shared-resources"],
             interactive=True,
         ),
@@ -54,21 +50,36 @@ def test_refresh_credentials_keeps_interactive_prompts_visible(monkeypatch):
     )
 
 
-def test_ensure_credentials_synchronizes_adc_after_account_change():
+def test_ensure_credentials_reuses_healthy_stores_and_updates_quota_project():
     manager = GcloudEnvironmentManager(load_configurations=False)
+    manager._credential_failures = MagicMock(return_value=[])
     manager.refresh_credentials = MagicMock()
+    manager.set_adc_quota_project = MagicMock()
 
     manager.ensure_credentials(
-        account="other@example.com",
+        account="instructor@example.com",
         quota_project="agoge-shared-resources",
-        synchronize=True,
     )
 
-    manager.refresh_credentials.assert_called_once_with(
-        account="other@example.com",
-        quota_project="agoge-shared-resources",
-        force=False,
-    )
+    manager.refresh_credentials.assert_not_called()
+    manager._credential_failures.assert_called_once_with("instructor@example.com")
+    manager.set_adc_quota_project.assert_called_once_with("agoge-shared-resources")
+
+
+def test_switch_environment_changes_quota_project_without_repeating_credential_checks(monkeypatch):
+    manager = GcloudEnvironmentManager(load_configurations=False)
+    manager.configurations = {"test-dev": {"project_id": "test-dev-787001"}}
+    manager._validated_account = "instructor@example.com"
+    manager.get_current_account = MagicMock(return_value="INSTRUCTOR@example.com")
+    manager._run_gcloud = MagicMock(return_value=_result())
+    manager.ensure_credentials = MagicMock()
+    manager.set_adc_quota_project = MagicMock()
+    monkeypatch.setattr(auth_module, "load_dotenv", lambda _: None)
+
+    assert manager.switch_environment("test-dev") == "test-dev-787001"
+
+    manager.ensure_credentials.assert_not_called()
+    manager.set_adc_quota_project.assert_called_once_with("test-dev-787001")
 
 
 def test_ensure_credentials_rejects_invalid_noninteractive_credentials():
@@ -120,23 +131,25 @@ def credential_manager(monkeypatch):
 
 
 @pytest.mark.parametrize("initial_adc_account", [None, "old-account@example.com"])
-def test_cached_cli_login_still_writes_selected_identity_to_adc(credential_manager, initial_adc_account):
+def test_working_cli_can_repair_adc_without_forcing_browser(credential_manager, initial_adc_account, monkeypatch):
     manager = credential_manager
     state = {"adc_account": initial_adc_account}
     events = []
+
+    def check_identity(account, _token):
+        return None if account == state["adc_account"] else "Application Default Credentials belong to a different account"
+
+    manager._adc_identity_failure = check_identity
+    monkeypatch.setattr(auth_module.ui, "prompt", lambda _: "y")
 
     def run(args, **kwargs):
         if args[:2] == ["auth", "login"]:
             assert kwargs == {"interactive": True}
             assert "--force" not in args
-            events.append("cached CLI login")
-            # A cached CLI login succeeds without changing the ADC file.
+            assert "--update-adc" in args
+            state["adc_account"] = args[2]
+            events.append("cached CLI and ADC sync")
             return _result(stderr="Re-using locally stored credentials")
-        if args[:3] == ["auth", "application-default", "login"]:
-            assert kwargs == {"interactive": True}
-            state["adc_account"] = args[3]
-            events.append("write ADC")
-            return _result()
         if args[:2] == ["auth", "print-access-token"]:
             return _result(stdout="cli-token-do-not-print")
         if args[:3] == ["auth", "application-default", "print-access-token"]:
@@ -152,30 +165,29 @@ def test_cached_cli_login_still_writes_selected_identity_to_adc(credential_manag
 
     manager._run_gcloud = MagicMock(side_effect=run)
     manager.ensure_credentials(
-        account="instructor@example.com", synchronize=True,
+        account="instructor@example.com",
         quota_project="agoge-shared-resources",
     )
 
     assert state["adc_account"] == "instructor@example.com"
-    assert events == ["cached CLI login", "write ADC", "validate ADC", "set quota project"]
+    assert events == ["validate ADC", "cached CLI and ADC sync", "validate ADC", "set quota project"]
 
 
-@pytest.mark.parametrize("failed_step", ["cli", "adc"])
-def test_failed_login_stops_before_validation_and_quota_update(credential_manager, failed_step):
+def test_failed_login_stops_before_validation_and_quota_update(credential_manager):
     manager = credential_manager
-    manager._run_gcloud = MagicMock(side_effect=[_result(1)] if failed_step == "cli" else [_result(), _result(1)])
+    manager._run_gcloud = MagicMock(return_value=_result(1))
     manager._credential_failures = MagicMock()
     manager.set_adc_quota_project = MagicMock()
 
     with pytest.raises(AgogeValidationError, match="--reauthenticate"):
         manager.refresh_credentials(account="instructor@example.com", force=False)
 
-    assert manager._run_gcloud.call_count == (1 if failed_step == "cli" else 2)
+    manager._run_gcloud.assert_called_once()
     manager._credential_failures.assert_not_called()
     manager.set_adc_quota_project.assert_not_called()
 
 
-def test_unexpected_login_identity_is_not_written_to_adc(credential_manager):
+def test_unexpected_login_identity_is_rejected_before_quota_update(credential_manager):
     manager = credential_manager
     manager.get_current_account.return_value = "unexpected@example.com"
     manager._run_gcloud = MagicMock(return_value=_result())
@@ -196,8 +208,7 @@ def test_login_without_initial_account_uses_browser_selected_account_for_adc(cre
     manager.refresh_credentials(force=True)
 
     assert manager._run_gcloud.call_args_list == [
-        call(["auth", "login", "--force"], interactive=True),
-        call(["auth", "application-default", "login", "instructor@example.com"], interactive=True),
+        call(["auth", "login", "--update-adc", "--force"], interactive=True),
     ]
 
 
@@ -237,18 +248,40 @@ def test_empty_token_output_is_reported_without_claiming_expiration(credential_m
     assert "expired" not in failure
 
 
-def test_failed_validation_does_not_loop_or_set_quota_project(credential_manager, capsys):
+def test_stale_cached_adc_forces_one_combined_login_then_sets_quota_project(credential_manager):
+    manager = credential_manager
+    manager._run_gcloud = MagicMock(return_value=_result())
+    manager._credential_failures = MagicMock(side_effect=[
+        ["Application Default Credentials validation failed (stored login needs browser re-authentication)"],
+        [],
+    ])
+    manager.set_adc_quota_project = MagicMock()
+
+    manager.refresh_credentials(
+        account="instructor@example.com", quota_project="agoge-shared-resources", force=False,
+    )
+
+    assert manager._run_gcloud.call_args_list == [
+        call(["auth", "login", "instructor@example.com", "--update-adc",
+              "--project=agoge-shared-resources"], interactive=True),
+        call(["auth", "login", "instructor@example.com", "--update-adc", "--force",
+              "--project=agoge-shared-resources"], interactive=True),
+    ]
+    manager.set_adc_quota_project.assert_called_once_with("agoge-shared-resources")
+
+
+def test_failed_forced_validation_does_not_loop_or_set_quota_project(credential_manager, capsys):
     manager = credential_manager
     manager._run_gcloud = MagicMock(side_effect=[
-        _result(), _result(), _result(stdout="cli-token"),
+        _result(), _result(stdout="cli-token"),
         _result(1, stderr="invalid_grant: expired or revoked"),
     ])
     manager.set_adc_quota_project = MagicMock()
 
     with pytest.raises(AgogeValidationError, match="browser re-authentication"):
-        manager.refresh_credentials(account="instructor@example.com", force=False)
+        manager.refresh_credentials(account="instructor@example.com", force=True)
 
-    assert manager._run_gcloud.call_count == 4
+    assert manager._run_gcloud.call_count == 3
     manager.set_adc_quota_project.assert_not_called()
     assert "are ready" not in capsys.readouterr().out
 
@@ -272,7 +305,7 @@ def test_gcloud_runner_preserves_command_arguments_and_prompt_visibility(credent
     manager._gcloud = r"C:\Program Files\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd"
     run = MagicMock(return_value=_result())
     monkeypatch.setattr(auth_module.subprocess, "run", run)
-    args = ["auth", "application-default", "login", "instructor@example.com"]
+    args = ["auth", "login", "instructor@example.com", "--update-adc"]
 
     manager._run_gcloud(args, interactive=interactive)
 
@@ -280,3 +313,37 @@ def test_gcloud_runner_preserves_command_arguments_and_prompt_visibility(credent
         [manager._gcloud, *args], capture_output=not interactive,
         text=True, timeout=None, check=False,
     )
+
+
+@pytest.mark.parametrize("profile, expected", [
+    ({"email": "INSTRUCTOR@example.com", "email_verified": True}, None),
+    ({"email": "different@example.com", "email_verified": True}, "different Google account"),
+    ({"email": "instructor@example.com", "email_verified": False}, "verified Google account"),
+    ([], "verified Google account"),
+])
+def test_adc_identity_check_uses_google_and_never_prints_token(monkeypatch, profile, expected, capsys):
+    response = MagicMock()
+    response.json.return_value = profile
+    request = MagicMock(return_value=response)
+    monkeypatch.setattr(auth_module.requests, "get", request)
+
+    failure = GcloudEnvironmentManager._adc_identity_failure("instructor@example.com", "private-token")
+
+    request.assert_called_once_with(
+        auth_module.GOOGLE_USERINFO_URL, headers={"Authorization": "Bearer private-token"},
+        timeout=10, allow_redirects=False,
+    )
+    if expected is None:
+        assert failure is None
+    else:
+        assert expected in failure
+        assert "private-token" not in failure
+    assert "private-token" not in capsys.readouterr().out
+
+
+def test_prompt_separates_typed_input_from_the_label(monkeypatch):
+    entered = MagicMock(return_value="2")
+    monkeypatch.setattr("builtins.input", entered)
+
+    assert ui.prompt("Enter your choice:") == "2"
+    assert entered.call_args.args[0].endswith("Enter your choice: ")

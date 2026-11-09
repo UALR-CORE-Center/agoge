@@ -237,7 +237,7 @@ class CommunityWorkout(BaseWorkout):
             self.logger.info(f"Finished starting the Workout: {self.workout_id}!")
         self.workout = self.get_record()
         self.workout.shutoff_timestamp = Timestamps.get_current_timestamp_utc(add_seconds=self.duration_seconds)
-        self.update_record(doc_id=self.workout_id, data=self.workout)
+        self.update_record(doc_id=self.workout_id, data=self.workout, update_keys=['shutoff_timestamp'])
         self.logger.info(f"Finished starting {len(servers_to_start)} servers for workout ID {self.workout_id}")
 
     def stop(self):
@@ -294,7 +294,7 @@ class CommunityWorkout(BaseWorkout):
                 self.logger.info(f"Finished Stopping the Workout: {self.workout_id}!")
                 self.workout = self.get_record()
                 self.workout.shutoff_timestamp = None
-                self.update_record(doc_id=self.workout_id, data=self.workout)
+                self.update_record(doc_id=self.workout_id, data=self.workout, update_keys=['shutoff_timestamp'])
                 self.logger.info(f"Finished stopping {len(servers_to_stop)} servers for workout ID {self.workout_id}")
         else:
             self.state_manager.state_transition(self.s.READY)

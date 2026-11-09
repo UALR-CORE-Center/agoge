@@ -25,8 +25,8 @@ function QuotaWarning({hold, supportContact}: {hold: QuotaHold; supportContact?:
                 {!isAdmin && ` Contact ${supportContact || 'your Agoge administrator'}.`}
             </Typography>
             <Stack direction="row" sx={{gap: 1, flexWrap: 'wrap', mt: 1}}>
-                {isAdmin && <Button component={Link} to={`${URL_ADMIN_BASE}?view=incidents`} color="inherit" size="small">
-                    View incidents
+                {isAdmin && <Button component={Link} to={`${URL_ADMIN_BASE}?view=cloudMonitoring`} color="inherit" size="small">
+                    View Cloud Monitoring
                 </Button>}
                 <Button color="inherit" size="small" onClick={() => copy([
                     quotaHoldMessage, `Project: ${hold.project}`, `Quota: ${quota}`, `Hold ID: ${hold.id}`,

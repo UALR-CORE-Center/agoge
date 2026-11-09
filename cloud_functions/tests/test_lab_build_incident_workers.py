@@ -53,6 +53,7 @@ class MemoryReference:
         self.db = db
         self.collection_name = collection_name
         self.doc_id = doc_id
+        self.id = doc_id
 
     def get(self, transaction=None):
         row = deepcopy(self.db.records.get((self.collection_name, self.doc_id)))
@@ -62,12 +63,16 @@ class MemoryReference:
 def _database():
     return MemoryDatabase({
         ('unit', 'unit-a'): {'id': 'unit-a', 'state': UnitStates.BUILDING_NETWORKS.value,
-                            'build_attempt_id': 'unit-attempt'},
+                            'build_attempt_id': 'unit-attempt', 'unit_type': 'community'},
         ('workout', 'workout-a'): {'id': 'workout-a', 'state': WorkoutStates.BUILDING_SERVERS.value,
                                   'parent_id': 'unit-a', 'build_attempt_id': 'workout-attempt'},
         ('agoge-server', 'workout-a-server'): {'parent_id': 'workout-a', 'parent_build_type': 'workout',
                                              'state': ServerStates.BUILDING.value},
     })
+
+
+def _build_events(db):
+    return [row for (collection, _), row in db.records.items() if collection == DbCollections.BUILD_EVENT.value]
 
 
 def _handler(db, course_object, *, target='unit-a', attempt='unit-attempt'):
@@ -94,6 +99,63 @@ def _quota(**overrides):
     })
 
 
+def test_current_build_logs_one_start_and_completion_despite_redelivery():
+    db = _database()
+    handler = _handler(db, PubSub.CourseObjects.UNIT)
+
+    def build():
+        assert [row['kind'] for row in _build_events(db)] == ['build_started']
+        db.records['unit', 'unit-a']['state'] = UnitStates.READY.value
+
+    handler._dispatch = Mock(side_effect=build)
+    handler.route()
+    handler.event_id = 'second-delivery'
+    handler.route()
+
+    handler._dispatch.assert_called_once()
+    assert [row['kind'] for row in _build_events(db)] == ['build_started', 'build_completed']
+
+
+def test_unhandled_workout_error_logs_exception_class_and_preserves_retry():
+    db = _database()
+    handler = _handler(db, PubSub.CourseObjects.WORKOUT, target='workout-a', attempt='workout-attempt')
+    handler._dispatch = Mock(side_effect=TimeoutError('provider detail that must not be stored'))
+
+    with pytest.raises(TimeoutError):
+        handler.route()
+
+    events = _build_events(db)
+    assert [row['kind'] for row in events] == ['build_started', 'build_error']
+    assert events[-1]['stage'] == 'workout'
+    assert events[-1]['reason'] == 'TimeoutError'
+    assert 'provider detail' not in str(events)
+
+
+@pytest.mark.parametrize('course_object, target, stage, resource', [
+    (PubSub.CourseObjects.LAB_SERVER, 'untrusted', 'server', 'workout-a-server'),
+    (PubSub.CourseObjects.DISPLAY_PROXY, 'workout-a', 'display_proxy', 'workout-a-display-guacamole-server'),
+])
+def test_unhandled_child_error_logs_owning_workout_and_resource(course_object, target, stage, resource):
+    db = _database()
+    handler = _handler(db, course_object, target=target, attempt='workout-attempt')
+    handler.event_attributes.update(server_name='workout-a-server', key_type=DbCollections.WORKOUT.value)
+    handler._dispatch = Mock(side_effect=RuntimeError('provider detail that must not be stored'))
+
+    for delivery in ('first-delivery', 'second-delivery'):
+        handler.event_id = delivery
+        with pytest.raises(RuntimeError):
+            handler.route()
+
+    event, = _build_events(db)
+    assert event['kind'] == 'build_error'
+    assert event['unit_id'] == 'unit-a'
+    assert event['workout_id'] == 'workout-a'
+    assert event['stage'] == stage
+    assert event['resource'] == resource
+    assert event['reason'] == 'RuntimeError'
+    assert 'provider detail' not in str(event)
+
+
 def test_network_quota_fails_current_shared_lab_and_opens_project_hold():
     db = _database()
     handler = _handler(db, PubSub.CourseObjects.UNIT)
@@ -110,6 +172,7 @@ def test_network_quota_fails_current_shared_lab_and_opens_project_hold():
     assert db.get(DbCollections.UNIT, 'unit-a')['state'] == UnitStates.BROKEN.value
     assert incidents.active_hold()['limit'] == 30
     assert db.get(DbCollections.WORKOUT, 'workout-a')['state'] == WorkoutStates.BUILDING_SERVERS.value
+    assert [row['kind'] for row in _build_events(db)] == ['build_started']
 
 
 def test_async_vm_quota_fails_only_its_authoritative_workout():
@@ -126,6 +189,7 @@ def test_async_vm_quota_fails_only_its_authoritative_workout():
     assert incidents.current_failure(unit_id='unit-a') is None
     assert incidents.active_hold() is None
     assert db.get(DbCollections.UNIT, 'unit-a')['state'] == UnitStates.READY.value
+    assert _build_events(db) == []
 
 
 def test_rate_rejection_remains_retryable_and_older_attempt_is_skipped():
@@ -216,6 +280,7 @@ def test_cleanup_failure_is_kept_until_delete_is_verified():
     handler = object.__new__(ControlHandler)
     handler.db = db
     handler.env = SimpleNamespace(project='example-project')
+    handler.logger = Mock()
     handler.course_object = str(PubSub.CourseObjects.WORKOUT.value)
     handler.build_id = 'workout-a'
     handler.event_id = 'cleanup-event'
@@ -224,9 +289,13 @@ def test_cleanup_failure_is_kept_until_delete_is_verified():
     with pytest.raises(ConnectionError, match='not confirmed'):
         handler._tracked_delete(Mock(return_value=None))
     assert incidents.for_unit('unit-a')[0]['kind'] == 'cleanup_failed'
+    assert _build_events(db) == []
 
     def delete():
         db.records['workout', 'workout-a']['state'] = WorkoutStates.DELETED.value
 
     handler._tracked_delete(delete)
+    handler.event_id = 'another-cleanup-delivery'
+    handler._tracked_delete(delete)
     assert incidents.for_unit('unit-a') == []
+    assert [row['kind'] for row in _build_events(db)] == ['cleanup_completed']

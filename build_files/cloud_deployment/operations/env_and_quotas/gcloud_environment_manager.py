@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Sequence
 
+import requests
 from dotenv import load_dotenv
 
 from common.exceptions import AgogeValidationError
@@ -12,6 +13,7 @@ from cloud_deployment.utilities import console as ui
 from .project_menu import ProjectMenu
 
 ENV_FILE = Path("main_app/api/.env")
+GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 SHARED_RESOURCE_PROJECT = {
     "agoge-shared-resources": {
         "impersonation_account": "agoge-service@agoge-shared-resources.iam.gserviceaccount.com",
@@ -28,7 +30,7 @@ class GcloudEnvironmentManager:
     def __init__(self, env_file=ENV_FILE, *, load_configurations: bool = True) -> None:
         self.env_file = env_file
         self.configurations = {}
-        self._account_changed = False
+        self._validated_account = None
         self._gcloud = shutil.which("gcloud") or shutil.which("gcloud.cmd")
         if load_configurations:
             self.load_configurations()
@@ -94,7 +96,7 @@ class GcloudEnvironmentManager:
         new_account = ui.prompt(
             "Account email to use (Enter keeps the current one):"
         ).strip()
-        if not new_account:
+        if not new_account or (current_account and new_account.casefold() == current_account.casefold()):
             ui.info("Keeping the current account.")
             return current_account
 
@@ -106,7 +108,6 @@ class GcloudEnvironmentManager:
             raise AgogeValidationError(
                 f"Unable to select account {new_account}: {self._gcloud_error(result)}"
             )
-        self._account_changed = new_account != current_account
         ui.success(f"Successfully set account to: {new_account}")
         return new_account
 
@@ -116,12 +117,11 @@ class GcloudEnvironmentManager:
         account: str | None = None,
         quota_project: str | None = None,
         force: bool = False,
-        synchronize: bool = False,
         prompt: bool = True,
     ) -> None:
         """Validate both gcloud credentials and ADC, refreshing when needed."""
         account = account or self.get_current_account()
-        if force or synchronize:
+        if force:
             self.refresh_credentials(
                 account=account,
                 quota_project=quota_project,
@@ -145,7 +145,9 @@ class GcloudEnvironmentManager:
                 self.refresh_credentials(
                     account=account,
                     quota_project=quota_project,
-                    force=True,
+                    # If the CLI login still works, it may be able to repair ADC
+                    # from its cache without opening a browser.
+                    force=not account or any(failure.startswith("gcloud login") for failure in failures),
                 )
                 return
             raise AgogeValidationError(
@@ -155,6 +157,7 @@ class GcloudEnvironmentManager:
 
         if quota_project:
             self.set_adc_quota_project(quota_project)
+        self._validated_account = account
 
     def refresh_credentials(
         self,
@@ -177,47 +180,15 @@ class GcloudEnvironmentManager:
             "Refreshing gcloud and Application Default Credentials. "
             "Complete the browser sign-in if prompted."
         )
-        args = ["auth", "login"]
-        if account:
-            args.append(account)
-        if force:
-            args.append("--force")
-        if quota_project:
-            args.append(f"--project={quota_project}")
-
-        # Authentication must inherit stdin/stdout. Capturing this command's
-        # output hides authorization URLs and password/security-key prompts.
-        result = self._run_gcloud(args, interactive=True)
-        if result.returncode != 0:
-            raise AgogeValidationError(
-                "gcloud login failed. Check the error above and retry "
-                "`python setup.py --reauthenticate`."
-            )
-
-        active_account = self.get_current_account()
-        if not active_account or (account and active_account.lower() != account.lower()):
-            raise AgogeValidationError(
-                "gcloud did not activate the selected account. ADC was not changed. "
-                "Run `python setup.py --reauthenticate` and select the intended account."
-            )
-        account = active_account
-
-        # A successful cached CLI login is not sufficient evidence that ADC was
-        # written. Explicitly synchronize it even if an old ADC token is valid,
-        # since that token could belong to another account. Passing ACCOUNT lets
-        # gcloud reuse the selected user's login while writing the ADC file.
-        ui.info(f"Synchronizing Application Default Credentials for {account}.")
-        adc_args = ["auth", "application-default", "login", account]
-        if quota_project:
-            adc_args.append(f"--project={quota_project}")
-        result = self._run_gcloud(adc_args, interactive=True)
-        if result.returncode != 0:
-            raise AgogeValidationError(
-                "gcloud login succeeded, but Application Default Credentials login failed. "
-                "Check the error above and retry `python setup.py --reauthenticate`."
-            )
-
+        self._validated_account = None
+        account = self._login_with_adc(account, quota_project, force=force)
         failures = self._credential_failures(account)
+        if failures and not force:
+            # Some cached logins succeed without repairing stale ADC. Force the
+            # combined authorization once so both stores get fresh credentials.
+            ui.info("Cached login did not repair Application Default Credentials. Starting a fresh sign-in.")
+            account = self._login_with_adc(account, quota_project, force=True)
+            failures = self._credential_failures(account)
         if failures:
             raise AgogeValidationError(
                 "Authentication completed, but credential validation failed: "
@@ -225,8 +196,32 @@ class GcloudEnvironmentManager:
             )
         if quota_project:
             self.set_adc_quota_project(quota_project)
-        self._account_changed = False
-        ui.success(f"gcloud and Application Default Credentials are ready.")
+        self._validated_account = account
+        ui.success("gcloud and Application Default Credentials are ready.")
+
+    def _login_with_adc(self, account: str | None, quota_project: str | None, *, force: bool) -> str:
+        args = ["auth", "login"]
+        if account:
+            args.append(account)
+        args.append("--update-adc")
+        if force:
+            args.append("--force")
+        if quota_project:
+            args.append(f"--project={quota_project}")
+
+        # Preserve browser URLs and security-key prompts on the user's terminal.
+        if self._run_gcloud(args, interactive=True).returncode != 0:
+            raise AgogeValidationError(
+                "gcloud sign-in could not update both credential stores. Check the error above and retry "
+                "`python setup.py --reauthenticate`."
+            )
+        active_account = self.get_current_account()
+        if not active_account or (account and active_account.casefold() != account.casefold()):
+            raise AgogeValidationError(
+                "gcloud did not activate the selected account. "
+                "Run `python setup.py --reauthenticate` and select the intended account."
+            )
+        return active_account
 
     def _credential_failures(self, account: str | None) -> list[str]:
         failures = []
@@ -251,7 +246,30 @@ class GcloudEnvironmentManager:
                 "Application Default Credentials", adc_token,
                 "gcloud auth application-default print-access-token",
             ))
+        elif account and not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+            if failure := self._adc_identity_failure(account, adc_token.stdout.strip()):
+                failures.append(failure)
         return failures
+
+    @staticmethod
+    def _adc_identity_failure(account: str, token: str) -> str | None:
+        # The token is passed only in the authorization header. Keep request
+        # errors and response payloads out of terminal diagnostics.
+        try:
+            response = requests.get(
+                GOOGLE_USERINFO_URL, headers={"Authorization": f"Bearer {token}"},
+                timeout=10, allow_redirects=False,
+            )
+            response.raise_for_status()
+            profile = response.json()
+        except (requests.RequestException, ValueError):
+            return "Application Default Credentials account could not be verified with Google"
+        email = profile.get("email") if isinstance(profile, dict) else None
+        if not isinstance(email, str) or profile.get("email_verified") is not True:
+            return "Application Default Credentials do not identify a verified Google account"
+        if email.casefold() != account.casefold():
+            return "Application Default Credentials belong to a different Google account"
+        return None
 
     @staticmethod
     def _token_failure(label: str, result: subprocess.CompletedProcess, command: str) -> str:
@@ -381,11 +399,11 @@ class GcloudEnvironmentManager:
             raise AgogeValidationError(
                 f"Unable to select project {project_id}: {self._gcloud_error(result)}"
             )
-        self.ensure_credentials(
-            account=self.get_current_account(),
-            quota_project=project_id,
-            synchronize=self._account_changed,
-        )
+        account = self.get_current_account()
+        if account and self._validated_account and account.casefold() == self._validated_account.casefold():
+            self.set_adc_quota_project(project_id)
+        else:
+            self.ensure_credentials(account=account, quota_project=project_id)
         ui.success(f"Successfully set gcloud project to: {project_id}")
 
         # Load .env file to set the impersonation account

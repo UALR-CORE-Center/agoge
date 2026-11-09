@@ -58,8 +58,13 @@ class Database:
         return operation_func(self, **kwargs)
 
     def set(self, reference, data, merge=False):
-        assert merge
-        self.update(DbCollections(reference.collection), reference.id, data)
+        if merge:
+            self.update(DbCollections(reference.collection), reference.id, data)
+        else:
+            self.records[reference.collection][reference.id] = deepcopy(data)
+
+    def delete(self, reference):
+        self.records[reference.collection].pop(reference.id, None)
 
 
 class Compute:
@@ -182,6 +187,11 @@ def test_two_students_share_one_proxy_through_complete_community_lifecycle(commu
     assert all(scene.compute.provider[name] == 'RUNNING' for name in shared)
     students[1].stop()
     assert all(scene.compute.provider[name] == 'TERMINATED' for name in shared)
+    runtime = scene.db.query(DbCollections.WORKOUT_RUNTIME)
+    for workout in students:
+        tracked = [row for row in runtime if row['workout_id'] == workout.workout_id]
+        assert [row['kind'] for row in tracked] == ['build', 'run']
+        assert tracked[1]['started_at'] < tracked[1]['ended_at']
     students[0].delete()
     assert all(name in scene.compute.provider for name in shared)
     scene.unit.start()

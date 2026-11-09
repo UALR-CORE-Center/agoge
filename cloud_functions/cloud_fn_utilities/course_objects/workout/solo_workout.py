@@ -196,7 +196,7 @@ class SoloWorkout(BaseWorkout):
         self.workout.shutoff_timestamp = Timestamps.get_current_timestamp_utc(
             add_seconds=self.duration_seconds
         )
-        self.update_record(doc_id=self.workout_id, data=self.workout)
+        self.update_record(doc_id=self.workout_id, data=self.workout, update_keys=['shutoff_timestamp'])
 
     def stop(self):
         self._add_build_action(PubSub.Actions.STOP.value, True)
@@ -233,7 +233,7 @@ class SoloWorkout(BaseWorkout):
                 self.logger.info(f"{self.class_name}:{self.workout_id} - Finished Stopping the Workout!")
                 self.workout = self.get_record()
                 self.workout.shutoff_timestamp = None
-                self.update_record(doc_id=self.workout_id, data=self.workout)
+                self.update_record(doc_id=self.workout_id, data=self.workout, update_keys=['shutoff_timestamp'])
         else:
             self.logger.info(f'{self.class_name}:{self.workout_id} - No compute resources found for workout. '
                              f'Ignoring stop request...')

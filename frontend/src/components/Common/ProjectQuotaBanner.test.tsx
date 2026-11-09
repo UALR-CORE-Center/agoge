@@ -47,10 +47,10 @@ it('retains a verified hold after a failed refresh and clears it only after a su
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
 });
 
-it('links administrators directly to the Incidents tab', async () => {
+it('links administrators directly to the Cloud Monitoring tab', async () => {
     auth.permissions = {admin: true, instructor: false, student: true};
     renderBanner();
-    expect(await screen.findByRole('link', {name: 'View incidents'})).toHaveAttribute('href', '/admin?view=incidents');
+    expect(await screen.findByRole('link', {name: 'View Cloud Monitoring'})).toHaveAttribute('href', '/admin?view=cloudMonitoring');
 });
 
 it('does not request or display project quota information to learners', () => {
