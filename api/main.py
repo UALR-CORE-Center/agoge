@@ -3,6 +3,7 @@ import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Response, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from dotenv import load_dotenv
@@ -12,6 +13,7 @@ from common.models.response import AgogeResponse
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.exceptions import BadRequest, Unauthorized, Forbidden
+from common.utilities.build_incidents import LabBuildUnavailable
 
 from app_config import AppConfig
 from dependencies import verify_token
@@ -23,6 +25,7 @@ from routers.webgl import webgl_router
 # Routers
 from routers.compute_image import compute_image_router
 from routers.compute_snapshot import compute_snapshot_router
+from routers.cloud_monitoring import cloud_monitoring_router
 from routers.ctf import ctf_router
 from routers.ctf_board import ctf_board_router
 from routers.docs import docs_router
@@ -34,6 +37,7 @@ from routers.unit import unit_router
 from routers.user import user_router
 from routers.workout import workout_router
 from routers.wireguard import wireguard_router
+from utilities.http_errors import build_unavailable_response
 
 logger = Logger(log_name=LoggerNames.API)
 
@@ -82,6 +86,7 @@ cloud_env = None
 app.include_router(health_router)
 app.include_router(compute_image_router)
 app.include_router(compute_snapshot_router)
+app.include_router(cloud_monitoring_router)
 app.include_router(ctf_router)
 app.include_router(ctf_board_router)
 app.include_router(docs_router)
@@ -96,6 +101,11 @@ app.include_router(project_router)
 app.include_router(puzzle_control_router)
 app.include_router(webgl_router)
 app.include_router(wireguard_router)
+
+@app.exception_handler(LabBuildUnavailable)
+async def lab_build_unavailable(_: Request, error: LabBuildUnavailable):
+    response = build_unavailable_response(error)
+    return JSONResponse({'detail': response.detail}, status_code=response.status_code, headers=response.headers)
 
 
 @app.get("/")

@@ -1,4 +1,5 @@
 import {Dictionary, ListOfDictionaries} from "../../types/Common";
+import {BuildIncident} from "../BuildIncidents/build-incidents.model";
 import {Workout} from "../Workout/workout.model";
 
 export interface Unit {
@@ -74,4 +75,5 @@ export interface UnitState extends Partial<Unit> {
 export interface UnitFull extends Partial<Unit> {
     workouts?: Workout[];
     roster:number;
+    build_incidents?: BuildIncident[];
 }

@@ -127,11 +127,28 @@ class UnitListResponse(BaseModel):
     total: int
 
 
+class BuildIncidentResponse(BaseModel):
+    id: str
+    unit_id: str | None = None
+    workout_id: str | None = None
+    project: str
+    kind: Literal['build_failure', 'build_blocked', 'cleanup_failed']
+    status: Literal['open', 'resolved']
+    stage: str
+    reason: str
+    metric: str | None = None
+    limit_name: str | None = None
+    limit: int | float | None = None
+    scope: str | None = None
+    occurred_at: str
+
+
 class UnitFullResponse(BaseModel):
     unit: UnitModel
     workouts: List[WorkoutModel]
     roster: int
     rubric_support: bool
+    build_incidents: list[BuildIncidentResponse] = Field(default_factory=list)
 
 
 class UsersListResponse(BaseModel):

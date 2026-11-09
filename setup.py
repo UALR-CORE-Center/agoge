@@ -95,10 +95,6 @@ def main():
         account=selected_account,
         quota_project=BuildConstants.SharedResourceProjects.MAIN_SHARED_RESOURCE_PROJECT,
         force=args["reauthenticate"],
-        # A valid ADC token can still belong to a different account than the
-        # selected gcloud identity. Synchronize ADC explicitly for that account,
-        # even when the CLI can reuse a cached login.
-        synchronize=bool(selected_account),
     )
     if args['hide_environment'] or args['show_environment'] or args['rename_environment']:
         ProjectMenu().update(

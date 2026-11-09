@@ -130,7 +130,7 @@ authentication prompt, or you changed Google accounts, run a complete local
 credential refresh first:
 
 ```bash
-PYTHONPATH=.:build_files:cloud_functions ./venv/bin/python setup.py --reauthenticate
+./venv/bin/python setup.py --reauthenticate
 ```
 
 This opens the normal browser sign-in and synchronizes both credential stores
@@ -138,11 +138,10 @@ used by setup: the active `gcloud` login and Application Default Credentials
 (ADC) used by the Python Google Cloud clients. The same action is available
 under **Environment & Quotas → Refresh gcloud and Python GCP Credentials**.
 
-Normal startup now runs a CLI login followed by an explicit ADC login for the
-selected account. It can reuse cached user credentials, so the warning
-`Re-using locally stored credentials` is not itself a failure. Setup validates
-both stores before reading the shared project registry. `--reauthenticate`
-forces a fresh browser login when a stored login needs renewal.
+Setup checks both credential stores before reading the shared project registry
+and reuses them when they work for the selected Google account. If credentials
+need repair, setup uses a combined gcloud sign-in to update both stores.
+`--reauthenticate` forces a fresh browser sign-in.
 
 If an older checkout stops with `Authentication completed, but credential
 validation failed: Application Default Credentials are missing or expired`,
@@ -157,8 +156,7 @@ prompts, and stop if a command reports an error:
 
 ```powershell
 $setupAccount = "you@example.edu"
-gcloud auth login $setupAccount --force --project=agoge-shared-resources
-gcloud auth application-default login $setupAccount --project=agoge-shared-resources
+gcloud auth login $setupAccount --update-adc --force --project=agoge-shared-resources
 gcloud auth application-default set-quota-project agoge-shared-resources
 gcloud auth application-default print-access-token > $null
 ```
@@ -175,7 +173,7 @@ over user ADC. Keep it if intentional; remove an obsolete override from the
 run configuration when using your browser login. Setup does not unset it or
 change the referenced file automatically.
 
-See Google's [ADC login reference](https://docs.cloud.google.com/sdk/gcloud/reference/auth/application-default/login)
+See Google's [gcloud login reference](https://docs.cloud.google.com/sdk/gcloud/reference/auth/login)
 and [ADC lookup order](https://docs.cloud.google.com/docs/authentication/application-default-credentials)
 for the separate credential stores and override behavior.
 

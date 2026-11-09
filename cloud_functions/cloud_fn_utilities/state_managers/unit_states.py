@@ -38,7 +38,7 @@ class UnitStateManager(BaseStateManager):
 
     def are_workouts_deleted(self):
         return self._workout_state_check(
-            workout_states=[self.workout_states.DELETED.value, self.workout_states.BROKEN.value]
+            workout_states=[self.workout_states.DELETED.value]
         )
 
     def _workout_state_check(

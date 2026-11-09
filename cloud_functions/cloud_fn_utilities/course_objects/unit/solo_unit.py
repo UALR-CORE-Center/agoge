@@ -7,7 +7,6 @@ from common.constants.states import UnitStates
 from common.models.agoge import UnitModel
 
 from ...course_objects.workout.factory_workout import WorkoutFactory
-from ...state_managers.unit_states import UnitStateManager
 from .base_unit import BaseUnit
 
 
@@ -94,6 +93,9 @@ class SoloUnit(BaseUnit):
                 )
 
     def delete(self):
+        if self.state_manager.get_state() == UnitStates.DELETED.value:
+            return
+        self.state_manager.state_transition(UnitStates.DELETING_SERVERS)
         workouts = self.db_queries.get_children(
             parent_id=self.unit_id,
             child_collection=DbCollections.WORKOUT
@@ -115,9 +117,8 @@ class SoloUnit(BaseUnit):
                     course_object=str(PubSub.CourseObjects.WORKOUT.value),
                     build_id=workout_id
                 )
-        unit_state_manager = UnitStateManager(build_id=self.unit_id)
-        if unit_state_manager.are_workouts_deleted():
-            unit_state_manager.state_transition(new_state=UnitStates.DELETED)
+        if self.state_manager.are_workouts_deleted():
+            self.state_manager.state_transition(new_state=UnitStates.DELETED)
         else:
             self.logger.error(f"{self.class_name}:{self.unit_id} - Unit is not deleted!")
 

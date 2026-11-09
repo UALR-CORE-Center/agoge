@@ -12,6 +12,8 @@ from common.constants.states import ServerStates, WorkoutStates, UnitStates
 from common.document_database import DocumentDatabaseFactory, DatabaseQueries, DatabaseMask
 from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
+from common.utilities.workout_runtime import record_workout_runtime
+from cloud_fn_utilities.build_execution import current_build_execution, ensure_current_build
 
 
 class BaseStateManager:
@@ -138,11 +140,21 @@ class BaseStateManager:
         wait_time = 0
         servers_finished = False
         while not servers_finished and wait_time < max_wait_time:
-            servers_finished = True
+            # A quota failure in a child records the owner's terminal state.
+            # Recheck before another sleep so that failure retains its cause.
+            ensure_current_build()
             servers = self.db_queries.get_servers(parent_id=self.build_id)
+            observed = {}
             for server in servers:
-                if server.get('state', None) != self.server_states.RUNNING.value:
-                    servers_finished = False
+                if name := server.get('name'):
+                    prefix = f'{self.build_id}-'
+                    full_name = name if name.startswith(prefix) else f'{prefix}{name}'
+                    observed[full_name] = server
+            expected = getattr(self, 'expected_build_servers', None)
+            servers_finished = (
+                (expected is None or expected.issubset(observed))
+                and all(server.get('state') == self.server_states.RUNNING.value for server in servers)
+            )
             if not servers_finished:
                 time.sleep(sleep_time)
                 wait_time += sleep_time
@@ -159,8 +171,7 @@ class BaseStateManager:
                                                        self.server_states.BROKEN.value])
 
     def are_servers_deleted(self) -> bool:
-        return self._server_state_check(server_states=[self.server_states.DELETED.value,
-                                                       self.server_states.BROKEN.value])
+        return self._server_state_check(server_states=[self.server_states.DELETED.value])
 
     def update_record(
         self,
@@ -176,10 +187,36 @@ class BaseStateManager:
         if self.validator(model=model, log_location=self.log_name).load(data=data):
             if update_masks:
                 update_mask = self.db_mask.get(document=data, keys=update_masks)
-                self.db.update(collection_name=self.collection, doc_id=build_id, data=update_mask)
             else:
-                self.db.update(collection_name=self.collection, doc_id=build_id, data=data)
+                update_mask = data
+            if execution := current_build_execution():
+                execution.update(self.collection, build_id, update_mask)
+            elif self.collection == DbCollections.WORKOUT and 'state' in update_mask:
+                self.build = self._update_workout_state(build_id, update_mask)
+                return
+            else:
+                self.db.update(collection_name=self.collection, doc_id=build_id, data=update_mask)
             self.build = data
+
+    def _update_workout_state(self, build_id, patch):
+        client = self.db.db
+        ref = client.collection(DbCollections.WORKOUT.value).document(build_id)
+
+        def update(transaction):
+            current = ref.get(transaction=transaction).to_dict() or {}
+            if not current or (
+                (current.get('state') or 0) >= WorkoutStates.DELETING_SERVERS.value
+                and patch['state'] in (
+                    WorkoutStates.STARTING.value, WorkoutStates.RUNNING.value, WorkoutStates.READY.value,
+                )
+            ):
+                return current
+            state_patch = dict(patch)
+            record_workout_runtime(transaction, client, build_id, current, state_patch)
+            transaction.set(ref, state_patch, merge=True)
+            return {**current, **state_patch}
+
+        return self.db.transaction(update)
 
     def _server_state_check(
         self,

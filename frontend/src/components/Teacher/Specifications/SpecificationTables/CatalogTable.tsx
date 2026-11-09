@@ -15,7 +15,9 @@ import React, {useEffect, useState} from 'react';
 import {useNavigate} from 'react-router-dom';
 
 import {useAuthContext} from '../../../../context/AuthContext';
+import {useBuildAvailability} from '../../../../context/BuildAvailabilityContext';
 import {URL_TEACHER_SPECIFICATION_EDIT, URL_TEACHER_UNIT} from '../../../../router/urls';
+import {quotaHoldMessage} from '../../../../services/BuildIncidents/build-incidents.model';
 import {Specification} from '../../../../services/Specification/specification.model';
 import {specificationService} from '../../../../services/Specification/specification.service';
 import {SpecificationEditId} from "../../../../services/Specification/specificationEdit.model";
@@ -29,6 +31,7 @@ import {CreateCopyButton} from "../../../Buttons/ControlButtons/CreateCopyButton
 import {DeleteButton} from "../../../Buttons/ControlButtons/DeleteButton";
 import {ExpandableCell} from '../../../Common/DataGrid/ExpandableCell';
 import StyledDataGrid, {ButtonConfig} from "../../../Common/DataGrid/StyledDataGrid";
+import HttpError from "../../../Common/Errors/HttpError";
 import SimpleSnackbar from '../../../Common/SnackBar/SnackBar';
 import BuildWaitDialog from './BuildWaitDialog';
 import CatalogDetailsDialog from "./CatalogDetailsDialog";
@@ -62,6 +65,10 @@ const CatalogTable: React.FC = () => {
         copy: false,
         delete: false
     });
+    const quotaHold = useBuildAvailability()?.hold;
+    const buildPaused = Boolean(quotaHold && (
+        selectedRow?.managed_wireguard || selectedRow?.networks === undefined || selectedRow.networks?.length
+    ));
 
     const hasAssessment = (spec: Specification) => {
         if (spec.assessment) {
@@ -117,6 +124,8 @@ const CatalogTable: React.FC = () => {
     };
 
     const handleFormSubmit = async (formData: any) => {
+        if (buildPaused) return;
+        setErrorMessage(null);
         setWorkoutModalOpen(false);
         setWaitingModalOpen(true);
         try {
@@ -131,17 +140,16 @@ const CatalogTable: React.FC = () => {
                 throw new Error("Failed to redirect to unit. Received an invalid response");
             }
         } catch (error) {
-            setErrorMessage('Failed to create lab.');
+            const message = error instanceof HttpError && error.code === 'build_quota_hold'
+                ? error.message : 'Failed to create lab.';
+            setErrorMessage(message);
             setWaitingModalOpen(false);
             setWorkoutModalOpen(true);
-            showModal(SimpleSnackbar, {
-                message: `Failed to create lab. ${error}`,
-                severity: "error",
-            });
         }
     };
 
     const handleBuildDialog = () => {
+        setErrorMessage(null);
         setWorkoutModalOpen(true);
     };
 
@@ -275,8 +283,10 @@ const CatalogTable: React.FC = () => {
                 icon: <Build />,
                 requiresSelection: false,
                 addTooltip: true,
-                tooltip: "Build a shared Ubuntu gateway and student machines for one registered remote peer and its private LAN",
+                tooltip: quotaHold ? quotaHoldMessage : "Build a shared Ubuntu gateway and student machines for one registered remote peer and its private LAN",
+                isDisabled: Boolean(quotaHold),
                 onClick: () => {
+                    setErrorMessage(null);
                     setSelectedRow({
                         id: "managed-wireguard",
                         managed_wireguard: true,
@@ -317,7 +327,8 @@ const CatalogTable: React.FC = () => {
                 requiresSelection: true,
                 icon: <Build />,
                 addTooltip: true,
-                tooltip: "Build a lab using selected specification",
+                tooltip: buildPaused ? quotaHoldMessage : "Build a lab using selected specification",
+                isDisabled: !selectedRow || buildPaused,
                 onClick: handleBuildDialog
             }
         ]
@@ -443,6 +454,8 @@ const CatalogTable: React.FC = () => {
                         onClose={() => setWorkoutModalOpen(false)}
                         onSubmit={handleFormSubmit}
                         selectedRow={selectedRow}
+                        buildPaused={buildPaused}
+                        submitError={errorMessage}
                     />
                 </>
             )}

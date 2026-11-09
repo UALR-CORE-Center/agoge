@@ -23,6 +23,7 @@ import { LocalizationProvider } from '@mui/x-date-pickers';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFnsV3';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import React, { useEffect, useState, useRef } from 'react';
+import {quotaHoldMessage} from "../../../../services/BuildIncidents/build-incidents.model";
 import { TeachingConcepts } from "../../../../services/Specification/specification.model";
 import { SafeAgogeUser, UserCourses } from "../../../../services/User/user.model";
 import { userService } from '../../../../services/User/user.service';
@@ -38,10 +39,12 @@ interface WorkoutModalProps {
     onClose: () => void;
     onSubmit: (formData: any) => void;
     selectedRow: any;
+    buildPaused?: boolean;
+    submitError?: string | null;
 }
 
 export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
-    const { open, onClose, onSubmit, selectedRow, user } = props;
+    const { open, onClose, onSubmit, selectedRow, user, buildPaused, submitError } = props;
     const hasMounted = useRef(false);
     const theme = useTheme();
     const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
@@ -167,6 +170,7 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
 
     const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
+        if (buildPaused) return;
         if (validateForm()) {
             setErrorMessage(null);
             onSubmit(wireguardLab ? {...formData, remote_peer_id: remotePeerId,
@@ -220,9 +224,9 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
                     {description}
                 </Typography>
                 <Divider sx={{my: 2}}/>
-                {errorMessage && (
+                {(buildPaused || submitError || errorMessage) && (
                     <Alert severity="error" sx={{ mb: 2 }}>
-                        {errorMessage}
+                        {buildPaused ? quotaHoldMessage : submitError || errorMessage}
                     </Alert>
                 )}
                 <Box
@@ -328,7 +332,7 @@ export const WorkoutModal: React.FC<WorkoutModalProps> = (props) => {
                             type="submit"
                             variant="contained"
                             color="primary"
-                            disabled={(wireguardLab && (!remotePeerId || !remotePeersAvailable))
+                            disabled={buildPaused || (wireguardLab && (!remotePeerId || !remotePeersAvailable))
                                 || (managedWireguardLab && (!studentImage || !studentImagesAvailable))}
                         >
                             Build Lab

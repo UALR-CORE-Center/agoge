@@ -4,6 +4,7 @@ import React from 'react';
 import { Outlet } from 'react-router-dom';
 import {useDrawer} from "./InfoDrawer/InfoDrawerContext";
 import AgogeAppBar from './NavigationBar/AgogeAppBar';
+import ProjectQuotaBanner from './ProjectQuotaBanner';
 
 interface LayoutProps {
     onSidebarToggle: () => void;
@@ -127,6 +128,7 @@ const Layout: React.FC<LayoutProps> = ({ onSidebarToggle }) => {
                     px: { xs: 1, sm: 2, md: 3 },
                 }}
             >
+                <ProjectQuotaBanner />
                 <Outlet />
             </Box>
             <Footer />

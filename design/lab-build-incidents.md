@@ -1,0 +1,80 @@
+# Agoge lab build incidents
+
+The feature targets `release/2027-spring`. This document describes the build failure, quota hold, and cleanup workflows.
+
+## Problem
+
+The API returns a build ID before the Pub/Sub workers provision a lab. An instructor can therefore see a successful submission while Google Cloud later rejects a VPC, subnet, firewall rule, VM, or supporting resource. The UI needs the resulting failure and its scope, even after the instructor reloads or returns later.
+
+On this branch, [the Compute request wrapper](../common/utilities/gcp/compute/base_compute_api.py#L229) can discard immediate quota details, and [the operation waiter](../common/utilities/gcp/compute/compute_operations.py#L131) reduces operation failures to strings and uses the HTTP error message as its error check. [The build handler](../cloud_functions/handlers/build_handler.py#L43) processes unit, workout, server, and display-proxy jobs separately. [The parent server waiter](../cloud_functions/cloud_fn_utilities/state_managers/base_state_manager.py#L135) waits for `RUNNING`, so a known child failure can surface much later as a generic timeout.
+
+## Observed failure
+
+The Cloud Function’s Compute operation waiter logged this provider message.
+
+```text
+QUOTA_EXCEEDED: Quota 'NETWORKS' exceeded.  Limit: 30.0 globally.
+```
+
+The first regression fixture should preserve that text and expect `QUOTA_EXCEEDED`, `NETWORKS`, numeric limit `30`, and `global` scope. The Cloud Run location `us-central1` identifies the worker, while `globally` identifies the quota scope. Use the Compute request’s target project for the quota hold and the operation ID for log correlation. The log has no lab ID or live usage value. Associate a lab only when the active build context or a correlated record establishes it. Use synthetic project and operation identifiers in the fixture.
+
+## Instructor experience
+
+Put a persistent **Lab build failed** banner on the [instructor lab detail page](../frontend/src/components/Teacher/Unit/TeacherUnit.tsx) using its existing polling. Show the failed stage, the reason in plain language, and the impact on the lab. Mark affected workouts in the lab’s workout table. Offer a one-time prompt per incident while the instructor is on the page. The banner and actions remain available when they return.
+
+> Google Cloud reached the global NETWORKS quota while creating this lab’s network. The project limit is 30 networks. Some lab resources may already exist. Copy the report and send it to your Agoge administrator.
+
+Use the exact provider metric or limit name and reported scope when available. For an unnamed quota, say Google Cloud did not provide the quota name and include the incident ID. Treat rate limits and zone capacity as separate causes, with corresponding copy.
+
+| Action | Behavior |
+| --- | --- |
+| **Copy report** | Include the lab/build ID, affected workout ID when applicable, UTC time, stage, provider reason, exact quota metric or limit and scope when reported, and incident ID. Display the deployment’s support contact when configured for instructors. |
+| **Keep for inspection** | Close the prompt and leave the resources in place. Keep the warning visible, explain that some resources may still incur charges, and preserve the failed or degraded state. Existing cleanup and safety controls still apply. |
+| **Delete lab…** | For a shared or initial lab failure, confirm the deletion scope, including affected workouts and their data, and submit the existing cleanup action. Display **Deletion requested** until cleanup is verified. |
+| **Clean up failed workout…** | For an isolated workout failure, confirm cleanup of that workout and reuse the [instructor-authorized workout action](../api/core/workout.py#L228). Preserve healthy seats and shared infrastructure. |
+
+Treat shared Community resources as a lab-level failure and a student-specific Community or Solo build as a workout failure. A failed initial instructor test workout should warn the instructor before distributing that lab, with an explicit cleanup choice. A failure in one student’s workspace must leave healthy workspaces available. Block new claims for a failed shared lab on the server, including claims through previously distributed links. Use explicit viable states for the [shared network readiness gate](../cloud_functions/cloud_fn_utilities/course_objects/unit/community_unit.py#L747), where the numeric comparison also admits `BROKEN`. Prevent a failed workout from being presented as ready or started normally. Leave inspection, stop where applicable, and cleanup available. Existing API clients can ignore the optional incident summary. Older builds can show a generic failure status when already marked broken.
+
+## Project-wide build warning
+
+Show a persistent banner on every signed-in instructor and administrator page for the affected deployment. Mount it in the [shared layout](../frontend/src/components/Common/Layout.tsx#L105) and reuse it for [standalone staff routes](../frontend/src/router/AppRouter.tsx#L120). Fetch a single role-protected build availability summary for the session, refreshed periodically, on focus, and after a rejected build. Retain the last confirmed hold when a refresh fails. Use this same status to disable affected build buttons and explain why. Instructors can copy the report for their administrator. Administrators can open the incident and recheck the quota.
+
+> New labs that need a Google Cloud network are paused. This project reached its global NETWORKS quota of 30. Contact your Agoge administrator. You can still use or delete existing labs.
+
+| Decision | Proposed behavior |
+| --- | --- |
+| **Open a hold** | A confirmed allocation quota failure creates or updates one durable hold per target project, quota metric, and scope. Keep individual build incidents separately for reporting and cleanup. Start with the global `NETWORKS` quota. Rate limits, capacity stockouts, and unnamed or ambiguous failures remain build-level incidents. |
+| **Enforce it** | Check before API writes or enqueueing work in the catalog, WireGuard, batch builds, manual build and rebuild actions, [CTF server builds](../api/core/ctf/setup.py#L327), and claims that need new provisioning. Enforce it again at [VPC creation](../cloud_functions/cloud_fn_utilities/gcp/vpc_manager.py#L56) to catch queued work and alternate entry points. Reconcile an already-created VPC before blocking an idempotent retry. Mark previously accepted jobs that hit the hold as blocked and require an explicit retry. Return a temporary-unavailable response for affected requests. Public join routes give a generic message only when they would need to create affected resources. |
+| **Keep other work available** | Continue normal use of healthy existing labs, including access, start, stop, and delete. Allow builds that can be determined to use existing networks or need no VPC. Apply each hold only to builds in its target GCP project. |
+| **Clear it** | An administrator rechecks the matching project quota and clears the hold only after a fresh read shows sufficient headroom. Compare `limit - usage` with VPC demand where it is known. Keep the hold active when the check fails or capacity is still insufficient. Require verification after acknowledgement, deletion, or elapsed time. Guard the clear against a newer failure. Headroom can be consumed concurrently, so a new confirmed rejection reopens the hold. Use [Compute projects.get](https://docs.cloud.google.com/compute/docs/reference/rest/v1/projects/get) for the global quota read. |
+
+Provide an administrator check for `NETWORKS` at rollout so an already-exhausted project can surface the warning before an instructor submits another build. Activate the hold only after a fresh quota check confirms exhaustion or a live provider rejection confirms it. An older log can seed the parser fixture and inform investigation.
+
+## Detection and lifecycle
+
+1. **Normalize both Compute failure paths.** Capture immediate API rejections and errors in completed global, regional, or zonal operations. Prefer provider reason codes, typed details, quota metric or limit name, limit value, and dimensions. Allow a bounded, sanitized fallback for known quota message formats. Preserve the original exception for server-side debugging and preserve existing caller behavior for conflicts and missing resources. A bare HTTP 403 or 429 does not establish a specific quota. Distinguish allocation quotas, API rate or concurrent-operation limits, zone capacity, and unknown failures. Keep the existing zone fallback for stockouts. See [VM creation troubleshooting](https://docs.cloud.google.com/compute/docs/troubleshooting/troubleshooting-vm-creation), [concurrent operation quotas](https://docs.cloud.google.com/compute/operations-quota), and the [Compute Operation error schema](https://docs.cloud.google.com/compute/docs/reference/rest/v1/regionOperations).
+2. **Record the failure where the build context is known.** Keep the shared Compute layer independent of Agoge lab records. Use one build incident reporter at the network/subnet, firewall, VM, and display-proxy failure boundaries, with route or address operations covered where they are part of those phases. Resolve asynchronous child jobs to the owning unit or workout from authoritative records. Preserve the provider operation ID and Pub/Sub event ID when available. The parent should detect a confirmed failed child promptly and preserve its reason. Compare expected children against observed records so an empty query or a missing child cannot mean success.
+3. **Separate confirmed rejection from an unknown outcome.** Inspect structured operation errors even if the top-level error message is empty. Use a real deadline for nonterminal waits. Propagate a VPC or subnet create returning `False` as unconfirmed rather than advancing the phase. On a wait timeout or lost connection after a write, reconcile the existing operation or resource before replaying the mutation or declaring cleanup complete. Respect bounded retries for identified transient throttling on safe or reconciled operations. A confirmed hard quota should end the affected attempt once its incident is durably written. A failure to persist the incident remains eligible for retry.
+4. **Make state changes attempt-aware.** Assign an attempt ID at build admission and carry it through child jobs. Use an idempotent Firestore incident key derived from the attempt, affected resource or phase, and normalized reason. Atomically upsert the incident and the affected target’s current failure state or pointer. Require a matching attempt at failure and readiness writes so duplicate or late deliveries cannot overwrite a newer build or a deleting/deleted lab. Reject stale child work before provisioning. Reconcile already-submitted operations during cleanup because a resource can appear after deletion has started. [Pub/Sub can redeliver messages](https://docs.cloud.google.com/pubsub/docs/subscribe-best-practices#handle_duplicate_deliveries).
+5. **Verify cleanup before closing the incident.** Reuse the authorized delete workflow, hardening it where necessary. The [solo workout deletion flow](../cloud_functions/cloud_fn_utilities/course_objects/workout/solo_workout.py#L261) currently ignores the firewall deletion result, and a [shared helper](../cloud_functions/cloud_fn_utilities/state_managers/base_state_manager.py#L161) treats `BROKEN` servers as deleted. Confirm absence of owned resources, including partially created VPCs, subnets, firewalls, and VMs, and keep cleanup retryable. Record cleanup failure separately and retain the original cause. Use the existing [unit access checks](../api/core/unit_access.py) for exact instructor membership on cleanup actions.
+
+## Administrator view
+
+**Build Log** in [Project Overview](../frontend/src/components/Admin/ProjectOverviewTabs.tsx) combines recorded quota incidents with build starts, verified completions, errors, and verified cleanup. Administrators can search by lab, workout, resource, or reason and filter by event type and UTC date range. Clearing a hold leaves its build and cleanup history available.
+
+**Cloud Monitoring** shows supported project and regional Compute quotas with remaining capacity. Usage at 80% is a warning and usage at 90% is critical. Use **Recheck quota** to verify the global network quota and update an active build hold. The **Workout Runs** view reports observed workout runtime in UTC and exports filtered results to CSV. **Monthly Summary** shows monthly totals and opens the runs for a selected month. Runtime measures time in Agoge’s Running state from observed transitions after deployment. Google Cloud billing accounts for resources separately.
+
+Store incident records server-side in Firestore. The [ownership-protected instructor detail API](../api/core/unit.py#L133) exposes a compact projection keyed to the affected lab and workouts. Keep diagnostic fields out of public lab, learner workout, and roster responses. Build both views from the same records so an instructor’s report leads directly to the administrator’s incident. The history is paginated, and resolved records carry an `expires_at` timestamp 30 days after resolution for deployments that enable a Firestore TTL policy. Keep unresolved incidents visible. Keep acknowledgement separate from resolution. Resolve an affected build incident when cleanup is confirmed or a later attempt verifies a successful build. Use allowlisted fields in both views. Keep raw payloads, credentials, product keys, and stack traces out of incident records and reports.
+
+Candidates for a later release include budget-blocked builds, zone capacity failures after fallback is exhausted, shared gateway or proxy readiness failures, and stale build checkpoints. Emit stale-build incidents only after checking expected progress and reconciling provider state. Emit budget incidents from the existing budget gate. Routine retries, successful fallback, and progress messages stay in Cloud Logging.
+
+## Implementation order and acceptance checks
+
+1. Add structured Compute failure handling, attempt-aware persistence, and correct failure propagation for shared and per-workout builds. Cover the observed `NETWORKS` log, immediate API rejection, operation-result quota, 403 rate limit, capacity fallback, timeouts with unknown outcome, and duplicate or stale messages.
+2. Add the project-wide quota hold, its admission and worker checks, and the persistent banner. Verify instructor and admin coverage, learner privacy, stale tabs and queued jobs, existing-lab operations, project isolation, and recheck behavior when a newer failure arrives during a clear.
+3. Add instructor build health, copyable reports, keep and cleanup actions, and server-side readiness and claim guards. Verify a reload preserves the warning, a teacher cannot see or delete another instructor’s lab, and an isolated failure leaves healthy workouts available.
+4. Verify cleanup of partially created resources and add the administrator Build Log. Exercise delete while a child operation is in flight, failed cleanup followed by retry, grouping across multiple affected labs, and API authorization for both views.
+
+## Rollout
+
+Deploy the API, Cloud Function, and frontend together. The API runtime identity needs `compute.projects.get` and `compute.regions.get` in the provisioning project to read global and regional quotas. On an already affected deployment, use **Cloud Monitoring → Quotas → Recheck quota** to establish current availability before submitting another build.

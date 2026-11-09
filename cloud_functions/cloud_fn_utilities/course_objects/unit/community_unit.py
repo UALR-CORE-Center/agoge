@@ -11,6 +11,7 @@ from common.models.agoge import UnitModel, ServerModel
 from common.services.wireguard_endpoint import WireGuardEndpointRegistry
 from common.services.community_proxy_spec import community_proxy, ensure_community_proxy
 from common.utilities.wireguard_firewall import has_public_wireguard_ingress
+from cloud_fn_utilities.build_execution import build_message_attempt, ensure_current_build, wait_for_pending_creates
 
 from ...gcp.vpc_manager import VpcManager
 from ..compute.factory import ComputeManagerFactory
@@ -107,9 +108,11 @@ class CommunityUnit(BaseUnit):
         if current_state < self.s.COMPLETED_SERVERS.value:
             if current_state != self.s.BUILDING_SERVERS.value:
                 self.state_manager.state_transition(self.s.BUILDING_SERVERS)
-            for server in self.unit_model.servers or []:
-                if server.community_server:
-                    self.__send_server_build_msg(server)
+            servers = [server for server in self.unit_model.servers or [] if server.community_server]
+            self.state_manager.expected_build_servers = {f'{self.unit_id}-{server.name}' for server in servers}
+            for server in servers:
+                ensure_current_build()
+                self.__send_server_build_msg(server)
             if not self.state_manager.are_server_builds_finished():
                 # Leave the Unit in BUILDING_SERVERS. Raising makes the Pub/Sub
                 # delivery retryable and the next delivery reuses server records.
@@ -368,6 +371,8 @@ class CommunityUnit(BaseUnit):
             return
         self.logger.info(f"{self.class_name}:{self.unit_id} - Beginning to delete community unit")
         self.state_manager.state_transition(self.s.DELETING_SERVERS)
+        if db := getattr(self, 'db', None):
+            wait_for_pending_creates(db, DbCollections.UNIT, self.unit_id)
 
         # Workouts own student-specific servers and DHCP reservations. Let each
         # workout clean those up and mark itself deleted before tearing down the
@@ -428,12 +433,9 @@ class CommunityUnit(BaseUnit):
                             **({'server_spec': recovered} if recovered else {}),
                         )
                         if self.compute_manager.delete() is False:
-                            self.state_manager.state_transition(self.s.BROKEN)
                             raise ConnectionError(f'Server deletion was not confirmed for {server_name}')
                     except LookupError:
-                        self.logger.error(f"{self.class_name}:{self.workout_id} - Could not find workout "
-                                          f"server record for {server_name}. Marking Workout record as "
-                                          f"broken.")
+                        self.logger.warning(f'{self.class_name}:{self.unit_id} - Could not find server {server_name}')
                 else:
                     self.pubsub_manager.msg(
                         handler=str(PubSub.Handlers.CONTROL.value),
@@ -448,23 +450,17 @@ class CommunityUnit(BaseUnit):
             self._cleanup_shared_display_proxy()
             # Firewall rules must be removed before their VPC networks.
             if not self.firewall_manager.delete(self.unit_id):
-                self.state_manager.state_transition(self.s.BROKEN)
                 raise ConnectionError(
                     f'Firewall deletion was not confirmed for community Unit {self.unit_id}'
                 )
-            try:
-                for network in self.unit_model.networks:
-                    if not self.vpc_manager.delete(network=network):
-                        raise ConnectionError(
-                            f'VPC deletion was not confirmed for community Unit {self.unit_id}'
-                        )
-            except Exception:
-                self.state_manager.state_transition(self.s.BROKEN)
-                raise
+            for network in self.unit_model.networks:
+                if not self.vpc_manager.delete(network=network):
+                    raise ConnectionError(
+                        f'VPC deletion was not confirmed for community Unit {self.unit_id}'
+                    )
             self.state_manager.state_transition(self.s.DELETED)
             self.logger.info(f"{self.class_name}:{self.unit_id} - Finished deleting the community unit")
         else:
-            self.state_manager.state_transition(self.s.BROKEN)
             self.logger.error(
                 f"{self.class_name}:{self.unit_id} - Timed out waiting for workout or shared-server "
                 f"deletions to complete for community unit"
@@ -670,7 +666,8 @@ class CommunityUnit(BaseUnit):
                 handler=str(PubSub.Handlers.BUILD.value),
                 action=str(PubSub.Actions.BUILD.value),
                 server_name=str(server_name),
-                course_object=str(PubSub.CourseObjects.LAB_SERVER.value)
+                course_object=str(PubSub.CourseObjects.LAB_SERVER.value),
+                **build_message_attempt(),
             )
 
     def __get_servers(self):
@@ -747,10 +744,13 @@ class CommunityUnit(BaseUnit):
     def _wait_until_unit_is_ready_for_servers(self):
         wait_time = 5
         max_iterations = 20
-        for i in range(max_iterations):
-            if self.state_manager.get_state() >= self.s.COMPLETED_NETWORKS.value:
+        for _ in range(max_iterations):
+            ensure_current_build()
+            unit = self.db.get(DbCollections.UNIT, self.unit_id) or {}
+            state = unit.get('state')
+            if state is not None and self.s.COMPLETED_NETWORKS.value <= state <= self.s.READY.value:
                 return
-            else:
-                time.sleep(wait_time)
-        self.logger.error(f"{self.class_name}:{self.unit_id} - Timed out waiting for Unit "
-                          f"to finish building networks!")
+            if state is not None and state > self.s.READY.value:
+                raise BadRequest(f'Community lab {self.unit_id} is unavailable for new workouts')
+            time.sleep(wait_time)
+        raise TimeoutError(f'Timed out waiting for community lab {self.unit_id} networks')

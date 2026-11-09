@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from enum import Enum
 import re
+from uuid import uuid4
 
 from fastapi import Request
 from pydantic import ValidationError
@@ -22,6 +23,7 @@ from common.exceptions import BadRequest, NotFound, Unauthorized, AgogeValidatio
 from common.models.agoge import UnitModel, WorkoutModel, WorkspaceSettingsModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.models.users import AgogeUser
+from common.utilities.build_incidents import BuildIncidents
 from common.utilities.gcp.bucket_manager import BucketManager
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
@@ -142,7 +144,10 @@ class Unit:
         except NotFound:
             workouts = []
         roster = self.get_unit_roster_size(children=workouts)
-        return {'unit': unit, 'workouts': workouts, 'roster': roster}
+        return {
+            'unit': unit, 'workouts': workouts, 'roster': roster,
+            'build_incidents': BuildIncidents(self.db, self.env.project).for_unit(build_id),
+        }
 
     @staticmethod
     def _require_instructor_access(unit: UnitModel | dict, requester: AgogeUser) -> None:
@@ -251,6 +256,8 @@ class Unit:
                 registration_required=registration_required,
                 test=test_unit,
             )
+            if unit.networks:
+                BuildIncidents(self.db, self.env.project).require_network_capacity()
             unit_id = unit.id
             endpoint_registry = None
             lms_integration = data.get('lms_integration', None)
@@ -363,22 +370,26 @@ class Unit:
         Returns: None
         Raises: NotFound, Unauthorized
         """
-        UnitAccess(self.db).unit(build_id, requester)
-        workouts = self._list_workouts(build_id)
+        unit = UnitAccess(self.db).unit(build_id, requester)
+        workouts = [workout for workout in self._list_workouts(build_id)
+                    if workout.state == WorkoutStates.NOT_BUILT.value]
+        self._publish_workout_builds(unit, workouts)
+
+    def _publish_workout_builds(self, unit, workouts, *, retry=False):
+        if not workouts:
+            return
+        incidents = BuildIncidents(self.db, self.env.project)
+        needs_network = unit.get('unit_type') != BuildConstants.UnitType.COMMUNITY and (
+            bool(unit.get('networks')) or any(workout.networks for workout in workouts)
+        )
+        incidents.require_lab_build(unit, needs_network=needs_network)
         for workout in workouts:
-            workout_id = workout.id
-            if workout.state == WorkoutStates.NOT_BUILT.value:
-                student_name = workout.student_email
-                self.logger.info(
-                    message=f"Sending job to build lab for {student_name} with workout ID {workout_id}",
-                    workout_id=workout_id,
-                    student=student_name
-                )
+            attempt = incidents.begin_attempt(DbCollections.WORKOUT, workout.id, retry=retry)
+            if attempt:
                 self.pubsub_mgr.msg(
-                    handler=str(PubSub.Handlers.BUILD.value),
-                    action=str(self.pubsub_actions.BUILD.value),
-                    build_id=workout_id,
-                    course_object=str(PubSub.CourseObjects.WORKOUT.value)
+                    handler=PubSub.Handlers.BUILD.value, action=str(PubSub.Actions.BUILD.value),
+                    build_id=workout.id, course_object=str(PubSub.CourseObjects.WORKOUT.value),
+                    build_attempt_id=attempt,
                 )
 
     def delete(
@@ -386,18 +397,13 @@ class Unit:
         requester: AgogeUser,
         build_id: str
     ) -> None:
-        is_admin = requester.is_admin
-        if unit := self.db.get(collection_name=self.collection, doc_id=build_id):
-            if is_admin or requester.email in unit.get('instructor_id'):
-                self.pubsub_mgr.msg(
-                    handler=str(self.handler.CONTROL.value),
-                    build_id=str(build_id),
-                    action=str(self.pubsub_actions.DELETE.value),
-                    course_object=str(PubSub.CourseObjects.UNIT.value)
-                )
-                return
-            raise Unauthorized(message="Requesting user is not authorized to make this request")
-        raise NotFound(message=f"Requested Unit was not found")
+        UnitAccess(self.db).unit(build_id, requester)
+        self.pubsub_mgr.msg(
+            handler=str(self.handler.CONTROL.value),
+            build_id=str(build_id),
+            action=str(self.pubsub_actions.DELETE.value),
+            course_object=str(PubSub.CourseObjects.UNIT.value)
+        )
 
     async def process_action(
         self,
@@ -415,7 +421,7 @@ class Unit:
         Returns:
         Raises: BadRequest, NotFound, Unauthorized
         """
-        UnitAccess(self.db).unit(build_id, requester)
+        unit = UnitAccess(self.db).unit(build_id, requester)
         json_data = await request.json()
         try:
             action = int(json_data.get('action', 0))
@@ -429,18 +435,25 @@ class Unit:
                     or not 1 <= days <= self.MAX_EXTENSION_DAYS):
                 raise BadRequest(f"days must be a whole number from 1 to {self.MAX_EXTENSION_DAYS}")
             self._reset_expiration(build_id=build_id, days=days)
-        elif int(action) in [
-            PubSub.Actions.START.value,
-            PubSub.Actions.STOP.value,
-            PubSub.Actions.BUILD.value
-        ]:
-            if int(action) == PubSub.Actions.BUILD.value:
-                handler = self.handler.BUILD.value
+        elif action == PubSub.Actions.BUILD.value:
+            if workout_ids:
+                workouts = [workout for workout in self._list_workouts(build_id)
+                            if workout.id in workout_ids and workout.state in (
+                                WorkoutStates.NOT_BUILT.value, WorkoutStates.START.value, WorkoutStates.BROKEN.value,
+                            )]
+                self._publish_workout_builds(unit, workouts, retry=True)
             else:
-                handler = self.handler.CONTROL.value
+                incidents = BuildIncidents(self.db, self.env.project)
+                incidents.require_lab_build(unit, needs_network=bool(unit.get('networks')), retry_shared=True)
+                if attempt := incidents.begin_attempt(self.collection, build_id, retry=True):
+                    self.pubsub_mgr.msg(
+                        handler=PubSub.Handlers.BUILD.value, action=str(action), build_id=build_id,
+                        course_object=str(PubSub.CourseObjects.UNIT.value), build_attempt_id=attempt,
+                    )
 
+        elif action in (PubSub.Actions.START.value, PubSub.Actions.STOP.value):
             msg_args = {
-                PubSub.EventAttributes.HANDLER: handler,
+                PubSub.EventAttributes.HANDLER: self.handler.CONTROL.value,
                 PubSub.EventAttributes.ACTION: str(action),
                 PubSub.EventAttributes.COURSE_OBJECT: str(PubSub.CourseObjects.WORKOUT.value)
             }
@@ -454,23 +467,21 @@ class Unit:
                 )
 
                 workouts_map = {workout.id: workout for workout in unit_workouts}
+                if action == PubSub.Actions.START.value and unit.get('build_failure_id'):
+                    BuildIncidents(self.db, self.env.project).require_lab_build(unit, needs_network=False)
                 for w_id in workout_ids:
-                    # Only process action if ID is a valid unit workout ID and is a valid state
-                    if workout := workouts_map.get(w_id):
-                        if (int(action) == PubSub.Actions.BUILD.value
-                                and workout.state != WorkoutStates.NOT_BUILT.value):
-                            self.logger.warning(
-                                f'Ignoring BUILD request for workout, {w_id}. Workout is already built!',
-                                workout_id=w_id,
-                                workout_state=str(workout.state),
-                                unit_id=build_id
-                            )
-                            continue
+                    if w_id in workouts_map:
+                        if action == PubSub.Actions.START.value and workouts_map[w_id].state == WorkoutStates.BROKEN.value:
+                            record = self.db.get(collection_name=DbCollections.WORKOUT, doc_id=w_id) or {}
+                            if record.get('build_failure_id'):
+                                continue
                         msg_args[PubSub.EventAttributes.BUILD_ID] = w_id
 
                         self.pubsub_mgr.msg(**msg_args)
             else:
                 # TODO: Consider removing this branch as a valid option
+                if action == PubSub.Actions.START.value and unit.get('build_failure_id'):
+                    BuildIncidents(self.db, self.env.project).require_lab_build(unit, needs_network=False)
                 self.logger.info(
                     f'sending {PubSub.Actions(int(action)).name} request for unit with id {build_id}',
                     action=action,
@@ -712,17 +723,22 @@ class Unit:
         Save input UnitModel to DB and sends PubSub request for
         build task delegation.
         """
+        attempt = uuid4().hex if publish and not self.debug else None
+        data = build_spec.model_dump()
+        if attempt:
+            data['build_attempt_id'] = attempt
         self.db.update(
             collection_name=self.collection,
             doc_id=build_spec.id,
-            data=build_spec.model_dump()
+            data=data,
         )
         if not self.debug and publish:
             self.pubsub_mgr.msg(
                 handler=str(self.handler.BUILD.value),
                 action=str(PubSub.Actions.BUILD.value),
                 course_object=str(PubSub.CourseObjects.UNIT.value),
-                build_id=(str(build_spec.id))
+                build_id=(str(build_spec.id)),
+                build_attempt_id=attempt,
             )
 
     def _allocate_wireguard_endpoint(

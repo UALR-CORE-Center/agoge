@@ -12,6 +12,8 @@ from common.exceptions import BadRequest
 from common.utilities.timestamps import Timestamps
 from common.models.agoge import WorkoutModel, UnitModel, ServerModel, ProxyConnectionModel
 
+from cloud_fn_utilities.build_execution import build_message_attempt, ensure_current_build, wait_for_pending_creates
+
 from ..unit.unit_dhcp_service import UnitDHCP
 from .base_workout import BaseWorkout
 from ...gcp.packet_mirroring.packet_mirror_factory import PacketMirrorFactory
@@ -82,11 +84,12 @@ class CommunityWorkout(BaseWorkout):
         if current_state < self.s.COMPLETED_SERVERS.value:
             if current_state != self.s.BUILDING_SERVERS.value:
                 self.state_manager.state_transition(self.s.BUILDING_SERVERS)
-            servers = self.unit_model.servers or []
+            servers = [server for server in self.unit_model.servers or [] if not server.community_server]
+            self.state_manager.expected_build_servers = {f'{self.workout_id}-{server.name}' for server in servers}
             for server in servers:
-                if not server.community_server:
-                    server_build_count += 1
-                    self.__send_server_build_msg(server)
+                ensure_current_build()
+                server_build_count += 1
+                self.__send_server_build_msg(server)
             if not self.state_manager.are_server_builds_finished():
                 # Preserve BUILDING_SERVERS so a Pub/Sub redelivery can resume
                 # provisioning instead of stranding the Workout in BROKEN.
@@ -234,7 +237,7 @@ class CommunityWorkout(BaseWorkout):
             self.logger.info(f"Finished starting the Workout: {self.workout_id}!")
         self.workout = self.get_record()
         self.workout.shutoff_timestamp = Timestamps.get_current_timestamp_utc(add_seconds=self.duration_seconds)
-        self.update_record(doc_id=self.workout_id, data=self.workout)
+        self.update_record(doc_id=self.workout_id, data=self.workout, update_keys=['shutoff_timestamp'])
         self.logger.info(f"Finished starting {len(servers_to_start)} servers for workout ID {self.workout_id}")
 
     def stop(self):
@@ -291,7 +294,7 @@ class CommunityWorkout(BaseWorkout):
                 self.logger.info(f"Finished Stopping the Workout: {self.workout_id}!")
                 self.workout = self.get_record()
                 self.workout.shutoff_timestamp = None
-                self.update_record(doc_id=self.workout_id, data=self.workout)
+                self.update_record(doc_id=self.workout_id, data=self.workout, update_keys=['shutoff_timestamp'])
                 self.logger.info(f"Finished stopping {len(servers_to_stop)} servers for workout ID {self.workout_id}")
         else:
             self.state_manager.state_transition(self.s.READY)
@@ -303,6 +306,8 @@ class CommunityWorkout(BaseWorkout):
             return
         self._add_build_action(PubSub.Actions.DELETE.value, True)
         self.state_manager.state_transition(self.s.DELETING_SERVERS)
+        if db := getattr(self, 'db', None):
+            wait_for_pending_creates(db, DbCollections.WORKOUT, self.workout_id)
         servers_to_delete = self.db_queries.get_servers(parent_id=self.workout_id)
 
         for server in servers_to_delete:
@@ -337,7 +342,6 @@ class CommunityWorkout(BaseWorkout):
             self.state_manager.state_transition(self.s.DELETED)
             self.logger.info(f"{self.class_name}:{self.workout_id} - Finished deleting the Workout!")
         else:
-            self.state_manager.state_transition(self.s.BROKEN)
             self.logger.error(
                 f"{self.class_name}:{self.workout_id} - Timed out waiting for server deletions to complete!"
             )
@@ -430,7 +434,8 @@ class CommunityWorkout(BaseWorkout):
                 action=str(PubSub.Actions.BUILD.value),
                 server_name=str(server_name),
                 network_prefix=self.unit_id,
-                course_object=str(PubSub.CourseObjects.LAB_SERVER.value)
+                course_object=str(PubSub.CourseObjects.LAB_SERVER.value),
+                **build_message_attempt(),
             )
 
     def __get_servers_for_action(self, action: PubSub.Actions):

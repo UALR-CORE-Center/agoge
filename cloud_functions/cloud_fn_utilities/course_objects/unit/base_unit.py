@@ -17,6 +17,7 @@ from common.models.agoge import UnitModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.id_generator import IdGenerator
 from common.utilities.workout_record import build_workout_record
+from cloud_fn_utilities.build_execution import current_build_execution
 
 from ...lms.canvas.lms_canvas import LMSCanvas
 from ...lms.google_classroom.lms_google_classroom import LMSGoogleClassroom
@@ -303,7 +304,7 @@ class BaseUnit(ABC):
             child_collection=DbCollections.WORKOUT
         )
         if workout_list:
-            if len(workout_list) >= count:
+            if len([workout for workout in workout_list if workout.get('id') != workout_id]) >= count:
                 self.logger.error(
                     f"{self.class_name}:{self.unit_id} - "
                     f"Requested build for Unit failed; Unit is at max capacity"
@@ -332,9 +333,30 @@ class BaseUnit(ABC):
             )
             raise ValueError
 
-        self.db.update(collection_name=DbCollections.WORKOUT, doc_id=workout_id, data=workout_record)
+        attempt_id = getattr(self, 'child_build_attempt_id', None)
+        attempt_attributes = {}
+        if attempt_id:
+            workout_record['build_attempt_id'] = attempt_id
+            attempt_attributes[PubSub.EventAttributes.BUILD_ATTEMPT_ID] = attempt_id
+        if execution := current_build_execution():
+            execution.update(DbCollections.WORKOUT, workout_id, workout_record, create=True)
+        else:
+            self.db.update(collection_name=DbCollections.WORKOUT, doc_id=workout_id, data=workout_record)
 
-        if self.debug:
+        build_message = {
+            'handler': str(PubSub.Handlers.BUILD.value),
+            'action': str(PubSub.Actions.BUILD.value),
+            'key_type': str(DbCollections.WORKOUT.value),
+            'build_id': str(workout_id),
+            'course_object': str(PubSub.CourseObjects.WORKOUT.value),
+            **attempt_attributes,
+        }
+        if self.debug and execution:
+            # Run the same child ownership and incident checks as Pub/Sub.
+            from handlers.build_handler import BuildHandler
+
+            BuildHandler(build_message, env_dict=self.env_dict, debug_mode=True).route()
+        elif self.debug:
             workout = WorkoutFactory.create_workout_object(
                 workout_id=workout_id,
                 debug=self.debug,
@@ -342,13 +364,7 @@ class BaseUnit(ABC):
             )
             workout.build()
         else:
-            self.pubsub_manager.msg(
-                handler=str(PubSub.Handlers.BUILD.value),
-                action=str(PubSub.Actions.BUILD.value),
-                key_type=str(DbCollections.WORKOUT.value),
-                build_id=str(workout_id),
-                course_object=str(PubSub.CourseObjects.WORKOUT.value)
-            )
+            self.pubsub_manager.msg(**build_message)
 
     def _create_workout_record(self, workout_id: str, **kwargs) -> dict:
         """

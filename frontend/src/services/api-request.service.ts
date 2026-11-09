@@ -1,6 +1,6 @@
 import axios from 'axios';
 import {auth} from "../components/AgogeAuth/Firebase/firebaseConfig";
-import HttpError from "../components/Common/Errors/HttpError";
+import HttpError, {BUILD_AVAILABILITY_REFRESH} from "../components/Common/Errors/HttpError";
 import {apiUrl} from "../utilities/apiClient";
 
 const generateHeader = async (
@@ -28,8 +28,13 @@ const generateHeader = async (
 
 const handleError = (e: any) => {
     const status = e.response?.status || 500;
-    const message = e.response?.data?.detail || "An error occurred";
-    throw new HttpError(status, message);
+    const detail = e.response?.data?.detail;
+    const message = typeof detail === 'string' ? detail : detail?.message || "An error occurred";
+    const code = typeof detail?.code === 'string' ? detail.code : undefined;
+    if (code === 'build_quota_hold') {
+        window.dispatchEvent(new Event(BUILD_AVAILABILITY_REFRESH));
+    }
+    throw new HttpError(status, message, code);
 };
 
 const get = async <T>(

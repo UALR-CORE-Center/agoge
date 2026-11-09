@@ -43,7 +43,7 @@ export const put_action = async (buildId: string, action?: string, days?: number
     } else if (workout_ids) {
         payload['workout_ids'] = workout_ids;
     }
-    return await apiService.put<UnitState>(endpoint, payload, true, transformToUnitState);
+    return await apiService.put<void>(endpoint, payload);
 }
 
 const list = async () => {
@@ -118,6 +118,9 @@ const patch = async (buildId: string, formData: {[key: string]: any}) => {
     return await apiService.patch(endpoint, formData, true);
 };
 
+const delete_unit = (buildId: string) =>
+    apiService.del<void>(formatString(URL_UNIT_API_ITEM, {"ITEM_ID": buildId}));
+
 export const unitService = {
     get,
     post_action,
@@ -129,4 +132,5 @@ export const unitService = {
     create,
     put_action,
     patch,
+    delete_unit,
 }

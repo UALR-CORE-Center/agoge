@@ -3,11 +3,13 @@ from typing import Union
 from common.constants.build_constants import BuildConstants
 from common.constants.database import DbCollections, DatabaseTypes, DATABASE_NAME
 from common.constants.pub_sub import PubSub
+from common.constants.states import ServerStates
 from common.document_database import DocumentDatabaseFactory, DatabaseQueries
 from common.models.agoge import ServerModel, UnitModel, NicModel, WorkoutModel
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.pubsub_manager import PubSubManager
+from cloud_fn_utilities.build_execution import build_message_attempt, current_build_execution, ensure_current_build
 from ..course_objects.compute.factory import ComputeManagerFactory
 from ..gcp.route_manager import RouteManager
 
@@ -59,6 +61,7 @@ class FirewallServer:
 
     def build(self):
         for fw in self.firewall_spec:
+            ensure_current_build()
             firewall_type = fw.type
             firewall_name = f"{self.build_id}-{fw.name}"
             self.firewall_server_spec = ServerModel(
@@ -83,11 +86,9 @@ class FirewallServer:
                 raise
 
             # Create firewall server
-            self.db.update(
-                collection_name=DbCollections.SERVER,
-                doc_id=firewall_name,
-                data=self.firewall_server_spec.model_dump()
-            )
+            if not self._write_build_server(firewall_name, self.firewall_server_spec):
+                self._add_routes(fw)
+                continue
 
             if self.debug:
                 self.compute_manager.load(firewall_name)
@@ -97,7 +98,8 @@ class FirewallServer:
                     handler=str(PubSub.Handlers.BUILD.value),
                     action=str(PubSub.Actions.BUILD.value),
                     course_object=str(PubSub.CourseObjects.LAB_SERVER.value),
-                    server_name=str(firewall_name)
+                    server_name=str(firewall_name),
+                    **build_message_attempt(),
                 )
             self._add_routes(fw)
 
@@ -177,11 +179,8 @@ class FirewallServer:
                 )
             ]
         )
-        self.db.update(
-            collection_name=DbCollections.SERVER,
-            doc_id=license_server.name,
-            data=license_server.model_dump()
-        )
+        if not self._write_build_server(license_server.name, license_server):
+            return
         if self.debug:
             self.compute_manager.load(license_server.name)
             self.compute_manager.build()
@@ -190,8 +189,19 @@ class FirewallServer:
                 handler=str(PubSub.Handlers.BUILD.value),
                 action=str(PubSub.Actions.BUILD.value),
                 course_object=str(PubSub.CourseObjects.LAB_SERVER.value),
-                server_name=str(license_server.name)
+                server_name=str(license_server.name),
+                **build_message_attempt(),
             )
+
+    def _write_build_server(self, server_name, server):
+        if execution := current_build_execution():
+            existing = self.db.get(DbCollections.SERVER, server_name) or {}
+            if existing.get('state') == ServerStates.RUNNING.value:
+                return False
+            execution.update(DbCollections.SERVER, server_name, server.model_dump(exclude_none=True))
+        else:
+            self.db.update(collection_name=DbCollections.SERVER, doc_id=server_name, data=server.model_dump())
+        return True
 
     def _delete_fortinet_features(self):
         fortinet_server_name = f"{self.build_id}-fortimanager"

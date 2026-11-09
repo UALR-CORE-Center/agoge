@@ -3,7 +3,8 @@ from typing import List
 
 from common.exceptions import Conflict, NotFound
 from common.utilities.gcp.compute.compute_firewall import ComputeFirewallsAPI
-from common.constants.google import FirewallDirection, FirewallRuleAction
+from cloud_fn_utilities.build_execution import current_build_execution, tracked_compute_create
+from common.constants.google import FirewallDirection, FirewallRuleAction, OperationType
 from common.models.agoge import FirewallRuleModel
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
@@ -56,10 +57,15 @@ class FirewallManager:
             )
 
             try:
-                created = self.firewalls_client.create(
-                   resource_name=firewall_rule_name,
-                   firewall_resource=firewall_body
-                )
+                if current_build_execution():
+                    created = tracked_compute_create(
+                        self.firewalls_client, firewall_rule_name, OperationType.GLOBAL,
+                        firewall_resource=firewall_body,
+                    )
+                else:
+                    created = self.firewalls_client.create(
+                        resource_name=firewall_rule_name, firewall_resource=firewall_body,
+                    )
                 if not created:
                     raise ConnectionError(
                         f'Timed out creating firewall rule {firewall_rule_name}'

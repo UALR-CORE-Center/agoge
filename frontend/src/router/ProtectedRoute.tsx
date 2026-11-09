@@ -4,7 +4,7 @@ import {SpinnerOverlay} from "../components/Common/SpinnerOverlay";
 import {useAuthContext} from "../context/AuthContext";
 import {URL_LOGOUT} from "./urls";
 
-export type Permission = "admin" | "instructor" | "student";
+export type Permission = "admin" | "instructor" | "student" | "staff";
 
 interface ProtectedRouteProps {
     element: React.ReactElement;
@@ -31,7 +31,8 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
         return <SpinnerOverlay />;
     }
 
-    if (level && !agogeUser.user?.permissions?.[level]) {
+    const permissions = agogeUser.user.permissions;
+    if (level && !(level === "staff" ? permissions?.admin || permissions?.instructor : permissions?.[level])) {
         return <Navigate to={URL_LOGOUT} replace />;
     }
 

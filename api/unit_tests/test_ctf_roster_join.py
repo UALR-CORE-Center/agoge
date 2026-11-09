@@ -1,28 +1,60 @@
 """Joining a CTF unit: the email resolves through the roster (CTF_BOARD members) to the team's
 shared workout; anyone else is refused with NotOnRoster. Non-CTF units keep their old behavior."""
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from common.constants.build_constants import BuildConstants
 from common.constants.database import DbCollections, DbOperators
 from common.constants.pub_sub import PubSub
-from common.constants.states import WorkoutStates
+from common.constants.states import UnitStates, WorkoutStates
 from common.exceptions import Forbidden, NotOnRoster
+from common.utilities.build_incidents import BuildIncidents, BuildQuotaHold
 from core.workout import Workout
 from routers import workout as workout_routes
+from utilities.http_errors import build_unavailable_response
 
 CTF_ID = "ctfaaaaaaa"
 UNIT_ID = "unitaaaaaa"
 JOIN_CODE = "JOIN-CODE"
 RED, BLUE = "wkredaaaaa", "wkblueaaaa"
+PROJECT_ID = "example-training-project"
+
+
+class FakeDocument:
+    def __init__(self, documents, doc_id):
+        self.documents = documents
+        self.doc_id = doc_id
+
+    def get(self, transaction=None):
+        record = self.documents.get(self.doc_id)
+        return SimpleNamespace(exists=record is not None, to_dict=lambda: None if record is None else dict(record))
+
+    def update(self, data):
+        self.documents[self.doc_id].update(data)
+
+    def set(self, data):
+        self.documents[self.doc_id] = dict(data)
 
 
 class FakeDb:
     def __init__(self):
         self.docs = {c: {} for c in DbCollections}
         self.queries = []
+        self.db = self
+
+    def collection(self, name):
+        return SimpleNamespace(document=lambda doc_id: FakeDocument(self.docs[name], doc_id))
+
+    def transaction(self, operation):
+        transaction = SimpleNamespace(
+            update=lambda ref, data: ref.update(data),
+            set=lambda ref, data: ref.set(data),
+        )
+        return operation(transaction)
 
     def query(self, collection_name, filters=None):
         self.queries.append((collection_name, filters))
@@ -45,7 +77,7 @@ def make_workout(db, debug=False):
     workout = object.__new__(Workout)
     workout.db = db
     workout.collection = DbCollections.WORKOUT
-    workout.env = MagicMock(max_workspaces=100)
+    workout.env = MagicMock(max_workspaces=100, project=PROJECT_ID)
     workout.pubsub_manager = MagicMock()
     workout.pubsub_keys = PubSub.EventAttributes
     workout.handler = PubSub.Handlers
@@ -86,12 +118,15 @@ def test_rostered_email_resolves_to_its_team_workout_and_builds_it_when_not_buil
     assert join(workout, "a@x.edu") == (RED, True)
 
     attrs = PubSub.EventAttributes
+    attempt = db.docs[DbCollections.WORKOUT][RED]['build_attempt_id']
+    assert len(attempt) == 32
     workout.pubsub_manager.msg.assert_called_once_with(**{
         attrs.HANDLER: str(PubSub.Handlers.BUILD.value),
         attrs.ACTION: str(PubSub.Actions.BUILD.value),
         attrs.COURSE_OBJECT: str(PubSub.CourseObjects.WORKOUT.value),
         attrs.KEY_TYPE: str(DbCollections.WORKOUT.value),
         attrs.BUILD_ID: RED,
+        attrs.BUILD_ATTEMPT_ID: attempt,
     })
 
 
@@ -197,6 +232,44 @@ def test_plain_unit_with_capacity_requests_a_new_workout_for_an_unknown_email(pl
     kwargs = workout.pubsub_manager.msg.call_args.kwargs
     assert kwargs[PubSub.EventAttributes.CHILD_ID] == workout_id
     assert kwargs[PubSub.EventAttributes.COURSE_OBJECT] == str(PubSub.CourseObjects.UNIT.value)
+
+
+def test_community_join_carries_parent_and_child_attempts_during_a_network_hold(plain_db):
+    unit = plain_db.docs[DbCollections.UNIT][UNIT_ID]
+    parent_attempt = 'a' * 32
+    unit.update(unit_type=BuildConstants.UnitType.COMMUNITY.value, state=UnitStates.READY.value,
+                build_attempt_id=parent_attempt, networks=[{'name': 'shared'}])
+    unit['workspace_settings']['count'] = 3
+    BuildIncidents(plain_db, PROJECT_ID).update_verified_quota(None, usage=30, limit=30, verified_by='admin')
+    workout = make_workout(plain_db)
+
+    workout_id, exists = join(workout, 'new@x.edu')
+
+    assert exists is False
+    attrs = PubSub.EventAttributes
+    message = workout.pubsub_manager.msg.call_args.kwargs
+    assert message[attrs.BUILD_ID] == UNIT_ID
+    assert message[attrs.CHILD_ID] == workout_id
+    assert message[attrs.BUILD_ATTEMPT_ID] == parent_attempt
+    assert len(message[attrs.CHILD_BUILD_ATTEMPT_ID]) == 32
+    assert message[attrs.CHILD_BUILD_ATTEMPT_ID] != parent_attempt
+
+
+@pytest.mark.parametrize('email', ['a@x.edu', 'new@x.edu'])
+def test_network_hold_blocks_new_public_work_but_preserves_existing_healthy_access(plain_db, email):
+    unit = plain_db.docs[DbCollections.UNIT][UNIT_ID]
+    unit.update(unit_type=BuildConstants.UnitType.SOLO.value, networks=[{'name': 'workspace'}])
+    unit['workspace_settings']['count'] = 3
+    BuildIncidents(plain_db, PROJECT_ID).update_verified_quota(None, usage=30, limit=30, verified_by='admin')
+    workout = make_workout(plain_db)
+
+    with pytest.raises(BuildQuotaHold) as error:
+        join(workout, email)
+    response = build_unavailable_response(error.value)
+    assert response.status_code == 503
+    assert response.detail == 'New workspaces are temporarily unavailable. Contact your instructor.'
+    assert join(workout, 'c@x.edu') == (BLUE, True)
+    workout.pubsub_manager.msg.assert_not_called()
 
 
 def test_plain_unit_at_capacity_raises_forbidden_not_not_on_roster(plain_db):

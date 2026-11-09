@@ -12,10 +12,13 @@ from common.constants.pub_sub import PubSub
 from common.constants.states import ServerStates, UnitStates, WorkoutStates
 from common.document_database import DocumentDatabaseFactory, DatabaseQueries, DatabaseMask
 from common.models.agoge import WorkoutModel, UnitModel
+from common.utilities.build_incidents import BuildIncidents, BuildQuotaHold
 from common.utilities.timestamps import Timestamps
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.pubsub_manager import PubSubManager
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
+from common.utilities.gcp.compute.quota_failure import ComputeQuotaFailure
+from common.utilities.workout_runtime import record_workout_runtime
 from ..compute.factory import ComputeManagerFactory
 from ...gcp.vpc_manager import VpcManager
 from ...gcp.firewall_rule_manager import FirewallManager
@@ -193,6 +196,8 @@ class BaseWorkout(ABC):
             return False
 
         claimed = False
+        event_id = getattr(self, 'rebuild_event_id', None)
+        location = None
         try:
             claimed = self.db.transaction(
                 operation_func=self._claim_workout_rebuild_transaction,
@@ -204,6 +209,10 @@ class BaseWorkout(ABC):
                 )
                 return False
 
+            if event_id:
+                target = self.db.get(DbCollections.WORKOUT, self.workout_id) or {}
+                location = {'unit_id': self.unit_model.id, 'workout_id': self.workout_id,
+                            'attempt_id': target.get('build_attempt_id')}
             self._prepare_rebuild_infrastructure()
             servers_to_nuke = self._recover_auxiliary_server_records(
                 servers_to_nuke
@@ -262,7 +271,16 @@ class BaseWorkout(ABC):
                 },
             )
             self.state_manager.state_transition(self.s.RUNNING)
-        except Exception:
+        except Exception as error:
+            if location and (isinstance(error, BuildQuotaHold) or (
+                    isinstance(error, ComputeQuotaFailure) and error.category == 'allocation')):
+                incidents = BuildIncidents(self.db, self.env.project)
+                record = incidents.record_blocked if isinstance(error, BuildQuotaHold) else incidents.record_quota
+                record(error, **location, event_id=event_id, stage='rebuild', target_patch={
+                    'state': WorkoutStates.BROKEN.value, 'active': False,
+                    'state_timestamp': datetime.now(timezone.utc).isoformat(),
+                })
+                return False
             if claimed:
                 self.state_manager.state_transition(self.s.BROKEN)
             self.logger.error(
@@ -270,6 +288,8 @@ class BaseWorkout(ABC):
             )
             raise
 
+        if location:
+            BuildIncidents(self.db, self.env.project).resolve_target(**location, resolution='build_succeeded')
         self.logger.info(
             f"{self.class_name}:{self.workout_id} - Finished rebuilding "
             f"{len(server_names)} server(s)."
@@ -320,16 +340,14 @@ class BaseWorkout(ABC):
         ):
             return False
 
-        transaction.set(
-            doc_ref,
-            {
-                "action": PubSub.Actions.NUKE.value,
-                "prev_state": existing_state,
-                "state": WorkoutStates.BUILDING_SERVERS.value,
-                "state_timestamp": datetime.now(timezone.utc).isoformat(),
-            },
-            merge=True,
-        )
+        patch = {
+            "action": PubSub.Actions.NUKE.value,
+            "prev_state": existing_state,
+            "state": WorkoutStates.BUILDING_SERVERS.value,
+            "state_timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        record_workout_runtime(transaction, self.db.db, self.workout_id, workout, patch)
+        transaction.set(doc_ref, patch, merge=True)
         return True
 
     @classmethod

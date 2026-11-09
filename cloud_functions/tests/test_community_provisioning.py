@@ -528,11 +528,10 @@ def test_community_unit_does_not_reach_deleted_when_vpc_delete_is_unconfirmed():
 
     assert community_unit.state_manager.state_transition.call_args_list == [
         ((UnitStates.DELETING_SERVERS,), {}),
-        ((UnitStates.BROKEN,), {}),
     ]
 
 
-def test_community_unit_marks_broken_when_vpc_delete_raises():
+def test_community_unit_remains_deleting_when_vpc_delete_raises():
     community_unit = _community_unit_for_network_delete(True)
     community_unit.vpc_manager.delete.side_effect = ConnectionError('subnetwork delete failed')
 
@@ -541,7 +540,6 @@ def test_community_unit_marks_broken_when_vpc_delete_raises():
 
     assert community_unit.state_manager.state_transition.call_args_list == [
         ((UnitStates.DELETING_SERVERS,), {}),
-        ((UnitStates.BROKEN,), {}),
     ]
 
 

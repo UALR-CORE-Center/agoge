@@ -10,6 +10,7 @@ from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.models.agoge import WorkoutModel, UnitModel, ServerModel, NicModel, ProxyConnectionModel
 
+from cloud_fn_utilities.build_execution import current_build_execution, ensure_current_build
 from cloud_fn_utilities.course_objects.compute.factory import ComputeManagerFactory
 from cloud_fn_utilities.state_managers import ServerStateManager
 from cloud_fn_utilities.server_specific.guacamole.guacamole_configuration import GuacamoleConfiguration
@@ -86,6 +87,10 @@ class DisplayProxy:
             return UnitModel
 
     def build(self):
+        ensure_current_build()
+        server = self.db.get(DbCollections.SERVER, self.server_id) or {}
+        if server.get('state') == ServerStates.RUNNING.value:
+            return
         self.prepare_server_record()
         unit_id = getattr(self, 'managed_community_unit', None)
         load_kwargs = {'network_prefix': unit_id} if unit_id else {}
@@ -140,11 +145,10 @@ class DisplayProxy:
         build_record_dict = build_record.model_dump()
         update_mask = self.db_mask.get(build_record_dict, keys=['proxy_connections'])
         if not self.managed_community_unit:
-            self.db.update(
-                collection_name=self.collection,
-                doc_id=self.build_id,
-                data=update_mask
-            )
+            if execution := current_build_execution():
+                execution.update(self.collection, self.build_id, update_mask)
+            else:
+                self.db.update(self.collection, self.build_id, update_mask)
 
         # Generate DisplayProxy server object
         guac_startup_script = self.guac.get_guac_startup_script(proxy_configs)
@@ -168,15 +172,14 @@ class DisplayProxy:
             hostname=f"{self.build_id}-display{self.env.parent_dns_suffix}",
             guacamole_startup_script=guac_startup_script
         )
-        server_record = server_model.model_dump()
+        server_record = server_model.model_dump(exclude_none=True)
         if self.managed_community_unit:
             server_record['no_service_account'] = True
             return self._claim_managed_proxy(server_record, sorted_list)
-        self.db.update(
-            collection_name=DbCollections.SERVER,
-            doc_id=self.server_id,
-            data=server_record
-        )
+        if execution := current_build_execution():
+            execution.update(DbCollections.SERVER, self.server_id, server_record)
+        else:
+            self.db.update(DbCollections.SERVER, self.server_id, server_record)
         return server_record
 
     def _claim_managed_proxy(self, server_record: dict, connections: list) -> dict:

@@ -1,6 +1,7 @@
 """H-3/H-4: an instructor role is not enough to act on a Unit. Unit, rubric, snapshot and
 teacher-doc operations require the requester to be one of the Unit's instructors (or an admin)."""
 from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -76,13 +77,15 @@ def _unit(db=None):
     unit = object.__new__(Unit)
     unit.collection = DbCollections.UNIT
     unit.db = db or _db()
+    unit.env = SimpleNamespace(project="test-project")
+    unit.db.transaction.return_value = "test-attempt"
     unit.logger = MagicMock()
     unit.pubsub_mgr = MagicMock()
     unit.handler = PubSub.Handlers
     unit.pubsub_actions = PubSub.Actions
     unit.workout_model_validator = MagicMock()
     unit.workout_model_validator.load.side_effect = lambda workouts: [
-        MagicMock(id=w["id"], state=WorkoutStates.NOT_BUILT.value, student_email="s@example.edu")
+        MagicMock(id=w["id"], state=WorkoutStates.NOT_BUILT.value, student_email="s@example.edu", networks=[])
         for w in workouts
     ]
     unit._reset_expiration = MagicMock()

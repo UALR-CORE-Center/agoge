@@ -35,6 +35,7 @@ interface CtfSetupPanelProps {
 const CtfSetupPanel: React.FC<CtfSetupPanelProps> = ({ctfId, state, active, onTeamsChanged}) => {
     const [event, setEvent] = useState<CtfEvent | null>(null);
     const [unitServers, setUnitServers] = useState<UnitServer[]>([]);
+    const [requiresNetwork, setRequiresNetwork] = useState(true);
     const [teams, setTeams] = useState<CtfTeamRow[]>([]);
     const [teamsLoading, setTeamsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -65,11 +66,15 @@ const CtfSetupPanel: React.FC<CtfSetupPanelProps> = ({ctfId, state, active, onTe
     // The event and its lab change only through this panel, so they are read once, not polled.
     useEffect(() => {
         let cancelled = false;
+        setRequiresNetwork(true);
         fetchEvent().then(async (fetched) => {
             if (!fetched || cancelled) return;
             try {
                 const unit = await unitService.get(fetched.unit_id);
-                if (!cancelled) setUnitServers((unit?.servers ?? []) as UnitServer[]);
+                if (!cancelled) {
+                    setUnitServers((unit?.servers ?? []) as UnitServer[]);
+                    setRequiresNetwork(unit?.networks === undefined || Boolean(unit.networks?.length));
+                }
             } catch (err) {
                 // The flag editor still works without the server list; it only loses the server choices.
                 console.error(err);
@@ -143,7 +148,8 @@ const CtfSetupPanel: React.FC<CtfSetupPanelProps> = ({ctfId, state, active, onTe
             />
             <Divider sx={{my: 3}} />
             <Typography variant="h6" component="h2" sx={{mb: 1}}>3. Servers</Typography>
-            <CtfServersPanel ctfId={ctfId} state={state} servers={servers} teams={teams} onChanged={fetchTeams} />
+            <CtfServersPanel ctfId={ctfId} state={state} servers={servers} teams={teams}
+                onChanged={fetchTeams} requiresNetwork={requiresNetwork} />
         </Box>
     );
 };

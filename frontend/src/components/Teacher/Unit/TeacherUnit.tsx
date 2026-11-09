@@ -8,9 +8,11 @@ import { UnitFull, UnitRoster } from "../../../services/Unit/unit.model";
 import { unitService } from "../../../services/Unit/unit.service";
 import { Workout } from "../../../services/Workout/workout.model";
 import { WorkoutStates } from "../../../types/AgogeStates";
+import { UnitType } from "../../../types/BuildConstants";
 import HttpError from "../../Common/Errors/HttpError";
 import {InfoCard} from "../../Common/InfoCard/InfoCard";
 import TimerBox from "../../Common/Timer";
+import UnitBuildIncidents from "./UnitBuildIncidents";
 import UnitRubricEditor from "./UnitRubricEditor";
 import UnitTable from "./UnitTable";
 
@@ -100,10 +102,20 @@ const TeacherUnit: React.FC = () => {
         } else {
             setIsLoading(false);
         }
-    }, [firebaseUser.user]);
+    }, [firebaseUser.user, build_id]);
 
-    usePolling(fetchData, {enabled: !!firebaseUser.user && !isExpired, interval: 15000})
     const memoizedRosterSize = useMemo(() => rosterSize?.roster, [rosterSize]);
+    const unit = unitFull.value?.id === build_id ? unitFull.value : null;
+    const incidents = unit?.build_incidents ?? [];
+    usePolling(fetchData, {
+        enabled: !!firebaseUser.user && (!isExpired || incidents.some(incident => incident.status === 'open')),
+        interval: 15000,
+    });
+    const failedWorkoutIds = new Set(incidents.filter(incident => incident.status === 'open' && incident.workout_id)
+        .map(incident => incident.workout_id!));
+    const sharedBuildFailed = incidents.some(incident => incident.status === 'open' && !incident.workout_id);
+    const workoutsNeedNetwork = unit?.unit_type !== UnitType.COMMUNITY
+        && (unit?.networks === undefined || Boolean(unit.networks?.length));
     return (
         <Box
             id="homePage"
@@ -125,7 +137,7 @@ const TeacherUnit: React.FC = () => {
                     mb: { xs: 2, md: 0 }
                 }}
             >
-                {isLoading || !unitFull.value ? (
+                {isLoading || !unit ? (
                     <Skeleton
                         variant="rectangular"
                         width="100%"
@@ -140,15 +152,15 @@ const TeacherUnit: React.FC = () => {
                             expires={expiresTimestamp}
                         />
                         {
-                            unitFull.value?.rubric_support && (
-                                <UnitRubricEditor buildId={String(build_id)} isExpired={isExpired} rubricEnabled={unitFull.value.rubric_support} />
+                            unit.rubric_support && (
+                                <UnitRubricEditor buildId={String(build_id)} isExpired={isExpired} rubricEnabled={unit.rubric_support} />
                             )
                         }
                     </Box>
                 )}
             </Box>
             <Box sx={{ width: { xs: '100%', md: '75%' }, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                {isLoading || !unitFull.value ? (
+                {isLoading || !unit ? (
                     <>
                         <Skeleton
                             variant="rectangular"
@@ -166,10 +178,20 @@ const TeacherUnit: React.FC = () => {
                     </>
                 ) : (
                     <>
+                        <UnitBuildIncidents
+                            key={build_id}
+                            unitId={String(build_id)}
+                            unitState={unit.state}
+                            workouts={workoutList}
+                            incidents={incidents}
+                            workoutsNeedNetwork={workoutsNeedNetwork}
+                            sharedNeedsNetwork={unit.networks === undefined || Boolean(unit.networks?.length)}
+                            onChanged={() => fetchData()}
+                        />
                         <InfoCard
                             buildType='unit'
                             buildId={String(build_id)}
-                            data={{ ...unitFull.value, roster: memoizedRosterSize }}
+                            data={{ ...unit, roster: memoizedRosterSize, join_code: sharedBuildFailed ? null : unit.join_code }}
                             isLoading={isLoading}
                             onRemoteLabSettingsSaved={() => fetchData()}
                         />
@@ -177,9 +199,12 @@ const TeacherUnit: React.FC = () => {
                             <UnitTable
                                 buildId={String(build_id)}
                                 workouts={workoutList}
-                                lms_available={unitFull.value?.lms_integration !== null}
+                                lms_available={unit.lms_integration !== null}
                                 refreshing={unitFull.pending && !isLoading}
                                 isExpired={isExpired}
+                                failedWorkoutIds={failedWorkoutIds}
+                                sharedBuildFailed={sharedBuildFailed}
+                                workoutsNeedNetwork={workoutsNeedNetwork}
                                 onActionPerformed={(action, workouts) => handleOptimisticUpdates(action, workouts)}
                             />
                         </Box>

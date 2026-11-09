@@ -4,6 +4,9 @@ from typing import Optional
 
 from google.api_core.exceptions import NotFound as GoogleNotFound
 
+from cloud_fn_utilities.build_execution import (
+    BuildSuperseded, ensure_current_build, server_owner, wait_for_pending_creates,
+)
 from cloud_fn_utilities.course_objects.compute.base_compute_manager import BaseComputeManager
 from cloud_fn_utilities.gcp.address_manager import AddressManager
 from cloud_fn_utilities.gcp.dns_manager import DnsManager
@@ -135,6 +138,7 @@ class LabServerManager(BaseComputeManager):
             # publication are complete. Otherwise parent Unit/Workout polling
             # can observe a false success while these dependencies still fail.
             self._build_server(finalize_state=False)
+            ensure_current_build()
             if self._managed_wireguard():
                 self._refresh_wireguard_external_ip()
             # Verify endpoint ownership before any shared DNS mutation. A stale
@@ -149,6 +153,8 @@ class LabServerManager(BaseComputeManager):
             # installed the ingress firewall rules. The Unit promotes it to
             # active only after that final dependency succeeds.
             self.state_manager.state_transition(self.s.RUNNING)
+        except BuildSuperseded:
+            raise
         except Exception:
             self.state_manager.state_transition(self.s.BROKEN)
             self._mark_wireguard_endpoint_error()
@@ -290,6 +296,11 @@ class LabServerManager(BaseComputeManager):
         if state_transition:
             self.state_manager.state_transition(self.s.DELETING)
 
+        if db := getattr(self, 'db', None):
+            collection, parent_id = server_owner(db, self.server_name)
+            if collection:
+                wait_for_pending_creates(db, collection, parent_id, server_id=self.server_name)
+
         self.logger.info(f'{self.class_name}:{self.server_name} - Deleting server')
         wireguard_endpoint = self._mark_wireguard_endpoint_releasing()
         self._delete_routes()
@@ -322,8 +333,6 @@ class LabServerManager(BaseComputeManager):
                 self.logger.error(
                     f'{self.class_name}:{self.server_name} - Compute Engine did not confirm server deletion'
                 )
-                if state_transition:
-                    self.state_manager.state_transition(self.s.BROKEN)
                 self._mark_wireguard_endpoint_error()
                 return False
         except (NotFound, GoogleNotFound):
@@ -333,8 +342,6 @@ class LabServerManager(BaseComputeManager):
                 'continuing with the rebuild.'
             )
         except (BadRequest, BaseAgogeException):
-            if state_transition:
-                self.state_manager.state_transition(self.s.BROKEN)
             self._mark_wireguard_endpoint_error()
             return False
 
@@ -346,8 +353,6 @@ class LabServerManager(BaseComputeManager):
                 f'{self.class_name}:{self.server_name} - DNS deletion was not confirmed; '
                 f'retaining the reserved external address'
             )
-            if state_transition:
-                self.state_manager.state_transition(self.s.BROKEN)
             self._mark_wireguard_endpoint_error()
             return False
 

@@ -80,9 +80,13 @@ def agoge_cloud_function(event, context, debug_mode: bool = False, *, env_dict: 
     try:
         environment = {'env_dict': env_dict} if env_dict is not None else {}
         if handler == PubSub.Handlers.BUILD:
-            BuildHandler(event['attributes'], debug_mode=debug_mode, **environment).route()
+            build_handler = BuildHandler(event['attributes'], debug_mode=debug_mode, **environment)
+            build_handler.event_id = context.event_id
+            build_handler.route()
         elif handler == PubSub.Handlers.CONTROL:
-            ControlHandler(event['attributes'], debug=debug_mode, **environment).route()
+            control_handler = ControlHandler(event['attributes'], debug=debug_mode, **environment)
+            control_handler.event_id = context.event_id
+            control_handler.route()
         elif handler == PubSub.Handlers.MAINTENANCE:
             MaintenanceHandler(debug=debug_mode, **environment).route()
         elif handler == PubSub.Handlers.CTF:
