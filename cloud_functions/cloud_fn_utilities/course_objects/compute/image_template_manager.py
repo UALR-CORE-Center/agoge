@@ -257,13 +257,21 @@ class ImageTemplateManager(BaseComputeManager):
         if not snapshot_name:
             raise ValueError("Missing value for `latest` or `snapshot_name`. Must provide one")
 
+        snapshot = self.compute_snapshot.get(resource_name=snapshot_name, project=self.env.project)
+        expected_snapshot = f'projects/{self.env.project}/global/snapshots/{snapshot_name}'
+        if (
+            snapshot.status != 'READY'
+            or self._canonical_compute_resource(snapshot.self_link) != expected_snapshot
+        ):
+            raise OperationTimeout(f'Snapshot {snapshot_name} is not ready. The existing image was retained.')
+
         # Wait for previous image to delete first to avoid any insert conflicts
         if not self.delete_image():
             raise OperationTimeout(f'Could not delete the existing image {self.image_name}. Retry check-in.')
 
         # It is now safe to send image insert request
         self.logger.info(f"{self.class_name}:{self.server_name} - Beginning to image the server.")
-        if not self._create_image_from_snapshot(snapshot_name):
+        if not self._create_image_from_snapshot(snapshot.self_link):
             raise OperationTimeout(f'Could not create image {self.image_name}. The server remains checked out.')
         created_image = self.compute_image.get(
             self.image_name, project=self.env.project, fallback_to_shared=False,
@@ -412,20 +420,18 @@ class ImageTemplateManager(BaseComputeManager):
 
     def _create_image_from_snapshot(
         self,
-        snapshot_name: str
+        snapshot_link: str
     ) -> bool:
         """Create a new image from a snapshot"""
         description = f'{str(self.env.project).capitalize()} production image.'
         if self.server_spec.description:
             description = f'{description} {self.server_spec.description}'
 
-        snapshot_source = self.compute_snapshot.get(resource_name=snapshot_name, project=self.env.project)
-        
         return self.compute_image.create(
             resource_name=self.image_name,
             description=description,
             source_type=ImageSource.SNAPSHOT,
-            source=snapshot_source.self_link
+            source=snapshot_link
         )
 
     def _add_disks(self):

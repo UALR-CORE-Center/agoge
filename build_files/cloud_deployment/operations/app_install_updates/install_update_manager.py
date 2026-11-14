@@ -33,9 +33,10 @@ class InstallUpdateManager:
             return
         if not PublicImageCatalog(project=self.project_id).run():
             return
-        GuacamoleImageManager(
+        if not GuacamoleImageManager(
             project=self.project_id
-        ).create_guac_project_image()
+        ).create_guac_project_image():
+            return
         SharedLabManager().run()
 
         self._create_update_record(action="initial install")

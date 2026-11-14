@@ -1,15 +1,14 @@
-import subprocess
+import re
 import textwrap
 import socket
 import ssl
 import sys
 import time
-from datetime import datetime, UTC
+from hashlib import sha256
 
-from google.api_core.exceptions import Forbidden, NotFound
+from google.api_core.exceptions import Forbidden, GoogleAPICallError, NotFound
 from google.cloud import compute_v1
 
-from cloud_fn_utilities.globals import BuildConstants
 from cloud_fn_utilities.course_objects.compute.factory import ComputeManagerFactory
 
 from common.utilities.gcp.cloud_env import CloudEnv
@@ -24,6 +23,10 @@ class GuacamoleImageManager:
     """
     Manages the creation and synchronization of Guacamole images and startup configurations.
     """
+    BASE_IMAGE = 'image-guac-base'
+    CERTIFICATE_WAIT_SECONDS = 15 * 60
+    STARTUP_CERTIFICATE_MARKER = 'Guacamole startup certificate SHA256: '
+    STARTUP_FAILURE_HINTS = ('error', 'too many', 'retry after', 'denied', 'unauthorized', 'failed')
     COPY_GUAC_BASE = (
         "gcloud compute --project={dst_project} images create image-guac-{dst_project} "
         "--source-image=image-guac-base --source-image-project={src_project}"
@@ -36,7 +39,8 @@ class GuacamoleImageManager:
         "machine_type": "e2-standard-2",
         "description": "Guacamole proxy server image used for building lab guacamole proxies.",
         "tags": ["http-server"],
-        "image": "image-guac-base",
+        # Check-in saves to the project image. The builder boots from self_link.
+        "image": BuildConstants.MachineImages.GUACAMOLE_SSL,
         "os": "linux",
         "add_disk": "50",
         "human_interaction": [],
@@ -124,6 +128,8 @@ class GuacamoleImageManager:
         echo "🔹 Removing sensitive secrets file"
         rm -f /secrets/dns-google.json
         echo "✅ Secrets have been cleaned up!"
+        fingerprint=$(openssl x509 -in "/etc/letsencrypt/live/{guac_domain}/cert.pem" -noout -fingerprint -sha256)
+        echo "{startup_certificate_marker}${{fingerprint#*=}}"
 
     """)
 
@@ -154,15 +160,16 @@ class GuacamoleImageManager:
         Returns:
             bool: True if the image creation process completes successfully, False otherwise.
         """
-        server_name = f"guac-{self.env.project}"
+        server_record = self._replace_project_variable(self.GUAC_PROJECT_SERVER)
+        server_name = server_record['name']
         # Resolve the source before reading startup secrets or replacing the
         # Firestore record. A record in Firestore does not create a GCE image.
-        source_image = self._resolve_base_image()
+        source_image, refreshing = self._resolve_source_image(server_record['image'])
 
         # 1. Replace placeholders and store the updated image record in the DB
         print(f"📥 Importing server image '{server_name}' into Firestore...")
-        server_record = self._replace_project_variable(self.GUAC_PROJECT_SERVER)
         server_record['self_link'] = source_image
+        server_record['image_exists'] = refreshing
         server_record['startup_script'] = self._get_guac_startup_script()
         validated = AgogeImageModel(**server_record)
         self.db.insert(collection_name=DbCollections.IMAGE, data=validated.model_dump(), id_field="name")
@@ -172,10 +179,35 @@ class GuacamoleImageManager:
         print("🚀 Deploying Guacamole server for initial setup and certificate provisioning...")
         self.image_manager.load(server_name=server_name)
         self.image_manager.check_out()
-        time.sleep(120)
 
-        print("🔍 Verifying SSL certificate for the Guacamole server...")
-        self._verify_certificate_operation()
+        # Certbot's DNS challenge alone waits 60s, so poll rather than sleep a
+        # fixed time. Capturing before the certificate exists produces an image
+        # every shared lab proxy then fails to start from.
+        print("🔍 Waiting for the Guacamole server's wildcard SSL certificate...")
+        deadline = time.monotonic() + self.CERTIFICATE_WAIT_SECONDS
+        while True:
+            startup_output = self._startup_script_output()
+            # The startup script stops at the first failed command (usually
+            # certbot), so waiting out the deadline after that only hides why.
+            if (failure := self._startup_script_failure(startup_output)) is not None:
+                print(f"❌ The Guacamole server's startup script failed:\n{failure}\n"
+                      f"The server '{server_name}' stays checked out. Fix the cause, restart the builder, "
+                      "and rerun this option.")
+                return False
+            # A project image can serve its baked certificate before the script
+            # finishes. Verify the certificate that the completed script installed.
+            _, _, certificate_output = startup_output.rpartition(self.STARTUP_CERTIFICATE_MARKER)
+            fingerprint = certificate_output.partition('\n')[0].strip().replace(':', '').lower()
+            if re.fullmatch('[0-9a-f]{64}', fingerprint) and self._verify_certificate_operation(fingerprint):
+                break
+            if time.monotonic() >= deadline:
+                print(f"❌ Guacamole startup and TLS verification timed out after "
+                      f"{self.CERTIFICATE_WAIT_SECONDS // 60} minutes. "
+                      f"The server '{server_name}' stays checked out. Inspect it with "
+                      "'sudo journalctl -u google-startup-scripts.service'. Restart the builder after fixing "
+                      "its startup failure, then rerun this option.")
+                return False
+            time.sleep(15)
 
         print("🔄 Checking Guacamole server back in...")
         self.image_manager.check_in()
@@ -183,16 +215,30 @@ class GuacamoleImageManager:
 
         return True
 
-    def _resolve_base_image(self) -> str:
+    def _resolve_source_image(self, project_image: str) -> tuple[str, bool]:
+        images = compute_v1.ImagesClient()
+        try:
+            image = images.get(project=self.project, image=project_image)
+        except NotFound:
+            return self._resolve_base_image(images), False
+        except Forbidden as error:
+            raise RuntimeError(f'Cannot access Guacamole project image {self.project}/{project_image}.') from error
+        if image.status != 'READY' or not image.self_link:
+            raise RuntimeError(f'Guacamole project image {self.project}/{project_image} is not ready '
+                               f'(status: {image.status}).')
+        print(f'Using Guacamole project image: {image.self_link}')
+        return image.self_link, True
+
+    def _resolve_base_image(self, images: compute_v1.ImagesClient) -> str:
         source_project = (
             self.env.default_server_image_project
             or self.env.parent_project
             or self.env.project
         )
-        image_name = self.GUAC_PROJECT_SERVER['image']
+        image_name = self.BASE_IMAGE
         resource = f'projects/{source_project}/global/images/{image_name}'
         try:
-            image = compute_v1.ImagesClient().get(project=source_project, image=image_name)
+            image = images.get(project=source_project, image=image_name)
         except NotFound as error:
             raise RuntimeError(
                 f'Guacamole base image {resource} was not found. '
@@ -209,27 +255,59 @@ class GuacamoleImageManager:
         print(f'Using Guacamole base image: {image.self_link}')
         return image.self_link
 
-    def _verify_certificate_operation(self):
-        dns_entry = self.image_manager.dns_record
+    def _verify_certificate_operation(self, expected_fingerprint: str) -> bool:
+        """Verify the builder serves the expected trusted wildcard certificate."""
+        # Template DNS names are fully qualified (trailing dot); TLS name checks are not.
+        dns_entry = self.image_manager.dns_record.rstrip('.')
+        wildcard = '*.' + (self.env.parent_dns_suffix or self.env.dns_suffix).strip('.')
         try:
             context = ssl.create_default_context()
             with socket.create_connection((dns_entry, 443), timeout=10) as sock:
                 with context.wrap_socket(sock, server_hostname=dns_entry) as ssock:
                     cert = ssock.getpeercert()
-            issued_date = datetime.strptime(cert['notBefore'], '%b %d %H:%M:%S %Y %Z').date()
-            if issued_date == datetime.now(UTC).date():
-                print("✅ SSL certificate verified successfully.")
-            else:
-                print("⚠️ Certificate date mismatch.")
-        except Exception as e:
-            print(f"⚠️ SSL verification error for {dns_entry}: {e}")
-            input(f"🔎 Verify manually at https://{dns_entry} and press Enter to continue.")
+                    served_fingerprint = sha256(ssock.getpeercert(binary_form=True)).hexdigest()
+                    if served_fingerprint != expected_fingerprint:
+                        return False
+        except OSError:
+            return False
+        names = {value for kind, value in cert.get('subjectAltName', ()) if kind == 'DNS'}
+        if wildcard not in names:
+            print(f"⚠️ The certificate at {dns_entry} does not cover {wildcard}.")
+            return False
+        print("✅ SSL certificate verified successfully.")
+        return True
+
+    def _startup_script_output(self) -> str:
+        """Read the Guacamole builder's latest startup script output."""
+        try:
+            output = compute_v1.InstancesClient().get_serial_port_output(
+                project=self.project, zone=self.env.zone, instance=self.image_manager.server_name,
+                timeout=10, retry=None,
+            ).contents or ''
+        except Forbidden as error:
+            raise RuntimeError('Cannot verify Guacamole builder startup. The account running setup needs '
+                               'compute.instances.getSerialPortOutput on the builder VM.') from error
+        except GoogleAPICallError:
+            return ''
+        # A rerun can reuse the instance, so only the latest boot counts.
+        return output.rsplit('Starting startup scripts', 1)[-1]
+
+    def _startup_script_failure(self, boot: str) -> str | None:
+        """Report the current boot's startup failure if the guest agent logged one."""
+        if 'Script "startup-script" failed' not in boot:
+            return None
+        # Each line appears twice (console and journal); the script never echoes its secrets.
+        lines = list(dict.fromkeys(
+            line.split('startup-script: ', 1)[1].strip()
+            for line in boot.splitlines() if 'startup-script: ' in line
+        ))
+        reasons = [line for line in lines if any(hint in line.lower() for hint in self.STARTUP_FAILURE_HINTS)]
+        return '\n'.join(f'   {line}' for line in (reasons or lines[-5:]))
 
     def _get_guac_startup_script(self) -> str:
         """
         Returns a properly formatted startup script for the Guacamole server,
-        replacing placeholders with the provided host and domain. It also prompts the user
-        to determine if the SSL certificate should be renewed now.
+        replacing placeholders with the provided host and domain.
 
         Returns:
             str: The final bash script with placeholders replaced by actual values.
@@ -244,10 +322,12 @@ class GuacamoleImageManager:
               --dns-google \\
               --dns-google-credentials /secrets/dns-google.json \\
               --dns-google-propagation-seconds 60 \\
+              --cert-name "{guac_domain}" \\
               -d "*.{guac_domain}" -d "{guac_domain}" \\
               --email {admin_email} \\
               --agree-tos \\
               --no-eff-email \\
+              --keep-until-expiring \\
               --non-interactive
 
             echo "✅ SSL certificate obtained successfully!"
@@ -262,7 +342,8 @@ class GuacamoleImageManager:
                 guac_sql_password=self.env.guac_sql_password,
                 guac_admin_password=self.env.guac_admin_password,
                 google_dns_service_key=self.env.google_dns_service_key,
-                cert_section=cert_section
+                cert_section=cert_section,
+                startup_certificate_marker=self.STARTUP_CERTIFICATE_MARKER,
             )
         except KeyError as e:
             print(f"A KeyError occurred, missing environment variable: {e}")

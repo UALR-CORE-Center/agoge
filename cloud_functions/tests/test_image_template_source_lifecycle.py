@@ -46,7 +46,9 @@ def template():
     manager.snapshot_manager = Mock()
     manager.snapshot_manager.create_snapshot.return_value = 'wireguard-server-auto-0'
     manager.compute_snapshot = Mock()
-    manager.compute_snapshot.get.return_value = SimpleNamespace(self_link='projects/test-dev-787001/global/snapshots/wireguard-server-auto-0')
+    manager.compute_snapshot.get.return_value = SimpleNamespace(
+        status='READY', self_link='projects/test-dev-787001/global/snapshots/wireguard-server-auto-0',
+    )
     manager.server_spec = SimpleNamespace(description='WireGuard template server')
     manager._build_server = Mock()
     manager._start_server = Mock()
@@ -133,6 +135,18 @@ def test_check_in_switches_to_the_created_custom_image(template):
 
     assert record['self_link'] == CUSTOM_SOURCE
     assert record['image_exists'] is True
+
+
+def test_check_in_retains_existing_image_until_replacement_snapshot_is_ready(template):
+    manager, _ = template
+    manager.compute_snapshot.get.return_value.status = 'CREATING'
+
+    with pytest.raises(OperationTimeout, match='existing image was retained'):
+        manager.check_in()
+
+    manager.compute_image.delete.assert_not_called()
+    manager.compute_image.create.assert_not_called()
+    manager.compute_instance.delete.assert_not_called()
 
 
 @pytest.mark.parametrize('source,exists', [(PUBLIC_SOURCE, False), (CUSTOM_SOURCE, True)])

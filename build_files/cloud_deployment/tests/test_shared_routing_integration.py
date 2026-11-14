@@ -24,7 +24,7 @@ def installation(monkeypatch):
     public_images = MagicMock()
     public_images.run.side_effect = lambda: calls.append("public-images") or True
     guacamole = MagicMock()
-    guacamole.create_guac_project_image.side_effect = lambda: calls.append("guacamole")
+    guacamole.create_guac_project_image.side_effect = lambda: calls.append("guacamole") or True
     shared_labs = MagicMock()
     shared_labs.run.side_effect = lambda: calls.append("labs")
     constructors = {}
@@ -38,7 +38,8 @@ def installation(monkeypatch):
     manager = install_module.InstallUpdateManager("selected-tenant")
     manager._create_update_record = MagicMock(side_effect=lambda **kwargs: calls.append("record"))
     return SimpleNamespace(
-        manager=manager, calls=calls, app=app, routing=routing, public_images=public_images, constructors=constructors,
+        manager=manager, calls=calls, app=app, routing=routing, public_images=public_images,
+        guacamole=guacamole, constructors=constructors,
     )
 
 
@@ -67,6 +68,17 @@ def test_full_install_does_not_report_success_with_incomplete_public_catalog(ins
     assert installation.calls == ['base', 'apps', 'function', 'routing', 'public-images']
     installation.manager._create_update_record.assert_not_called()
     installation.constructors['GuacamoleImageManager'].assert_not_called()
+    assert 'Setup complete' not in capsys.readouterr().out
+
+
+def test_full_install_stops_if_guacamole_image_is_not_ready(installation, capsys):
+    installation.guacamole.create_guac_project_image.side_effect = lambda: installation.calls.append('guacamole') or False
+
+    installation.manager.run_full_install()
+
+    assert installation.calls == ['base', 'apps', 'function', 'routing', 'public-images', 'guacamole']
+    installation.constructors['SharedLabManager'].assert_not_called()
+    installation.manager._create_update_record.assert_not_called()
     assert 'Setup complete' not in capsys.readouterr().out
 
 
