@@ -652,12 +652,13 @@ class CommunityUnit(BaseUnit):
 
         # Omit template nulls so a retry cannot erase state written by the
         # asynchronous LabServer build. Firestore update() merges these fields.
-        project = self.env_dict.get('project')
         allowed_email = None
-        if (server.name == 'display-guacamole-server' and server.community_proxy and server.community_server
-                and (server.guacamole_secret_version_name or '').startswith(
-                    f'projects/{project}/secrets/agoge-guac-{self.unit_id}/versions/')):
-            allowed_email = f'agoge-guac-{self.unit_id}@{project}.iam.gserviceaccount.com'
+        if server.name == 'display-guacamole-server' and server.community_proxy and server.community_server:
+            project = self.env_dict['project']
+            if (server.guacamole_secret_version_name or '').startswith(
+                f'projects/{project}/secrets/agoge-guac-{self.unit_id}/versions/'
+            ):
+                allowed_email = f'agoge-guac-{self.unit_id}@{project}.iam.gserviceaccount.com'
         server_data = strip_guacamole_proxy_identities(
             server.model_dump(exclude_none=True), allowed_email=allowed_email,
         )
