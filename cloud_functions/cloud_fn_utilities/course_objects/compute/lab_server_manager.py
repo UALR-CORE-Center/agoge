@@ -5,9 +5,8 @@ from cloud_fn_utilities.gcp.dns_manager import DnsManager
 from cloud_fn_utilities.server_specific.assessment_manager import AssessmentManager
 from cloud_fn_utilities.state_managers import ServerStateManager
 from common.constants.build_constants import BuildConstants
-from common.constants.database import DbCollections, DatabaseTypes, DATABASE_NAME
+from common.constants.database import DbCollections
 from common.constants.pub_sub import PubSub
-from common.document_database import DocumentDatabaseFactory
 from common.exceptions import Conflict, NotFound, BadRequest, BaseAgogeException
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger
@@ -24,11 +23,7 @@ class LabServerManager(BaseComputeManager):
         self.env_dict = self.env.get_env()
         self.course_object = PubSub.CourseObjects.LAB_SERVER
         self.dns_manager = DnsManager(env_dict=self.env_dict)
-        self.db = DocumentDatabaseFactory.create_db_object(
-            db_type=DatabaseTypes.firestore,
-            database_name=DATABASE_NAME
-        )
-        self.state_manager = ServerStateManager()
+        self.state_manager = ServerStateManager(project_id=self.project)
         self.collection = DbCollections.SERVER
 
     def load(

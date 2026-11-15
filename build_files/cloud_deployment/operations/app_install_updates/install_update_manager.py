@@ -25,9 +25,10 @@ class InstallUpdateManager:
         agoge_app = AgogeApp()
         app_deployed = agoge_app.deploy_main_app()
         function_deployed = agoge_app.deploy_cloud_functions()
-        GuacamoleImageManager(
+        if not GuacamoleImageManager(
             project=self.project_id
-        ).create_guac_project_image()
+        ).create_guac_project_image():
+            return
         SharedLabManager().run()
 
         print(

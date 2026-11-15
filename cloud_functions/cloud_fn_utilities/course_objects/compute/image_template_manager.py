@@ -7,7 +7,7 @@ from common.constants.states import ImageStatus, ServerStates
 from common.constants.pub_sub import PubSub
 from common.constants.database import DbCollections, DATABASE_NAME, DatabaseTypes, DbOperators
 from common.document_database import DocumentDatabaseFactory, DatabaseQueries
-from common.exceptions import NotFound, BaseAgogeException, BadRequest
+from common.exceptions import NotFound, BaseAgogeException, BadRequest, OperationTimeout
 from common.models.agoge import AgogeImageModel
 from common.models.model_validators.model_validator import ModelValidator
 from common.utilities.gcp.cloud_env import CloudEnv
@@ -152,7 +152,7 @@ class ImageTemplateManager(BaseComputeManager):
                 action=str(PubSub.Actions.DELETE.value)
             )
 
-        self._update_record_status(ImageStatus.CHECKED_IN)
+        self._update_record_status(ImageStatus.CHECKED_IN, image_created=True)
 
     def check_out(self) -> None:
         """
@@ -248,15 +248,31 @@ class ImageTemplateManager(BaseComputeManager):
         if not snapshot_name:
             raise ValueError("Missing value for `latest` or `snapshot_name`. Must provide one")
 
+        snapshot = self.compute_snapshot.get(resource_name=snapshot_name, project=self.env.project)
+        expected_snapshot = f'projects/{self.env.project}/global/snapshots/{snapshot_name}'
+        if snapshot.status != 'READY' or self._compute_resource_path(snapshot.self_link) != expected_snapshot:
+            raise OperationTimeout(f'Snapshot {snapshot_name} is not ready. The existing image was retained.')
+
         # Wait for previous image to delete first to avoid any insert conflicts
         if not self.delete_image():
-            self.logger.warning(f"{self.class_name}:{self.server_name} - "
-                                f"Could not delete the existing image for server")
+            raise OperationTimeout(f'Could not delete the existing image {self.image_name}. Retry check-in.')
 
         # It is now safe to send image insert request
         self.logger.info(f"{self.class_name}:{self.server_name} - Beginning to image the server.")
-        self._create_image_from_snapshot(snapshot_name)
+        if not self._create_image_from_snapshot(snapshot.self_link):
+            raise OperationTimeout(f'Could not create image {self.image_name}. The server remains checked out.')
+        created_image = self.compute_image.get(self.image_name, project=self.env.project, fallback_to_shared=False)
+        expected_image = f'projects/{self.env.project}/global/images/{self.image_name}'
+        if created_image.status != 'READY' or self._compute_resource_path(created_image.self_link) != expected_image:
+            raise OperationTimeout(f'Image {self.image_name} is not ready in {self.env.project}. Retry check-in.')
         self.logger.info(f"{self.class_name}:{self.server_name} - Completed imaging the server.")
+        return True
+
+    @staticmethod
+    def _compute_resource_path(link: str) -> str:
+        """Extract the project-qualified path from a Compute resource link."""
+        _, separator, path = (link or '').partition('/projects/')
+        return f'projects/{path}' if separator else (link or '')
 
     def cancel(self) -> None:
         """
@@ -384,20 +400,18 @@ class ImageTemplateManager(BaseComputeManager):
 
     def _create_image_from_snapshot(
         self,
-        snapshot_name: str
+        snapshot_link: str
     ) -> bool:
         """Create a new image from a snapshot"""
         description = f'{str(self.env.project).capitalize()} production image.'
         if self.server_spec.description:
             description = f'{description} {self.server_spec.description}'
 
-        snapshot_source = self.compute_snapshot.get(resource_name=snapshot_name, project=self.env.project)
-        
         return self.compute_image.create(
             resource_name=self.image_name,
             description=description,
             source_type=ImageSource.SNAPSHOT,
-            source=snapshot_source.self_link
+            source=snapshot_link
         )
 
     def _add_disks(self):
@@ -486,13 +500,15 @@ class ImageTemplateManager(BaseComputeManager):
 
     def _update_record_status(
         self,
-        status: ImageStatus = ImageStatus.CHECKED_OUT
+        status: ImageStatus = ImageStatus.CHECKED_OUT,
+        image_created: bool = False,
     ) -> None:
         """Updates image status and state.
         Resets image record to default state if image is marked as checked-in.
 
         Args:
             status (ImageStatus): Status of current image
+            image_created (bool): A new image was created and verified in this project.
         """
         db_image = self.db.get(collection_name=self.collection, doc_id=self.server_name)
 
@@ -506,9 +522,9 @@ class ImageTemplateManager(BaseComputeManager):
             db_image['state'] = ServerStates.START.value
             db_image['in_use_by'] = None
             db_image['dns_record'] = None
-            db_image['image_exists'] = True
-
-        db_image['self_link'] = self.compute_image.self_link(self.image_name, self.env.project)
+            if image_created:
+                db_image['image_exists'] = True
+                db_image['self_link'] = self.compute_image.self_link(self.image_name, self.env.project)
 
         if ModelValidator(AgogeImageModel, log_location=self.log_name).load(db_image):
             self.db.update(collection_name=self.collection, doc_id=self.server_name, data=db_image)

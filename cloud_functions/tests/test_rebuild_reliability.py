@@ -4,12 +4,54 @@ from unittest.mock import MagicMock, call
 import pytest
 from google.api_core.exceptions import NotFound as GoogleNotFound
 
+from cloud_fn_utilities.course_objects.compute import base_compute_manager
 from cloud_fn_utilities.course_objects.compute.lab_server_manager import (
     LabServerManager,
 )
 
 from common.constants.states import ServerStates
 from common.utilities.gcp.pubsub_manager import PubSubManager
+
+
+def test_compute_managers_keep_their_loaded_server_specs_isolated(monkeypatch):
+    environment = SimpleNamespace(project="test", get_env=lambda: {"project": "test"})
+    monkeypatch.setattr(base_compute_manager, "CloudEnv", MagicMock(return_value=environment))
+    monkeypatch.setattr(base_compute_manager, "DnsManager", MagicMock())
+    monkeypatch.setattr(base_compute_manager, "PubSubManager", MagicMock())
+    monkeypatch.setattr(base_compute_manager.DocumentDatabaseFactory, "create_db_object", MagicMock())
+
+    first = base_compute_manager.BaseComputeManager(instances=False, machine_types=False)
+    second = base_compute_manager.BaseComputeManager(instances=False, machine_types=False)
+    first._load_lab_server("workout-a-proxy", {"parent_id": "workout-a", "image": "image-a"})
+    second._load_lab_server("workout-b-proxy", {"parent_id": "workout-b", "image": "image-b"})
+
+    assert first.server_spec is not second.server_spec
+    assert (first.server_spec.name, first.server_spec.image, first.server_spec.network_prefix) == (
+        "workout-a-proxy", "image-a", "workout-a",
+    )
+    assert (second.server_spec.name, second.server_spec.image, second.server_spec.network_prefix) == (
+        "workout-b-proxy", "image-b", "workout-b",
+    )
+
+
+@pytest.mark.parametrize(
+    ("image", "expected"),
+    [
+        ("image-guac-local", {"resource": "image-guac-local", "project": "tenant"}),
+        (
+            "https://www.googleapis.com/compute/v1/projects/certs/global/images/image-guac-shared",
+            {"resource": "image-guac-shared", "project": "certs", "fallback_to_shared": False},
+        ),
+    ],
+)
+def test_boot_image_lookup_honors_a_qualified_source(image, expected):
+    manager = object.__new__(LabServerManager)
+    manager.project = "tenant"
+    manager.server_spec = SimpleNamespace(image=image)
+    manager.compute_image = MagicMock()
+
+    assert manager.get_boot_image() is manager.compute_image.get.return_value
+    manager.compute_image.get.assert_called_once_with(**expected)
 
 
 def test_pubsub_msg_returns_the_publish_future():

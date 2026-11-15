@@ -22,7 +22,8 @@ class BaseStateManager:
         self,
         model,
         initial_build_id: str = None,
-        build_id: str = None
+        build_id: str = None,
+        project_id: str = None,
     ) -> None:
         self.class_name = self.__class__.__name__
         self.log_name = LoggerNames.CLOUD_FN
@@ -36,7 +37,8 @@ class BaseStateManager:
         self.db = DocumentDatabaseFactory.create_db_object(
             db_type=DatabaseTypes.firestore,
             database_name=DATABASE_NAME,
-            log_name=self.log_name
+            log_name=self.log_name,
+            project_id=project_id,
         )
         self.db_queries = DatabaseQueries(db=self.db)
         self.validator = ModelValidator
