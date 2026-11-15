@@ -24,6 +24,7 @@ from common.utilities.gcp.compute.compute_instance import ComputeInstanceAPI
 from common.utilities.gcp.compute.compute_disk import ComputeDiskAPI
 from common.utilities.gcp.compute.compute_machine_type import ComputeMachineTypesAPI
 from common.utilities.gcp.compute.compute_snapshot import ComputeSnapshotAPI
+from common.utilities.gcp.compute.image_ownership import image_source_project
 from common.utilities.gcp.compute.resources.attached_disk_resource import AttachedDiskResource
 from common.utilities.gcp.compute.resources.instance_resource import InstanceResource
 from common.utilities.gcp.pubsub_manager import PubSubManager
@@ -59,18 +60,18 @@ class BaseComputeManager:
     @dataclass
     class Server:
         """Dataclass for holding server configuration."""
-        add_disk: int
-        can_ip_forward: bool
-        delayed_start: bool
-        disk_size: int
-        image: str
-        metadata: list
-        machine_type: str
-        min_cpu_platform: str
-        nics: list
-        parent_build_type: str
-        name: str
-        tags: list
+        add_disk: int = 0
+        can_ip_forward: bool = False
+        delayed_start: bool = False
+        disk_size: Optional[int] = None
+        image: Optional[str] = None
+        metadata: Optional[list] = None
+        machine_type: Optional[str] = None
+        min_cpu_platform: Optional[str] = None
+        nics: list = field(default_factory=list)
+        parent_build_type: Optional[str] = None
+        name: Optional[str] = None
+        tags: list = field(default_factory=list)
         disks: Optional[list] = None
         parent_id: Optional[str] = None
         build_type: Optional[str] = None
@@ -119,7 +120,8 @@ class BaseComputeManager:
         self.pubsub_manager = PubSubManager(topic=PubSub.Topics.AGOGE, env_dict=self.env_dict)
         self.db = DocumentDatabaseFactory.create_db_object(
             db_type=DatabaseTypes.firestore,
-            database_name=DATABASE_NAME
+            database_name=DATABASE_NAME,
+            project_id=self.project,
         )
 
         # Enable select compute API clients
@@ -133,7 +135,7 @@ class BaseComputeManager:
         self.s = ServerStates
         self.logger = Logger(self.log_name, class_name=self.class_name)
         self.validate = ModelValidator
-        self.server_spec = self.Server
+        self.server_spec = self.Server()
         self.source_image_project = None
         self.server_name = None
         self.image_name = None
@@ -604,6 +606,16 @@ class BaseComputeManager:
         else:
             self.logger.info(f"{self.class_name}:{self.server_name} - Server is not running")
 
+    def get_boot_image(self):
+        """Resolve the server's boot image using its configured source."""
+        image = self.server_spec.image
+        source_project = image_source_project({'image': image})
+        if source_project:
+            return self.compute_image.get(
+                resource=image.rsplit('/', 1)[-1], project=source_project, fallback_to_shared=False,
+            )
+        return self.compute_image.get(resource=image, project=self.project)
+
     def _get_boot_disk(
         self,
         image_source: str = None,
@@ -615,7 +627,7 @@ class BaseComputeManager:
         """
         if not image_source:
             try:
-                image_response = self.compute_image.get(resource=self.server_spec.image, project=self.project)
+                image_response = self.get_boot_image()
             except NotFound:
                 self.logger.error(f'{self.class_name}:{self.server_name} - Error when trying to build server. '
                                   f'Cannot obtain the cloud disk for {self.server_spec.image}')

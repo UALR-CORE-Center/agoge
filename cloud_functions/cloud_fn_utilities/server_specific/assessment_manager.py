@@ -36,7 +36,8 @@ class AssessmentManager:
         self.env = CloudEnv(env_dict=env_dict) if env_dict else CloudEnv()
         self.db = DocumentDatabaseFactory.create_db_object(
             db_type=DatabaseTypes.firestore,
-            database_name=DATABASE_NAME
+            database_name=DATABASE_NAME,
+            project_id=self.env.project,
         )
         self.script_repository = (f"gs://{self.env.project}_{Buckets.BUILD_SPEC_BUCKET_SUFFIX}/"
                                   f"{Buckets.Folders.STARTUP_SCRIPTS.value}")
