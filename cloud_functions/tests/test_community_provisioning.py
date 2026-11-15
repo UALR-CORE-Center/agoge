@@ -8,7 +8,9 @@ import pytest
 
 from common.constants.states import ServerStates, UnitStates, WorkoutStates
 from common.constants.pub_sub import PubSub
+from common.exceptions import BadRequest, NotFound
 from common.models.agoge import NicModel, RouteModel, ServerModel
+from common.utilities.timestamps import Timestamps
 from cloud_functions.cloud_fn_utilities.course_objects.unit.community_unit import CommunityUnit
 from cloud_functions.cloud_fn_utilities.course_objects.unit.unit_dhcp_service import UnitDHCP
 from cloud_functions.cloud_fn_utilities.course_objects.workout.community_workout import CommunityWorkout
@@ -956,6 +958,131 @@ def test_queued_start_is_ignored_after_an_idle_stop_claim_replaces_it():
     gateway.start(community_start_claim=start_token)
 
     gateway._start_server.assert_not_called()
+
+
+def test_last_student_can_stop_a_shared_gateway_with_an_expired_queued_start():
+    from cloud_functions.cloud_fn_utilities.course_objects.compute.lab_server_manager import LabServerManager
+
+    name, cancelled = 'unit-12345-wireguard', 'stale-start'
+    database = _TransactionalDatabase(records={name: {
+        'state': ServerStates.STARTING.value,
+        'community_start_claim': {'token': cancelled, 'owner': 'student-a', 'expires': 100},
+    }})
+    workout = _gateway_claim_workout(database, 'student-a')
+    with patch.object(Timestamps, 'get_current_timestamp_utc', return_value=101):
+        token = workout._CommunityWorkout__claim_shared_server_stop(name)
+    assert database.records[name]['state'] == ServerStates.STOPPING.value
+    assert database.records[name]['community_start_claim'] is None
+    assert database.records[name]['community_stop_claim']['token'] == token
+
+    gateway = object.__new__(LabServerManager)
+    gateway.db, gateway.server_name, gateway.logger = database, name, Mock()
+    gateway._start_lab_server = Mock()
+    gateway.start(community_start_claim=cancelled)
+    gateway._start_lab_server.assert_not_called()
+
+    gateway._managed_wireguard = Mock(return_value=False)
+    gateway._wireguard_endpoint_id = Mock(return_value=None)
+    gateway.compute_instance = SimpleNamespace(get=Mock(side_effect=[
+        SimpleNamespace(status='STAGING'), SimpleNamespace(status='RUNNING'),
+    ]))
+    gateway._get_instance_status = Mock(return_value='TERMINATED')
+    gateway._stop_server = Mock(side_effect=lambda: database.records[name].update(
+        state=ServerStates.STOPPED.value))
+    with patch('cloud_functions.cloud_fn_utilities.course_objects.compute.lab_server_manager.time.sleep') as sleep:
+        gateway.stop(community_stop_claim=token)
+    sleep.assert_called_once_with(5)
+    gateway._stop_server.assert_called_once_with()
+    assert database.records[name]['community_stop_claim']['completed'] is True
+
+
+@pytest.mark.parametrize('provider_error, expected_error', [
+    (NotFound('missing'), BadRequest),
+    (PermissionError('denied'), PermissionError),
+])
+def test_recovered_stop_reports_provider_errors_before_cleanup(provider_error, expected_error):
+    from cloud_functions.cloud_fn_utilities.course_objects.compute.lab_server_manager import LabServerManager
+
+    name, token = 'unit-12345-wireguard', 'recovered-stop'
+    record = {
+        'state': ServerStates.STOPPING.value,
+        'community_stop_claim': {'token': token, 'recovering_start': True, 'completed': False},
+    }
+    database = _TransactionalDatabase(records={name: copy.deepcopy(record)})
+    gateway = object.__new__(LabServerManager)
+    gateway.db, gateway.server_name, gateway.logger = database, name, Mock()
+    gateway.compute_instance = SimpleNamespace(get=Mock(side_effect=provider_error))
+    gateway._managed_wireguard = Mock()
+    gateway._stop_server = Mock()
+
+    with pytest.raises(expected_error, match='missing' if expected_error is BadRequest else 'denied'):
+        gateway.stop(community_stop_claim=token)
+
+    gateway.compute_instance.get.assert_called_once_with(resource_name=name)
+    gateway._managed_wireguard.assert_not_called()
+    gateway._stop_server.assert_not_called()
+    assert database.records[name] == record
+
+
+def test_active_start_worker_protects_its_claim_after_the_queue_lease_expires():
+    from cloud_functions.cloud_fn_utilities.course_objects.compute.lab_server_manager import LabServerManager
+
+    name, token = 'unit-12345-wireguard', 'current-start'
+    database = _TransactionalDatabase(records={name: {
+        'state': ServerStates.STARTING.value,
+        'community_start_claim': {'token': token, 'owner': 'student-a', 'expires': 100},
+    }})
+    workout = _gateway_claim_workout(database, 'student-a')
+    gateway = object.__new__(LabServerManager)
+    gateway.db, gateway.server_name, gateway.logger = database, name, Mock()
+
+    def start(*, start_guard):
+        # The callback started before the queue lease expired. A duplicate
+        # event and a competing stop must both leave the worker alone.
+        with patch.object(Timestamps, 'get_current_timestamp_utc', return_value=110):
+            gateway.start(community_start_claim=token)
+            decision = database.transaction(workout._CommunityWorkout__claim_shared_server_stop_transaction,
+                                            server_name=name, now=110)
+            assert decision == 'await_shared_start'
+            start_guard()
+        return True
+
+    gateway._start_lab_server = Mock(side_effect=start)
+    with patch.object(Timestamps, 'get_current_timestamp_utc', return_value=90):
+        gateway.start(community_start_claim=token)
+
+    gateway._start_lab_server.assert_called_once()
+    assert database.records[name]['state'] == ServerStates.RUNNING.value
+    assert database.records[name]['community_start_claim']['worker_expires'] is None
+
+
+def test_start_worker_losing_its_lease_does_not_replace_a_new_stop():
+    from cloud_functions.cloud_fn_utilities.course_objects.compute.lab_server_manager import LabServerManager
+
+    name, token = 'unit-12345-wireguard', 'old-start'
+    database = _TransactionalDatabase(records={name: {
+        'state': ServerStates.STARTING.value,
+        'community_start_claim': {'token': token, 'owner': 'student-a', 'expires': 100},
+    }})
+    workout = _gateway_claim_workout(database, 'student-a')
+    gateway = object.__new__(LabServerManager)
+    gateway.db, gateway.server_name, gateway.logger = database, name, Mock()
+    start_vm = Mock()
+
+    def resume(*, start_guard):
+        with patch.object(Timestamps, 'get_current_timestamp_utc', return_value=900):
+            assert workout._CommunityWorkout__claim_shared_server_stop(name)
+            start_guard()
+            start_vm()
+        return True
+
+    gateway._start_lab_server = Mock(side_effect=resume)
+    with patch.object(Timestamps, 'get_current_timestamp_utc', return_value=90):
+        gateway.start(community_start_claim=token)
+
+    start_vm.assert_not_called()
+    assert database.records[name]['state'] == ServerStates.STOPPING.value
+    assert database.records[name]['community_start_claim'] is None
 
 
 def test_instructor_stop_remains_unconditional_without_an_automatic_claim():

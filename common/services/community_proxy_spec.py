@@ -79,7 +79,7 @@ def ensure_community_proxy(unit, dns_suffix, project):
         nics.append(NicModel(network=network_name, subnet_name=subnet_name,
                             internal_ip=address, external_nat=index == 0))
     proxy = ServerModel(name=COMMUNITY_PROXY_NAME, community_server=True, community_proxy=True,
-        hidden=True, image=f"projects/{project}/global/images/{BuildConstants.MachineImages.GUACAMOLE_SSL.format(project=project)}",
+        hidden=True, image=BuildConstants.MachineImages.GUACAMOLE_PROJECT_IMAGE.format(project=project),
         machine_type=BuildConstants.GoogleMachineTypes.E2_MEDIUM.value,
         hostname=f'{unit.id}-display.{str(dns_suffix).strip(".")}',
         nics=nics, tags=['student-entry', f'{unit.id}-student-entry'], human_interaction=[],

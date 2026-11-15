@@ -578,7 +578,7 @@ class BaseComputeManager:
     def _resource_tail(value) -> str:
         return str(value or '').rstrip('/').rsplit('/', 1)[-1]
 
-    def _start_server(self, finalize_state: bool = True) -> bool:
+    def _start_server(self, finalize_state: bool = True, *, start_guard=None) -> bool:
         """
         Starts a server based on the specification in the database document with name server_name.
         A guacamole server is also registered with DNS.
@@ -590,6 +590,8 @@ class BaseComputeManager:
         if existing_state == self.s.RUNNING.value:
             return True
 
+        if start_guard:
+            start_guard()
         self.state_manager.state_transition(self.s.STARTING)
         i = 0
         start_success = False
@@ -609,10 +611,12 @@ class BaseComputeManager:
                 # handler ran. A TERMINATED instance still needs the API call.
                 start_in_progress = False
 
-            try:
-                if self.server_spec.delayed_start:
-                    time.sleep(30)
+            if self.server_spec.delayed_start:
+                time.sleep(30)
+            if start_guard:
+                start_guard()
 
+            try:
                 if self.compute_instance.start(resource_name=self.server_name, wait=True):
                     start_success = True
                 else:
@@ -654,6 +658,8 @@ class BaseComputeManager:
                 i += 1
                 continue
 
+        if start_guard:
+            start_guard()
         if start_success:
             # WireGuard DNS is handled after an ownership-checked endpoint stage
             # in LabServerManager.start().
@@ -751,13 +757,22 @@ class BaseComputeManager:
 
         """
         if not image_source:
-            image = self._explicit_boot_image_reference(self.server_spec.image)
+            source = self.server_spec.image
+            shared_project = BuildConstants.SharedResourceProjects.MAIN_SHARED_RESOURCE_PROJECT
+            legacy_display_image = BuildConstants.MachineImages.GUACAMOLE_SSL.format(project=shared_project)
+            if (source == legacy_display_image
+                    and self.server_name == f'{self.parent_build_id}-display-guacamole-server'
+                    and self.server_spec.guacamole_startup_script):
+                # Older generated records stored this bare name. Rebuilds should
+                # use the same tenant image as newly created display proxies.
+                source = BuildConstants.MachineImages.GUACAMOLE_PROJECT_IMAGE.format(project=self.project)
+            image = self._explicit_boot_image_reference(source)
             if image is None:
                 try:
-                    image_response = self.compute_image.get(resource=self.server_spec.image, project=self.project)
+                    image_response = self.compute_image.get(resource=source, project=self.project)
                 except NotFound:
                     self.logger.error(f'{self.class_name}:{self.server_name} - Error when trying to build server. '
-                                      f'Cannot obtain the cloud disk for {self.server_spec.image}')
+                                      f'Cannot obtain the cloud disk for {source}')
                     raise
                 image = image_response.self_link
         else:

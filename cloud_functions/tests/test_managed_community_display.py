@@ -129,7 +129,9 @@ def test_managed_proxy_record_and_browser_connections_use_provisioned_addresses(
     proxy.server_specs = workout.servers
     proxy.server_name = 'display-guacamole-server'
     proxy.build_type = BuildConstants.BuildType.WORKOUT
-    proxy.env = SimpleNamespace(main_app_url='https://app.example.edu', parent_dns_suffix='.example.edu')
+    proxy.env = SimpleNamespace(
+        project='tenant-project', main_app_url='https://app.example.edu', parent_dns_suffix='.example.edu',
+    )
     proxy.db_mask = Mock()
     proxy.guac = Mock()
     proxy.guac.prepare_guac_connection.return_value = {
@@ -142,6 +144,7 @@ def test_managed_proxy_record_and_browser_connections_use_provisioned_addresses(
     assert record['nics'][0]['internal_ip'] == '10.20.0.3'
     assert record['tags'] == ['student-entry', f'{unit.id}-student-entry']
     assert record['no_service_account'] is True
+    assert record['image'] == 'projects/tenant-project/global/images/image-guac-tenant-project'
     assert db.records[workout.id]['proxy_connections'][0]['internal_ip_address'] == '10.20.0.2'
     assert db.records[workout.id]['proxy_connections'][0]['url'].endswith('/guacamole/0')
     assert proxy.guac.prepare_guac_connection.call_args.kwargs['server_ip'] == '10.20.0.2'

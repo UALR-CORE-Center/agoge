@@ -141,6 +141,7 @@ class BuildConstants:
 
     class MachineImages:
         GUACAMOLE_SSL = "image-guac-{project}"
+        GUACAMOLE_PROJECT_IMAGE = f"projects/{{project}}/global/images/{GUACAMOLE_SSL}"
         FORTIMANAGER = "image-fortimanager"
         AGENT = 'image-cybergym-kali'
 

@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from common.models.agoge import HumanInteractionModel, NicModel, ServerModel
+from cloud_fn_utilities.course_objects.compute.base_compute_manager import BaseComputeManager
 from cloud_fn_utilities.server_specific.guacamole.display_proxy import DisplayProxy
 from cloud_fn_utilities.server_specific.guacamole.guacamole_configuration import GuacamoleConfiguration
 
@@ -120,3 +121,26 @@ def test_display_proxy_records_the_resolved_target_per_connection(managed_tls):
         }]
         assert script.index('BEGIN AGOGE GUACAMOLE TLS') < script.index('agoge-prepare-guacamole-swarm')
         assert 'docker service scale guacamole_nginx=1' in script
+    else:
+        assert server_record['image'] == 'projects/tenant-project/global/images/image-guac-tenant-project'
+
+
+@pytest.mark.parametrize('stored_image, expected_image', [
+    ('image-guac-agoge-shared-resources',
+     'projects/test-dev-787001/global/images/image-guac-test-dev-787001'),
+    ('projects/shared-images/global/images/image-guac-tls-shared-images',
+     'projects/shared-images/global/images/image-guac-tls-shared-images'),
+])
+def test_rebuild_display_proxy_uses_tenant_or_explicit_boot_image(stored_image, expected_image):
+    manager = object.__new__(BaseComputeManager)
+    manager.project = 'test-dev-787001'
+    manager.env = SimpleNamespace(project=manager.project, zone='us-central1-a')
+    manager.parent_build_id = 'abcdefghij'
+    manager.server_name = f'{manager.parent_build_id}-display-guacamole-server'
+    manager.server_spec = SimpleNamespace(image=stored_image, guacamole_startup_script='#!/bin/bash')
+    manager.compute_image = MagicMock()
+
+    disk = manager._get_boot_disk()
+
+    assert disk.initialize_params.source_image == expected_image
+    manager.compute_image.get.assert_not_called()

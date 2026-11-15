@@ -160,9 +160,7 @@ class DisplayProxy:
         tls_secret = env.get('guacamole_tls_secret')
         tls_enabled = tls_secret and not self.managed_community_unit
         tls_image = guacamole_tls_boot_image(env) if tls_enabled else None
-        image = tls_image or BuildConstants.MachineImages.GUACAMOLE_SSL.format(
-            project=BuildConstants.SharedResourceProjects.MAIN_SHARED_RESOURCE_PROJECT,
-        )
+        image = tls_image or BuildConstants.MachineImages.GUACAMOLE_PROJECT_IMAGE.format(project=self.env.project)
         guac_startup_script = self.guac.get_guac_startup_script(proxy_configs, start_nginx=True) if tls_image else (
             self.guac.get_guac_startup_script(proxy_configs)
         )

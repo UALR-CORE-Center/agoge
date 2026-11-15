@@ -15,6 +15,8 @@ gcloud compute images describe image-guac-base --project=agoge-shared-resources
 
 Creating a Firestore `image` document only registers the template; it does not create the underlying Compute Engine image. The temporary VM and the resulting customized image still belong to the tenant project. A missing or inaccessible base image stops setup with the source project's name in the error.
 
+Lab Guacamole proxies normally boot from `projects/<tenant>/global/images/image-guac-<tenant>`. A project enrolled in managed TLS can select a clean Guacamole image explicitly with `guacamole-tls reconcile --image`.
+
 Older setup logs included full Firestore document contents, including the Guacamole startup script's credentials. If a log contains a private key or passwords, replace/revoke the exposed DNS service-account key and update `google_dns_service_key` in the tenant's Secret Manager. Rotate the exposed Guacamole/MySQL credentials there as well, coordinate changes with any existing servers, and rerun this step to regenerate the startup script and project image. Updated Firestore reads log document IDs only; the temporary DNS credential file is created with mode `0600`.
 
 For details about the server configuration, see the deployment [README](/build_files/server_config/guacamole/README.md).

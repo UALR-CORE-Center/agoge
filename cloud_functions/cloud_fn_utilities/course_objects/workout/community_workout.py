@@ -594,7 +594,9 @@ class CommunityWorkout(BaseWorkout):
             # was started by another lifecycle path. Let that operation finish.
             if not claim_owner:
                 return False
-            if claim_owner != self.workout_id and claim_expires > now:
+            if (claim.get('worker_expires') or 0) > now or (
+                claim_owner != self.workout_id and claim_expires > now
+            ):
                 return False
 
         token = claim.get('token') if claim.get('owner') == self.workout_id else None
@@ -656,21 +658,32 @@ class CommunityWorkout(BaseWorkout):
         if any(item.to_dict().get('state') in (WorkoutStates.RUNNING.value, WorkoutStates.STARTING.value)
                for item in query.get(transaction=transaction)):
             return None
-        if server.get('state') == ServerStates.STARTING.value:
-            return 'await_shared_start'
-        if server.get('state') == ServerStates.STOPPED.value:
+        state = server.get('state')
+        recovering_start = state == ServerStates.STARTING.value
+        if recovering_start:
+            start = server.get('community_start_claim') or {}
+            expires = start.get('expires')
+            # Wait for a fresh claim or an executing callback. Only replace a
+            # known expired claim; an unclaimed STARTING may be an admin start.
+            if (not start.get('token') or not expires or expires > now
+                    or (start.get('worker_expires') or 0) > now):
+                return 'await_shared_start'
+        if state == ServerStates.STOPPED.value:
             return None
         existing = server.get('community_stop_claim') or {}
-        if server.get('state') == ServerStates.STOPPING.value:
+        if state == ServerStates.STOPPING.value:
             return existing.get('token') if existing.get('owner') == self.workout_id else None
-        if server.get('state') not in (ServerStates.RUNNING.value, ServerStates.STARTING.value):
+        if state != ServerStates.RUNNING.value and not recovering_start:
             raise RuntimeError(f'Shared server {server_name} cannot be automatically stopped from its current state')
         token = uuid4().hex
+        stop = {'owner': self.workout_id, 'token': token,
+                'expires': now + self.SHARED_START_CLAIM_SECONDS, 'completed': False}
+        if recovering_start:
+            stop['recovering_start'] = True
         transaction.set(reference, {
             'state': ServerStates.STOPPING.value,
             'state_timestamp': datetime.now(timezone.utc).isoformat(),
-            'community_stop_claim': {'owner': self.workout_id, 'token': token,
-                                     'expires': now + self.SHARED_START_CLAIM_SECONDS, 'completed': False},
+            'community_stop_claim': stop,
             'community_start_claim': None,
         }, merge=True)
         return token

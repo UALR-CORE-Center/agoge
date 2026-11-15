@@ -1,6 +1,8 @@
+from datetime import datetime, timezone
 import math
 import time
 from typing import Optional
+from uuid import uuid4
 
 from google.api_core.exceptions import NotFound as GoogleNotFound
 
@@ -40,10 +42,18 @@ from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.compute.resources.attached_disk_resource import AttachedDiskResource
 from common.utilities.gcp.compute.resources.disks_resource import DiskResource
 from common.utilities.gcp.compute.resources.network_interface_resource import NetworkInterfaceResource
+from common.utilities.timestamps import Timestamps
 from common.utilities.wireguard_firewall import has_public_wireguard_ingress
 
 
+class _SupersededCommunityStart(Exception):
+    pass
+
+
 class LabServerManager(BaseComputeManager):
+    # Longer than the deployed control function's request timeout. Recheck and
+    # renew the lease before provider requests and endpoint publication.
+    _COMMUNITY_START_WORKER_SECONDS = 600
     # BUILD must never resurrect a VM that an older lifecycle already stopped
     # or retired. START is valid from STOPPED, but not while teardown is in
     # progress or after the server reached a terminal state.
@@ -164,52 +174,130 @@ class LabServerManager(BaseComputeManager):
             raise
 
     def start(self, *, community_start_claim=None) -> None:
-        if community_start_claim is not None and not self._community_claim_is_current('start', community_start_claim):
+        if community_start_claim is None:
+            self._start_lab_server()
             return
+        worker = uuid4().hex
+        if not self._update_start_worker(community_start_claim, worker, phase='acquire'):
+            self.logger.info(f'Ignoring obsolete or already executing automatic community start for {self.server_name}')
+            return
+
+        def guard():
+            if not self._update_start_worker(community_start_claim, worker, phase='renew'):
+                raise _SupersededCommunityStart()
+
+        completed = False
+        try:
+            completed = self._start_lab_server(start_guard=guard)
+        except _SupersededCommunityStart:
+            self.logger.info(f'Ignoring superseded automatic community start for {self.server_name}')
+        finally:
+            self._update_start_worker(community_start_claim, worker, phase='release', completed=completed)
+
+    def _start_lab_server(self, *, start_guard=None) -> bool:
         # A retry after DNS publication failed must not issue another start for
         # an instance that is already running. Reuse the VM and retry only the
         # public endpoint dependencies.
         current_state = self.state_manager.get_state()
         if self._wireguard_action_is_blocked("START", current_state):
-            return
+            return False
 
         # Validate endpoint lifecycle before Compute Engine receives a start
         # request. Ownership checks alone do not catch stale deliveries from the
         # same Unit after its endpoint entered releasing/released.
         self._require_wireguard_provisionable()
 
-        managed_started = False
+        started = False
         if current_state != self.s.RUNNING.value:
             if self._managed_wireguard():
+                if start_guard:
+                    start_guard()
                 self._prepare_wireguard_bootstrap(for_start=True)
-                managed_started = self._start_server(finalize_state=False)
+            if start_guard:
+                started = self._start_server(finalize_state=False, start_guard=start_guard)
+            elif self._managed_wireguard():
+                started = self._start_server(finalize_state=False)
             else:
                 self._start_server()
         if (
             self._wireguard_endpoint_id()
-            and (self.state_manager.get_state() == self.s.RUNNING.value or managed_started)
+            and (self.state_manager.get_state() == self.s.RUNNING.value or started)
         ):
             try:
+                if start_guard:
+                    start_guard()
                 if self._managed_wireguard():
                     self._refresh_wireguard_external_ip()
                 else:
                     self.primary_external_ip = self._reserved_external_ip()
+                if start_guard:
+                    start_guard()
                 # Stage is also an atomic ownership check. BaseComputeManager
                 # intentionally skips WireGuard DNS so this check happens first.
                 self._stage_wireguard_endpoint()
                 self._ensure_dns_record()
+                if start_guard:
+                    start_guard()
                 self._activate_wireguard_endpoint()
-                if managed_started:
+                if started and not start_guard:
                     self.state_manager.state_transition(self.s.RUNNING)
+            except _SupersededCommunityStart:
+                raise
             except Exception:
+                if start_guard:
+                    start_guard()
                 if self._managed_wireguard():
                     self.state_manager.state_transition(self.s.BROKEN)
                 self._mark_wireguard_endpoint_error()
                 raise
+        return started
+
+    def _update_start_worker(self, token, worker, *, phase, completed=False):
+        reference = self.db.db.collection(DbCollections.SERVER.value).document(self.server_name)
+
+        def update(transaction):
+            snapshot = reference.get(transaction=transaction)
+            record = snapshot.to_dict() if snapshot.exists else {}
+            claim = record.get('community_start_claim') or {}
+            now = Timestamps.get_current_timestamp_utc()
+            if not token or claim.get('token') != token:
+                return False
+            worker_expires = claim.get('worker_expires') or 0
+            starting = record.get('state') == ServerStates.STARTING.value
+            if phase == 'acquire':
+                expires = claim.get('expires')
+                if not starting or worker_expires > now or (expires and expires <= now):
+                    return False
+            elif claim.get('worker') != worker:
+                return False
+            elif phase == 'renew' and (not starting or worker_expires <= now):
+                return False
+
+            if phase == 'release':
+                changes = {'community_start_claim': {**claim, 'worker': None, 'worker_expires': None}}
+                # State and ownership change in the same transaction. A stale
+                # callback cannot overwrite a later stop or restart.
+                if completed and starting and worker_expires > now:
+                    changes.update(state=ServerStates.RUNNING.value,
+                                   state_timestamp=datetime.fromtimestamp(now, timezone.utc).isoformat())
+            else:
+                changes = {'community_start_claim': {
+                    **claim, 'worker': worker, 'worker_expires': now + self._COMMUNITY_START_WORKER_SECONDS,
+                }}
+            transaction.set(reference, changes, merge=True)
+            return True
+
+        return self.db.transaction(update)
 
     def stop(self, *, community_stop_claim=None) -> None:
-        if community_stop_claim is not None and not self._community_claim_is_current('stop', community_stop_claim):
-            return
+        if community_stop_claim is not None:
+            claim = self._current_community_claim('stop', community_stop_claim)
+            if not claim:
+                return
+            if claim.get('recovering_start'):
+                self._wait_for_abandoned_cloud_start()
+                if not self._community_claim_is_current('stop', community_stop_claim):
+                    return
         endpoint = None
         if self._managed_wireguard():
             self._require_wireguard_provisionable()
@@ -245,6 +333,22 @@ class LabServerManager(BaseComputeManager):
                 time.sleep(5)
             self._complete_community_stop(community_stop_claim)
 
+    def _wait_for_abandoned_cloud_start(self):
+        deadline = time.monotonic() + 150
+        while True:
+            try:
+                instance = self.compute_instance.get(resource_name=self.server_name)
+            except (NotFound, GoogleNotFound) as error:
+                raise BadRequest(
+                    f'Cannot recover shared server {self.server_name}: its VM is missing. Rebuild the community lab.'
+                ) from error
+            status = str(self._resource_field(instance, 'status', '') or '').upper()
+            if status in {'RUNNING', 'TERMINATED'}:
+                return
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f'Compute Engine did not settle before stopping {self.server_name}')
+            time.sleep(5)
+
     def _complete_community_stop(self, token):
         reference = self.db.db.collection(DbCollections.SERVER.value).document(self.server_name)
 
@@ -258,6 +362,9 @@ class LabServerManager(BaseComputeManager):
         self.db.transaction(complete)
 
     def _community_claim_is_current(self, action, token):
+        return bool(self._current_community_claim(action, token))
+
+    def _current_community_claim(self, action, token):
         record = self.db.get(collection_name=DbCollections.SERVER, doc_id=self.server_name) or {}
         claim = record.get(f'community_{action}_claim') or {}
         if action == 'stop':
@@ -272,7 +379,7 @@ class LabServerManager(BaseComputeManager):
                    and expected_state)
         if not current:
             self.logger.info(f'Ignoring obsolete automatic community {action} for {self.server_name}')
-        return current
+        return claim if current else None
 
     def delete(
         self,
