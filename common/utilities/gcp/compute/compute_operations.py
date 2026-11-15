@@ -13,6 +13,7 @@ from google.cloud.compute_v1 import (
     WaitZoneOperationRequest
 )
 from googleapiclient.discovery import Resource
+from requests.exceptions import Timeout as RequestsTimeout
 
 from common.constants.google import ClientType, OperationType
 from common.utilities.gcp.cloud_logger import LoggerNames, Logger
@@ -90,7 +91,9 @@ class ComputeOperationsAPI:
         while (remaining := deadline - time.monotonic()) > 0:
             try:
                 operation = client.wait(request=request, retry=None, timeout=min(30, remaining))
-            except (DeadlineExceeded, ServiceUnavailable):
+            except (DeadlineExceeded, ServiceUnavailable, RequestsTimeout):
+                # A REST wait can time out while Compute still owns the operation.
+                # Continue polling the same operation within the caller's deadline.
                 pass
             except GoogleAPICallError as error:
                 failure = classify_compute_api_error(error, action='wait', **context)

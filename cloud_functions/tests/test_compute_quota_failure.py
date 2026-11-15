@@ -4,6 +4,7 @@ import pytest
 from google.api_core.exceptions import Forbidden, TooManyRequests
 from google.cloud.compute_v1 import Error, ErrorDetails, Errors, Network, Operation, QuotaExceededInfo
 from google.rpc import error_details_pb2
+from requests.exceptions import ReadTimeout
 
 from common.constants.google import OperationType
 from common.exceptions import BaseAgogeException, ResourceExhausted
@@ -126,11 +127,15 @@ def test_done_operation_keeps_stockout_code_for_zone_fallback():
         operations.wait('operation-test')
 
 
-def test_nonterminal_compute_operations_stop_at_deadline(monkeypatch):
+@pytest.mark.parametrize('transport_timeout', [False, True], ids=['operation-running', 'rest-read-timeout'])
+def test_nonterminal_compute_operations_stop_at_deadline(monkeypatch, transport_timeout):
     operations = ComputeOperationsAPI('hosting-project', 'us-central1', 'us-central1-a')
     operations.client = Mock()
     client = operations.client.return_value
-    client.wait.return_value = Operation(status=Operation.Status.RUNNING)
+    if transport_timeout:
+        client.wait.side_effect = ReadTimeout
+    else:
+        client.wait.return_value = Operation(status=Operation.Status.RUNNING)
     now = 0
 
     def sleep(seconds):

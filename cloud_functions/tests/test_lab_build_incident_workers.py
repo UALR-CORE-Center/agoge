@@ -3,6 +3,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from google.cloud.compute_v1 import Instance, Operation
+from requests.exceptions import ReadTimeout
 
 from cloud_fn_utilities import build_execution as execution_module
 from cloud_fn_utilities.build_execution import (
@@ -17,6 +19,7 @@ from common.constants.pub_sub import PubSub
 from common.constants.states import ServerStates, UnitStates, WorkoutStates
 from common.exceptions import NotFound
 from common.utilities.build_incidents import BuildIncidents, BuildQuotaHold
+from common.utilities.gcp.compute.compute_instance import ComputeInstanceAPI
 from common.utilities.gcp.compute.quota_failure import ComputeQuotaFailure
 
 
@@ -235,6 +238,33 @@ def test_pending_create_is_reused_and_cleanup_waits_for_provider(monkeypatch):
     wait_for_pending_creates(db, DbCollections.UNIT, 'unit-a')
     with pytest.raises(BuildSuperseded):
         execution.update(DbCollections.UNIT, 'unit-a', {'state': UnitStates.READY.value})
+
+
+def test_tracked_vm_create_retries_rest_wait_without_another_insert(monkeypatch):
+    db = _database()
+    server_id = 'workout-a-server'
+    execution = BuildExecution(db, DbCollections.WORKOUT, 'workout-a', 'unit-a', 'workout-attempt', server_id)
+    client = ComputeInstanceAPI('example-project', 'us-central1', 'us-central1-a')
+    client.instance_client = Mock()
+    client.instance_client.insert.return_value = Operation(name='operation-vm-create')
+    operations = Mock()
+    operations.wait.side_effect = [ReadTimeout('Compute read timed out'), Operation(status=Operation.Status.DONE)]
+    client.cloud_ops_mgr.client = Mock(return_value=operations)
+    monkeypatch.setattr('common.utilities.gcp.compute.compute_operations.time.sleep', Mock())
+
+    with build_execution(execution):
+        assert tracked_compute_create(
+            client, server_id, OperationType.ZONE, server_id=server_id,
+            instance_resource=Instance(name=server_id),
+        )
+
+    client.instance_client.insert.assert_called_once()
+    requests = [call.kwargs['request'] for call in operations.wait.call_args_list]
+    assert [(request.operation, request.project, request.zone) for request in requests] == [
+        ('operation-vm-create', 'example-project', 'us-central1-a'),
+        ('operation-vm-create', 'example-project', 'us-central1-a'),
+    ]
+    assert db.get(DbCollections.WORKOUT, 'workout-a')['pending_compute_creates'] == {}
 
 
 def test_confirmed_throttle_is_retried_and_recorded_without_opening_project_hold(monkeypatch):
