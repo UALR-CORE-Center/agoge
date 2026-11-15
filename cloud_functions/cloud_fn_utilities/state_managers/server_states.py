@@ -8,8 +8,8 @@ from .base_state_manager import BaseStateManager
 
 
 class ServerStateManager(BaseStateManager):
-    def __init__(self):
-        super().__init__(model=ServerModel)
+    def __init__(self, project_id: str = None):
+        super().__init__(model=ServerModel, project_id=project_id)
         self.s = self.server_states
         self.collection = DbCollections.SERVER
 
