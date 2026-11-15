@@ -72,7 +72,8 @@ def test_out_of_range_alias_index_raises(guac):
         guac.prepare_guac_connection(_rdp_alias(), server_ip='10.1.1.10', ip_aliases=['10.1.1.20'])
 
 
-def test_display_proxy_records_the_resolved_target_per_connection():
+@pytest.mark.parametrize('managed_tls', [False, True])
+def test_display_proxy_records_the_resolved_target_per_connection(managed_tls):
     server = ServerModel(
         name='ad-lab-host',
         image='image-ad-lab-host',
@@ -86,6 +87,12 @@ def test_display_proxy_records_the_resolved_target_per_connection():
             patch(f'{PROXY}.ComputeManagerFactory'), patch(f'{GUAC}.CloudEnv') as guac_env, patch(f'{GUAC}.Logger'):
         cloud_env.return_value.main_app_url = 'app.example.com'
         cloud_env.return_value.parent_dns_suffix = '.example.com'
+        cloud_env.return_value.project = 'tenant-project'
+        tls_secret = 'projects/shared-project/secrets/tls'
+        tls_image = 'projects/tenant-project/global/images/guacamole-clean'
+        cloud_env.return_value.get_env.return_value = {
+            'guacamole_tls_secret': tls_secret, 'guacamole_tls_image': tls_image,
+        } if managed_tls else {}
         guac_env.return_value.parent_dns_suffix = '.example.com'
         db = db_factory.create_db_object.return_value
         proxy = DisplayProxy('abcdefghij', build_model, env_dict={'x': 1})
@@ -103,3 +110,13 @@ def test_display_proxy_records_the_resolved_target_per_connection():
     assert "'port', '5903'" in script
     assert "'port', '22'" in script
     assert db.update.call_count == 2
+    assert ('BEGIN AGOGE GUACAMOLE TLS' in script) == managed_tls
+    if managed_tls:
+        assert server_record['image'] == tls_image
+        assert server_record['metadata']['agoge-guacamole-tls-secret'] == tls_secret
+        assert server_record['service_accounts'] == [{
+            'email': 'agoge-guac-tls@tenant-project.iam.gserviceaccount.com',
+            'scopes': ['https://www.googleapis.com/auth/cloud-platform'],
+        }]
+        assert script.index('BEGIN AGOGE GUACAMOLE TLS') < script.index('agoge-prepare-guacamole-swarm')
+        assert 'docker service scale guacamole_nginx=1' in script

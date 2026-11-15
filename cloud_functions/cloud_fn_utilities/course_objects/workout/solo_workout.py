@@ -4,6 +4,7 @@ from common.constants.pub_sub import PubSub
 from common.constants.states import ServerStates
 from common.utilities.timestamps import Timestamps
 from common.models.agoge import ServerModel, UnitModel, WorkoutModel
+from common.services.guacamole_tls_startup import strip_guacamole_proxy_identities
 
 from cloud_fn_utilities.server_specific.guacamole.display_proxy import DisplayProxy
 from cloud_fn_utilities.build_execution import (
@@ -117,7 +118,7 @@ class SoloWorkout(BaseWorkout):
                 if self._configure_direct_connect_server(server, server_name):
                     self.update_record(doc_id=self.workout_id, data=self.workout, update_keys=['servers'])
 
-                server_data = server.model_dump(exclude_none=True)
+                server_data = strip_guacamole_proxy_identities(server.model_dump(exclude_none=True))
                 if execution := current_build_execution():
                     execution.update(DbCollections.SERVER, server_name, server_data)
                 else:
@@ -455,7 +456,7 @@ class SoloWorkout(BaseWorkout):
 
             self._configure_direct_connect_server(server, server_name)
 
-            server_record = server.model_dump()
+            server_record = strip_guacamole_proxy_identities(server.model_dump())
             self.db.update(
                 collection_name=DbCollections.SERVER,
                 doc_id=server_name,

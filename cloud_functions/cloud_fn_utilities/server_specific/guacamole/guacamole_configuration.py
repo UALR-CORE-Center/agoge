@@ -2,6 +2,7 @@ import random
 import string
 import textwrap
 from typing import Dict, List, Optional
+from uuid import uuid4
 
 from common.constants.build_constants import BuildConstants
 from common.models.agoge import HumanInteractionModel
@@ -18,23 +19,21 @@ class GuacSQL:
 
     guac_startup_begin = textwrap.dedent("""\
         #!/bin/bash
+        export GUAC_HOST="{guac_host}"
+        export GUAC_DOMAIN="{guac_domain}"
+        {prepare_swarm}
         
         # Checks for an existing sentinel file (/etc/guac_init_done), which indicates the script has already run.
         if [ -f /etc/guac_init_done ]; then
+            {resume_nginx}
             echo "Guacamole initialization script has already run. Exiting..."
             exit 0
         fi
-        
-        # --------------------------------------------------------------------------------
-        # Step 1: Set the environment variable for the hostname
-        # --------------------------------------------------------------------------------
-        export GUAC_HOST="{guac_host}"
-        export GUAC_DOMAIN="{guac_domain}"
-        
+
         # --------------------------------------------------------------------------------
         # Step 2: Reset the NGINX so it uses the dynamic DNS hostname 
         # --------------------------------------------------------------------------------
-        docker service update --force guacamole_nginx
+        {reload_nginx}
         
         # --------------------------------------------------------------------------------
         # Step 3: Wait for MySQL to be Ready.
@@ -54,7 +53,7 @@ class GuacSQL:
         # Step 4: Prepare the dynamic guacamole configuration through SQL statements.
         # --------------------------------------------------------------------------------
         SQL_FILE="/opt/guacamole/scripts/create_guacamole_user_connections.sql"
-        cat <<'EOF' > "$SQL_FILE"
+        cat <<'{sql_delimiter}' > "$SQL_FILE"
     """)
 
     guac_startup_user_add = textwrap.dedent("""\
@@ -111,7 +110,7 @@ class GuacSQL:
     """)
 
     guac_startup_end = textwrap.dedent("""\
-        EOF
+        SQL_DELIMITER
 
         # Find the running db container created by the swarm service
         DB_CID="$(docker ps -q --filter name=guacamole_db | head -n 1)"
@@ -128,10 +127,11 @@ class GuacSQL:
         fi
 
         # Apply SQL by piping it into mysql running inside the db container
-        docker exec -i "$DB_CID" mysql -u root -p"$MYSQL_ROOT_PASSWORD" guacamole_db < "$SQL_FILE"
+        docker exec -i "$DB_CID" mysql -u root -p"$MYSQL_ROOT_PASSWORD" guacamole_db < "$SQL_FILE" || exit 1
 
         # Only mark success after mysql command succeeds
         touch /etc/guac_init_done
+        GUAC_START_NGINX
     """)
 
 
@@ -243,7 +243,7 @@ class GuacamoleConfiguration:
         # Aliases are stored as bare IPs; tolerate a CIDR suffix rather than hand Guacamole an unusable host
         return aliases[connection.alias_index].split('/')[0]
 
-    def get_guac_startup_script(self, connections: List[Dict[str, str]]) -> str:
+    def get_guac_startup_script(self, connections: List[Dict[str, str]], *, start_nginx: bool = False) -> str:
         """Builds a Guacamole startup script (SQL) from a list of connection dictionaries.
 
         The script can be run against the Guacamole database to initialize user
@@ -264,9 +264,15 @@ class GuacamoleConfiguration:
             guac_domain = self.env.dns_suffix.lstrip(".")
 
         # Begin script
+        sql_delimiter = 'AGOGE_GUAC_SQL_' + uuid4().hex
+        scale_nginx = 'docker service scale guacamole_nginx=1 || exit 1' if start_nginx else ''
         startup_script = GuacSQL.guac_startup_begin.format(
-            guac_host=guac_host,
-            guac_domain=guac_domain
+            guac_host=f'{guac_host}.{guac_domain}' if start_nginx else guac_host,
+            guac_domain=guac_domain,
+            sql_delimiter=sql_delimiter,
+            prepare_swarm='agoge-prepare-guacamole-swarm "$GUAC_HOST" "$GUAC_DOMAIN" || exit 1' if start_nginx else '',
+            resume_nginx=scale_nginx,
+            reload_nginx='' if start_nginx else 'docker service update --force guacamole_nginx',
         )
 
         # Append connection details
@@ -314,7 +320,9 @@ class GuacamoleConfiguration:
             startup_script += GuacSQL.guac_startup_join_connection_user
 
         # End script
-        startup_script += GuacSQL.guac_startup_end
+        startup_script += GuacSQL.guac_startup_end.replace('SQL_DELIMITER', sql_delimiter).replace(
+            'GUAC_START_NGINX', scale_nginx,
+        )
 
         self.logger.debug("Final Guacamole startup script generated.")
         return startup_script

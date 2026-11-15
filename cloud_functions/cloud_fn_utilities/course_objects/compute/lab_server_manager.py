@@ -24,6 +24,9 @@ from common.constants.pub_sub import PubSub
 from common.constants.states import ServerStates
 from common.document_database import DocumentDatabaseFactory
 from common.exceptions import Conflict, NotFound, BadRequest, BaseAgogeException
+from common.services.guacamole_tls_startup import (
+    GUACAMOLE_TLS_METADATA_KEYS, GUACAMOLE_TLS_SECRET_METADATA_KEY, is_guacamole_tls_reader,
+)
 from common.services.wireguard_endpoint import WireGuardEndpointRegistry
 from common.utilities.ctf_plant_contract import (
     LINUX_LOADER,
@@ -418,7 +421,8 @@ class LabServerManager(BaseComputeManager):
         self.server_spec.disks = disks
 
     def _add_metadata(self):
-        if getattr(self.server_spec, 'community_proxy', False):
+        using_tls_reader = self._using_guacamole_tls_reader()
+        if getattr(self.server_spec, 'community_proxy', False) and not using_tls_reader:
             # Generated shared proxies carry only the repository-owned bootstrap.
             # Assessment scripts must never run under the signing-key identity.
             return
@@ -426,6 +430,25 @@ class LabServerManager(BaseComputeManager):
             # Managed gateways run only the repository bootstrap. Catalog or
             # assessment scripts must not replace its security policy.
             self.server_spec.metadata = self._managed_wireguard_metadata
+            return
+        if using_tls_reader:
+            tls_metadata = self.server_spec.metadata
+            if isinstance(tls_metadata, dict) and isinstance(tls_metadata.get('items'), list):
+                tls_metadata = {item['key']: item['value'] for item in tls_metadata['items']}
+            if not (
+                self.server_name == f'{self.parent_build_id}-display-guacamole-server'
+                and isinstance(tls_metadata, dict)
+                and tls_metadata.get(GUACAMOLE_TLS_SECRET_METADATA_KEY)
+                and tls_metadata[GUACAMOLE_TLS_SECRET_METADATA_KEY] == self.env_dict.get('guacamole_tls_secret')
+                and getattr(self.server_spec, 'guacamole_startup_script', None)
+            ):
+                raise BadRequest('The Guacamole TLS reader is reserved for generated display proxies')
+            # The proxy has access to certificate key material. Keep catalog,
+            # assessment and CTF code out of its metadata.
+            self.server_spec.metadata = {'items': [
+                {'key': key, 'value': value} for key, value in tls_metadata.items()
+                if key in GUACAMOLE_TLS_METADATA_KEYS
+            ] + [{'key': 'startup-script', 'value': self.server_spec.guacamole_startup_script}]}
             return
         metadata = {'items': []}
         if self.server_spec.metadata:
@@ -457,6 +480,10 @@ class LabServerManager(BaseComputeManager):
             self._add_nested_direct_connect(metadata['items'])
         self._add_ctf_loaders(metadata['items'])
         self.server_spec.metadata = metadata
+
+    def _using_guacamole_tls_reader(self) -> bool:
+        accounts = getattr(self.server_spec, 'service_accounts', None) or []
+        return any(is_guacamole_tls_reader(account.get('email')) for account in accounts)
 
     def _is_linux_nested_host(self) -> bool:
         """A Linux server with an ip_aliases NIC, or one the unit's CTF block names as a nested_guests parent."""

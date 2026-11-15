@@ -78,6 +78,31 @@ def test_retry_reuses_supplied_reference_and_does_not_create_new_key():
     assert fields['guacamole_secret_version_name'] == SECRET
 
 
+def test_managed_tls_impersonates_only_the_reader_and_preserves_the_json_auth_identity():
+    iam, accounts = iam_mock()
+    tls_secret = 'projects/shared-project/secrets/tls'
+    tls_image = 'projects/tenant-project/global/images/guacamole-clean'
+    env = {**ENV, 'guacamole_tls_secret': tls_secret, 'guacamole_tls_image': tls_image}
+    reader = f'agoge-guac-tls@{PROJECT}.iam.gserviceaccount.com'
+    with patch.object(module, 'CommunityGuacamoleService') as store:
+        store.return_value.ensure_key.return_value = SECRET
+        fields = module.prepare_community_proxy(UNIT, env, iam=iam)
+    assert fields['image'] == tls_image
+    assert fields['service_accounts'][0]['email'] == EMAIL
+    assert fields['guacamole_secret_version_name'] == SECRET
+    metadata = {item['key']: item['value'] for item in fields['metadata']['items']}
+    assert metadata['agoge-guacamole-tls-secret'] == tls_secret
+    assert metadata['agoge-guacamole-tls-reader'] == reader
+    assert 'BEGIN AGOGE GUACAMOLE TLS' in metadata['startup-script']
+    scope = accounts.setIamPolicy.call_args.kwargs
+    assert scope['resource'] == f'projects/{PROJECT}/serviceAccounts/{reader}'
+    assert scope['body']['policy']['etag'] == 'preserve-me'
+    assert {'role': 'roles/iam.serviceAccountTokenCreator', 'members': [f'serviceAccount:{EMAIL}']} in (
+        scope['body']['policy']['bindings']
+    )
+    store.return_value.grant_proxy_access.assert_called_once_with(UNIT, SECRET, EMAIL)
+
+
 def test_cleanup_deletes_only_owned_secret_and_dedicated_proxy_identity():
     iam, accounts = iam_mock()
     with patch.object(module, 'CommunityGuacamoleService') as store:

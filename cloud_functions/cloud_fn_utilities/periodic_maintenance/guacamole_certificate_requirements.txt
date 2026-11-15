@@ -1,0 +1,6 @@
+certbot>=5.2.2,<6
+certbot-dns-google>=5.2.2,<6
+cryptography>=46,<47
+functions-framework>=3.5,<4
+google-cloud-secret-manager>=2,<3
+google-cloud-storage>=2.16,<3

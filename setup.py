@@ -36,8 +36,17 @@ def main():
       2. Managing gcloud account and environment selection.
       3. Displaying and processing menu options for various setup tasks.
     """
+    if sys.argv[1:2] == ['guacamole-tls']:
+        from cloud_deployment.operations.guacamole_image_management.shared_tls_setup import cli
+
+        cli(sys.argv[2:])
+        return
+
     # Parse arguments
-    parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
+    parser = ArgumentParser(
+        formatter_class=ArgumentDefaultsHelpFormatter,
+        epilog='Run setup.py guacamole-tls --help for shared certificate deployment and migration.',
+    )
     parser.add_argument(
         "-s",
         "--suppress",

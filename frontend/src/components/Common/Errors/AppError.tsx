@@ -2,7 +2,7 @@ import React from "react";
 import { useLocation, useRouteError, useNavigate } from "react-router-dom";
 import { Box, Button, Typography } from "@mui/material";
 import { KeyboardReturn } from "@mui/icons-material";
-import { AgogeLogo } from "../Logo";
+import { CoreWordmark } from "../Logo";
 import { URL_BASE } from "../../../router/urls";
 import HomeIcon from "@mui/icons-material/Home";
 
@@ -72,7 +72,7 @@ const AppError: React.FC = () => {
                     maxWidth: 500,
                 }}
             >
-                <AgogeLogo contained={false} />
+                <CoreWordmark />
                 <Typography
                     mt={0}
                     variant={"h6"}

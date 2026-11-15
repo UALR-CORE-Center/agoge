@@ -1,5 +1,8 @@
 # Guacamole project image setup
 
+For the shared Cloud Function, Secret Manager certificate delivery, and clean
+proxy images, see [Shared Guacamole certificate renewal](/docs/operations/guacamole-tls.md).
+
 Use **Server Images & Build Specs → Refresh/Create guacamole image and certificate.** in `python setup.py` to retry this step independently of the application deployments.
 
 The Guacamole base image must already exist in Compute Engine as `image-guac-base`. Setup resolves it from `default_server_image_project`, falling back to `parent_project`, then the tenant project when neither setting is present. The account running setup must be able to read and use that image. Setup validates the image before reading startup secrets, replacing the Firestore image record, or creating the VM.

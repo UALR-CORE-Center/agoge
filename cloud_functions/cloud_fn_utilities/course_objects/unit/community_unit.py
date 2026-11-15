@@ -10,6 +10,7 @@ from common.constants.states import ServerStates, WorkoutStates
 from common.models.agoge import UnitModel, ServerModel
 from common.services.wireguard_endpoint import WireGuardEndpointRegistry
 from common.services.community_proxy_spec import community_proxy, ensure_community_proxy
+from common.services.guacamole_tls_startup import strip_guacamole_proxy_identities
 from common.utilities.wireguard_firewall import has_public_wireguard_ingress
 from cloud_fn_utilities.build_execution import build_message_attempt, ensure_current_build, wait_for_pending_creates
 
@@ -199,6 +200,7 @@ class CommunityUnit(BaseUnit):
         })
         bootstrap = prepare_community_proxy(self.unit_id, self.env_dict,
             secret_version_name=proxy.guacamole_secret_version_name)
+        proxy.image = bootstrap.get('image', proxy.image)
         proxy.guacamole_secret_version_name = bootstrap['guacamole_secret_version_name']
         proxy.metadata = bootstrap['metadata']
         proxy.service_accounts = bootstrap.get('service_accounts') or bootstrap.get('serviceAccounts')
@@ -650,9 +652,17 @@ class CommunityUnit(BaseUnit):
 
         # Omit template nulls so a retry cannot erase state written by the
         # asynchronous LabServer build. Firestore update() merges these fields.
-        server_data = server.model_dump(exclude_none=True)
+        project = self.env_dict.get('project')
+        allowed_email = None
+        if (server.name == 'display-guacamole-server' and server.community_proxy and server.community_server
+                and (server.guacamole_secret_version_name or '').startswith(
+                    f'projects/{project}/secrets/agoge-guac-{self.unit_id}/versions/')):
+            allowed_email = f'agoge-guac-{self.unit_id}@{project}.iam.gserviceaccount.com'
+        server_data = strip_guacamole_proxy_identities(
+            server.model_dump(exclude_none=True), allowed_email=allowed_email,
+        )
         if getattr(server, 'community_proxy', False) and server.service_accounts is not None:
-            server_data['serviceAccounts'] = server.service_accounts
+            server_data['serviceAccounts'] = server_data['service_accounts']
         for runtime_field in ('state', 'state_timestamp', 'shutoff_timestamp'):
             if runtime_field in existing_server:
                 server_data[runtime_field] = existing_server[runtime_field]

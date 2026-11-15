@@ -9,6 +9,10 @@ from common.document_database import DocumentDatabaseFactory, DatabaseMask
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.models.agoge import WorkoutModel, UnitModel, ServerModel, NicModel, ProxyConnectionModel
+from common.services.guacamole_tls_startup import (
+    GUACAMOLE_TLS_SCOPE, guacamole_tls_boot_image, guacamole_tls_metadata, guacamole_tls_reader_email,
+    install_guacamole_tls_in_startup,
+)
 
 from cloud_fn_utilities.build_execution import current_build_execution, ensure_current_build
 from cloud_fn_utilities.course_objects.compute.factory import ComputeManagerFactory
@@ -151,13 +155,30 @@ class DisplayProxy:
                 self.db.update(self.collection, self.build_id, update_mask)
 
         # Generate DisplayProxy server object
-        guac_startup_script = self.guac.get_guac_startup_script(proxy_configs)
+        hostname = f"{self.build_id}-display{self.env.parent_dns_suffix}"
+        env = getattr(self, 'env_dict', {})
+        tls_secret = env.get('guacamole_tls_secret')
+        tls_enabled = tls_secret and not self.managed_community_unit
+        tls_image = guacamole_tls_boot_image(env) if tls_enabled else None
+        image = tls_image or BuildConstants.MachineImages.GUACAMOLE_SSL.format(
+            project=BuildConstants.SharedResourceProjects.MAIN_SHARED_RESOURCE_PROJECT,
+        )
+        guac_startup_script = self.guac.get_guac_startup_script(proxy_configs, start_nginx=True) if tls_image else (
+            self.guac.get_guac_startup_script(proxy_configs)
+        )
+        service_accounts = None
+        metadata = None
+        if tls_enabled:
+            guac_startup_script = install_guacamole_tls_in_startup(
+                guac_startup_script, tls_secret, hostname, self.env.parent_dns_suffix,
+            )
+            service_accounts = [{'email': guacamole_tls_reader_email(self.env.project), 'scopes': [GUACAMOLE_TLS_SCOPE]}]
+            metadata = guacamole_tls_metadata(tls_secret, hostname)
         server_model = ServerModel(
             parent_id=self.build_id,
             parent_build_type=self.build_type,
             name=self.server_name,
-            image=BuildConstants.MachineImages.GUACAMOLE_SSL.format(
-                project=BuildConstants.SharedResourceProjects.MAIN_SHARED_RESOURCE_PROJECT),
+            image=image,
             tags=['student-entry', f"{self.managed_community_unit or self.build_id}-student-entry"],
             machine_type=BuildConstants.GoogleMachineTypes.E2_MEDIUM.value,
             nics=[
@@ -169,8 +190,10 @@ class DisplayProxy:
                 )
             ],
             build_type=self.build_type,
-            hostname=f"{self.build_id}-display{self.env.parent_dns_suffix}",
-            guacamole_startup_script=guac_startup_script
+            hostname=hostname,
+            guacamole_startup_script=guac_startup_script,
+            service_accounts=service_accounts,
+            metadata=metadata,
         )
         server_record = server_model.model_dump(exclude_none=True)
         if self.managed_community_unit:

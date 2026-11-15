@@ -4,7 +4,7 @@ import React, { FormEvent, useState } from 'react';
 import { Navigate, Form } from "react-router-dom";
 import { URL_STUDENT_WORKOUT } from "../../router/urls";
 import { workoutService } from "../../services/Workout/workout.service";
-import { AgogeLogo } from "../Common/Logo";
+import { CoreWordmark } from "../Common/Logo";
 
 const JoinWorkout: React.FC = () => {
     const theme = useTheme();
@@ -93,7 +93,7 @@ const JoinWorkout: React.FC = () => {
                 width: '100%',
                 maxWidth: 500,
             }}>
-                <AgogeLogo contained={false}/>
+                <CoreWordmark />
                 <Box id="claim-container" sx={{ textAlign: 'center', maxWidth: 500, mx: 'auto' }}>
                     {loading ? (
                         <Box id="loader" role="status" aria-live="polite" sx={{ textAlign: 'center' }}>

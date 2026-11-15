@@ -2,6 +2,8 @@
 import re
 import shlex
 
+from .guacamole_tls_startup import render_guacamole_tls_install
+
 
 COMMUNITY_GUAC_AGENT = r'''#!/usr/bin/env python3
 import base64
@@ -144,11 +146,11 @@ server {
 """.replace('GUAC_HOST', host).replace('GUAC_DOMAIN', domain)
 
 
-def certificate_usable(certificate):
-    """Present and valid for at least another day; images can outlive their certificate."""
+def certificate_usable(certificate, minimum_lifetime=86400):
+    """Check that the current certificate has enough time before expiration."""
     if not (certificate / 'fullchain.pem').is_file() or not (certificate / 'privkey.pem').is_file():
         return False
-    return command(['openssl', 'x509', '-checkend', '86400', '-noout',
+    return command(['openssl', 'x509', '-checkend', str(minimum_lifetime), '-noout',
                     '-in', str(certificate / 'fullchain.pem')], check=False).returncode == 0
 
 
@@ -173,7 +175,10 @@ def configure():
             command(['docker', 'swarm', 'leave', '--force'])
         command(['docker', 'swarm', 'init', '--advertise-addr', address])
     certificate = Path('/etc/letsencrypt/live') / domain
-    if not certificate_usable(certificate):
+    managed_tls = (ROOT / 'managed-tls').is_file()
+    if not certificate_usable(certificate, 0 if managed_tls else 86400):
+        if managed_tls:
+            raise ValueError('The managed Guacamole TLS certificate is unavailable')
         # The project image should carry a valid wildcard certificate. Without one,
         # issue a certificate for this host only (HTTP-01 on port 80), stored
         # under the same lineage name so the nginx paths do not change. This
@@ -246,7 +251,9 @@ if __name__ == '__main__':
 '''
 
 
-def render_community_guacamole_startup(secret_version_name, unit_id, dns_suffix):
+def render_community_guacamole_startup(
+    secret_version_name, unit_id, dns_suffix, *, tls_secret=None, tls_reader=None,
+):
     """Render code and immutable references, never the JSON signing key."""
     if not isinstance(unit_id, str) or not re.fullmatch(r'[a-z]{10}', unit_id):
         raise ValueError('Invalid community lab ID')
@@ -259,9 +266,18 @@ def render_community_guacamole_startup(secret_version_name, unit_id, dns_suffix)
         raise ValueError('Invalid community proxy DNS suffix')
     host = unit_id + '-display.' + domain
     root = '/etc/agoge-community-guacamole'
+    managed_tls = []
+    if tls_secret:
+        if not tls_reader:
+            raise ValueError('A Guacamole TLS reader is required for the community proxy')
+        managed_tls = [
+            'touch ' + root + '/managed-tls',
+            render_guacamole_tls_install(tls_secret, host, domain, impersonate=tls_reader),
+        ]
     return '\n'.join([
         '#!/bin/bash', 'set -euo pipefail', 'umask 077',
         'install -d -m 0700 ' + root,
+        *managed_tls,
         'printf %s ' + shlex.quote(secret_version_name) + ' > ' + root + '/secret-version',
         'printf %s ' + shlex.quote(host) + ' > ' + root + '/host',
         'printf %s ' + shlex.quote(domain) + ' > ' + root + '/domain',

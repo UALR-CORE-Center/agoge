@@ -26,13 +26,14 @@ import {
     Box,
 } from '@mui/material';
 import React from 'react';
-import {useNavigate, useLocation, Link} from 'react-router-dom';
+import { useNavigate, useLocation, Link, matchPath } from 'react-router-dom';
 
 import { useAuthContext } from '../../../context/AuthContext';
 import { THEME_MODE_CYCLE, ThemeMode, useThemeMode } from '../../../context/ThemeModeContext';
 import { useCtfEnabled } from "../../../hooks/useCtfEnabled";
 import {useLocalStorage} from "../../../hooks/useLocalStorage";
 import {
+    URL_TEACHER_BASE,
     URL_TEACHER_CTF_BASE,
     URL_TEACHER_HOME,
     URL_TEACHER_SERVERS,
@@ -63,6 +64,10 @@ const AgogeAppBar: React.FC<AgogeAppBarProps> = ({ onSidebarToggle }) => {
     const {setItem} = useLocalStorage();
     const navigate = useNavigate();
     const location = useLocation();
+    const permissions = agogeUser.user?.permissions;
+    const showCoreEmblem = Boolean(firebaseUser.user && (permissions?.instructor || permissions?.admin) && (
+        matchPath(`${URL_TEACHER_BASE}/*`, location.pathname) || matchPath(`${URL_ADMIN_BASE}/*`, location.pathname)
+    ));
     const { mode: themeMode, cycleMode } = useThemeMode();
     const nextThemeMode = THEME_MODE_CYCLE[(THEME_MODE_CYCLE.indexOf(themeMode) + 1) % THEME_MODE_CYCLE.length];
     const themeModeLabel = `Theme: ${THEME_MODE_DISPLAY[themeMode].label} (switch to ${THEME_MODE_DISPLAY[nextThemeMode].label})`;
@@ -184,15 +189,26 @@ const AgogeAppBar: React.FC<AgogeAppBarProps> = ({ onSidebarToggle }) => {
             component="nav"
             sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}
         >
-            <Toolbar sx={{ px: { xs: 1, sm: 2, md: 3 } }}>
+            <Toolbar sx={{
+                px: { xs: 1, sm: 2, md: 3 },
+                ...(showCoreEmblem && {
+                    '& > .MuiIconButton-root:not([aria-haspopup])': {
+                        px: { xs: 0.5, sm: 1 },
+                    },
+                }),
+            }}>
                 <Typography
                     variant="h6"
                     noWrap
                     component={Link}
                     to={URL_TEACHER_HOME}
+                    aria-label={showCoreEmblem ? 'Agoge · CORE Center' : undefined}
                     sx={{
-                        mr: 2,
-                        display: { xs: 'none', md: 'flex' },
+                        mr: { xs: 0.5, sm: 2 },
+                        display: { xs: showCoreEmblem ? 'flex' : 'none', md: 'flex' },
+                        alignItems: 'center',
+                        gap: 1,
+                        flexShrink: 0,
                         fontFamily: 'monospace',
                         fontWeight: 700,
                         letterSpacing: '.3rem',
@@ -201,7 +217,23 @@ const AgogeAppBar: React.FC<AgogeAppBarProps> = ({ onSidebarToggle }) => {
                         cursor: 'pointer',
                     }}
                 >
-                    {AppUiObjectNames.APP_NAME.toUpperCase()}
+                    {showCoreEmblem && (
+                        <Box
+                            component="img"
+                            src={`${import.meta.env.BASE_URL}images/core-emblem.png`}
+                            alt=""
+                            sx={{
+                                width: { xs: 28, md: 34 },
+                                height: { xs: 28, md: 34 },
+                                bgcolor: '#fff',
+                                borderRadius: 1,
+                                display: 'block',
+                            }}
+                        />
+                    )}
+                    <Box component="span" sx={{ display: { xs: 'none', md: 'inline' } }}>
+                        {AppUiObjectNames.APP_NAME.toUpperCase()}
+                    </Box>
                 </Typography>
                 <Box sx={{ flexGrow: 1 }} />
                 {firebaseUser ? (

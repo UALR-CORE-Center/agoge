@@ -17,6 +17,7 @@ from common.constants.database import DatabaseTypes, DATABASE_NAME, DbCollection
 from common.constants.pub_sub import PubSub
 from common.constants.build_constants import BuildConstants
 from common.models.agoge import AgogeImageModel
+from .clean_guacamole_image import publish_clean_guacamole_image
 
 
 class GuacamoleImageManager:
@@ -159,6 +160,16 @@ class GuacamoleImageManager:
         Returns:
             bool: True if the image creation process completes successfully, False otherwise.
         """
+        environment = getattr(self.env, 'env_dict', {})
+        if environment.get('guacamole_tls_secret'):
+            image = environment.get('guacamole_tls_image')
+            if image:
+                print(f"Managed Guacamole TLS is enabled. Proxies use the configured image {image}.")
+            else:
+                print("Managed Guacamole TLS is enabled. Existing proxy images remain the migration source. "
+                      "Use setup.py guacamole-tls build-image to prepare a clean image.")
+            return True
+
         server_name = f"guac-{self.env.project}"
         # Resolve the source before reading startup secrets or replacing the
         # Firestore record. A record in Firestore does not create a GCE image.
@@ -203,6 +214,15 @@ class GuacamoleImageManager:
         print("🎉 Guacamole project image setup completed successfully.")
 
         return True
+
+    def create_guac_tls_image(self, image_name: str | None = None) -> str:
+        """Prepare an opt-in proxy image without any Let’s Encrypt material."""
+        return publish_clean_guacamole_image(
+            self.project,
+            self.env.zone,
+            self._resolve_base_image(),
+            image_name or f'image-guac-tls-{self.project}',
+        )
 
     def _resolve_base_image(self) -> str:
         source_project = (

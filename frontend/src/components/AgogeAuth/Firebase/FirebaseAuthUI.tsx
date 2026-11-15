@@ -7,7 +7,7 @@ import 'firebaseui/dist/firebaseui.css';
 
 import {useAuthContext} from "../../../context/AuthContext";
 import {useLocalStorage} from "../../../hooks/useLocalStorage";
-import { AgogeLogo } from "../../Common/Logo";
+import { CoreWordmark } from "../../Common/Logo";
 import { auth } from "./firebaseConfig";
 
 
@@ -84,7 +84,7 @@ export const FirebaseAuthUI: React.FC = () => {
             width: '100%',
             maxWidth: 500,
         }}>
-            <AgogeLogo contained={false} />
+            <CoreWordmark />
             <Box id="login_container" sx={{ textAlign: 'center', maxWidth: 500, mx: 'auto' }}>
                 <Box id="firebaseui-auth-container"></Box>
                 <Box id="loader" sx={{ display: 'none', textAlign: 'center' }}>

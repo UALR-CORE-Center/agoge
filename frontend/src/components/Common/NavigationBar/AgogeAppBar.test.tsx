@@ -4,7 +4,7 @@ import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { URL_TEACHER_CTF_BASE } from '../../../router/urls';
+import { URL_ADMIN_BASE, URL_STUDENT_WORKOUT, URL_TEACHER_CTF_BASE, URL_TEACHER_HOME } from '../../../router/urls';
 import AgogeAppBar from './AgogeAppBar';
 
 let ctfEnabled = false;
@@ -35,13 +35,13 @@ const openTeachersMenu = () => {
     fireEvent.click(screen.getByRole('button', { name: 'Teachers' }));
 };
 
-describe('AgogeAppBar CTF menu item', () => {
-    afterEach(() => {
-        cleanup();
-        ctfEnabled = false;
-        permissions = { instructor: true };
-    });
+afterEach(() => {
+    cleanup();
+    ctfEnabled = false;
+    permissions = { instructor: true };
+});
 
+describe('AgogeAppBar CTF menu item', () => {
     it('links to the CTF events list when CTF is enabled', () => {
         ctfEnabled = true;
         openTeachersMenu();
@@ -66,5 +66,32 @@ describe('AgogeAppBar CTF menu item', () => {
 
         expect(screen.queryByRole('button', { name: 'Teachers' })).toBeNull();
         expect(screen.queryByText('CTF Events')).toBeNull();
+    });
+});
+
+describe('AgogeAppBar CORE branding', () => {
+    it.each([
+        { pathname: URL_TEACHER_HOME, permission: 'instructor' },
+        { pathname: URL_ADMIN_BASE, permission: 'admin' },
+    ])('shows the emblem on a $permission page below the tenant basename', ({ pathname, permission }) => {
+        permissions = { [permission]: true };
+        render(
+            <MemoryRouter basename="/ualr" initialEntries={[`/ualr${pathname}`]}>
+                <AgogeAppBar onSidebarToggle={vi.fn()} />
+            </MemoryRouter>
+        );
+
+        const brand = screen.getByRole('link', { name: 'Agoge · CORE Center' });
+        expect(brand.querySelector('img')?.getAttribute('src')).toBe('/images/core-emblem.png');
+    });
+
+    it('keeps the staff emblem off a student workout viewed by an instructor', () => {
+        render(
+            <MemoryRouter initialEntries={[`${URL_STUDENT_WORKOUT}/12345`]}>
+                <AgogeAppBar onSidebarToggle={vi.fn()} />
+            </MemoryRouter>
+        );
+
+        expect(screen.queryByRole('link', { name: 'Agoge · CORE Center' })).toBeNull();
     });
 });

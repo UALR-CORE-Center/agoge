@@ -1,11 +1,12 @@
 import zoneinfo
 
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, UTC
 from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from cloud_fn_utilities.periodic_maintenance.hourly_maintenance import HourlyMaintenance
 from cloud_fn_utilities.periodic_maintenance.quarter_hourly_maintenance import QuarterHourlyMaintenance
 from cloud_fn_utilities.periodic_maintenance.daily_maintenance import DailyMaintenance
+from cloud_fn_utilities.periodic_maintenance.maintenance_schedule import is_daily_maintenance_time
 
 
 class MaintenanceHandler:
@@ -50,12 +51,7 @@ class MaintenanceHandler:
             DailyMaintenance(env_dict=self.env_dict, debug=self.debug).run()
 
     def _is_midnight(self, now):
-        midnight = datetime(now.year, now.month, now.day, 0, 0, tzinfo=self._get_timezone())
-        start = midnight - timedelta(minutes=5)
-        end = midnight + timedelta(minutes=15)
-        if start <= now <= end:
-            return True
-        return False
+        return is_daily_maintenance_time(now)
 
     def _get_localized_time(self):
         now = datetime.now(UTC)

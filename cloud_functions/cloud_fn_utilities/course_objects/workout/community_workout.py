@@ -11,6 +11,7 @@ from common.constants.states import ServerStates, WorkoutStates
 from common.exceptions import BadRequest
 from common.utilities.timestamps import Timestamps
 from common.models.agoge import WorkoutModel, UnitModel, ServerModel, ProxyConnectionModel
+from common.services.guacamole_tls_startup import strip_guacamole_proxy_identities
 
 from cloud_fn_utilities.build_execution import build_message_attempt, ensure_current_build, wait_for_pending_creates
 
@@ -414,7 +415,7 @@ class CommunityWorkout(BaseWorkout):
         # distinct addresses and overwrite the same server document.
         server_data = self.unit_dhcp.claim_server_leases(
             server_name=server_name,
-            server_data=server.model_dump(exclude_none=True),
+            server_data=strip_guacamole_proxy_identities(server.model_dump(exclude_none=True)),
         )
         for nic in server_data.get('nics') or []:
             self.logger.info(

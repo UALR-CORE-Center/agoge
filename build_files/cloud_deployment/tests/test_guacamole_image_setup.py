@@ -52,6 +52,20 @@ def test_shared_image_source_and_tenant_vm_identity_are_kept_separate(setup):
     manager.image_manager.check_in.assert_called_once_with()
 
 
+@pytest.mark.parametrize('clean_image', [None, 'projects/shared-images/global/images/image-guac-tls-new'])
+def test_managed_tls_skips_legacy_wildcard_issuance(setup, clean_image):
+    manager, client = setup
+    manager.env.env_dict = {
+        'guacamole_tls_secret': 'projects/parent-project/secrets/guacamole-tls-example-com',
+        'guacamole_tls_image': clean_image,
+    }
+    assert manager.create_guac_project_image() is True
+    client.get.assert_not_called()
+    manager._get_guac_startup_script.assert_not_called()
+    manager.db.insert.assert_not_called()
+    manager.image_manager.check_out.assert_not_called()
+
+
 @pytest.mark.parametrize('parent, expected', [('parent-project', 'parent-project'), (None, 'tenant-project')])
 def test_image_project_fallbacks(setup, parent, expected):
     manager, client = setup

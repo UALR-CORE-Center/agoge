@@ -1,44 +1,16 @@
-import {Paper} from "@mui/material";
+import {Box} from "@mui/material";
 import React from 'react';
 
-interface LogoProps {
-    contained?: boolean;
-}
-
-const AgogeLogo: React.FC<LogoProps> = (
-    {contained=true}
-) => {
-
-    const logo = () => {
-        return (
-            <img
-                src={`${import.meta.env.BASE_URL}images/Agoge-Logo-Color@2x.png`}
-                alt="Agoge Logo"
-                style={{
-                    width: '100%',
-                    borderRadius: '6px',
-                    padding: '4px'
-                }}
-            />
-        )
-    }
-    const renderBordered = () => {
-        return (
-            <Paper
-                variant={"elevation"}
-            >
-                {logo()}
-            </Paper>
-        )
-    }
-    return (
-        contained ? (
-            renderBordered()
-        ) : (
-            logo()
-        )
-    );
-};
+const CoreWordmark: React.FC = () => (
+    <Box
+        component="img"
+        src={`${import.meta.env.BASE_URL}images/core-wordmark.png`}
+        alt="Cyberspace Operations Research and Education (CORE) Center"
+        width={1024}
+        height={602}
+        sx={{ display: 'block', mx: 'auto', width: '100%', maxWidth: 340, height: 'auto' }}
+    />
+);
 
 const GuacamoleLogo: React.FC = () => {
     return (
@@ -56,5 +28,5 @@ const GuacamoleLogo: React.FC = () => {
     );
 };
 
-export { AgogeLogo, GuacamoleLogo };
+export { CoreWordmark, GuacamoleLogo };
 
