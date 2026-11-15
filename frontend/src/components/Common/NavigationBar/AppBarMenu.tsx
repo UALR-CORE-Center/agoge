@@ -84,7 +84,7 @@ const AppBarMenu: React.FC<AppBarMenuProps> = (
                     </Box>
                 )}
                 {renderIconText(iconText, textOverflow)}
-                <ArrowDropDownIcon fontSize="small" />
+                <ArrowDropDownIcon fontSize="small" sx={icon ? { display: { xs: 'none', sm: 'block' } } : undefined} />
             </IconButton>
             <Menu
                 {...menuProps}

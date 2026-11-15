@@ -4,16 +4,16 @@ import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { URL_ADMIN_BASE, URL_STUDENT_WORKOUT, URL_TEACHER_CTF_BASE, URL_TEACHER_HOME } from '../../../router/urls';
+import { URL_ADMIN_BASE, URL_STUDENT_WORKOUT, URL_TEACHER_CTF_BASE, URL_TEACHER_UNIT } from '../../../router/urls';
 import AgogeAppBar from './AgogeAppBar';
 
 let ctfEnabled = false;
-let permissions: { [key: string]: boolean } = { instructor: true };
+let permissions: Record<string, boolean> | null = { instructor: true };
 
 vi.mock('../../../context/AuthContext', () => ({
     useAuthContext: () => ({
-        firebaseUser: { user: { displayName: 'Game Master', email: 'gm@example.edu' } },
-        agogeUser: { user: { uid: 'gm', email: 'gm@example.edu', permissions, settings: {}, timezone: 'UTC' } },
+        firebaseUser: { user: permissions && { displayName: 'Game Master', email: 'gm@example.edu' } },
+        agogeUser: { user: permissions && { uid: 'gm', email: 'gm@example.edu', permissions, settings: {}, timezone: 'UTC' } },
         logout: vi.fn(),
     }),
 }));
@@ -71,10 +71,13 @@ describe('AgogeAppBar CTF menu item', () => {
 
 describe('AgogeAppBar CORE branding', () => {
     it.each([
-        { pathname: URL_TEACHER_HOME, permission: 'instructor' },
+        { pathname: `${URL_TEACHER_UNIT}/12345`, permission: 'instructor' },
         { pathname: URL_ADMIN_BASE, permission: 'admin' },
-    ])('shows the emblem on a $permission page below the tenant basename', ({ pathname, permission }) => {
-        permissions = { [permission]: true };
+        { pathname: `${URL_STUDENT_WORKOUT}/12345`, permission: 'student' },
+        { pathname: `${URL_STUDENT_WORKOUT}/12345`, permission: 'instructor' },
+        { pathname: `${URL_STUDENT_WORKOUT}/12345`, permission: null },
+    ])('shows the same brand at $pathname (permission: $permission)', ({ pathname, permission }) => {
+        permissions = permission ? { [permission]: true } : null;
         render(
             <MemoryRouter basename="/ualr" initialEntries={[`/ualr${pathname}`]}>
                 <AgogeAppBar onSidebarToggle={vi.fn()} />
@@ -82,16 +85,7 @@ describe('AgogeAppBar CORE branding', () => {
         );
 
         const brand = screen.getByRole('link', { name: 'Agoge · CORE Center' });
+        expect(brand.textContent).toBe('Agoge');
         expect(brand.querySelector('img')?.getAttribute('src')).toBe('/images/core-emblem.png');
-    });
-
-    it('keeps the staff emblem off a student workout viewed by an instructor', () => {
-        render(
-            <MemoryRouter initialEntries={[`${URL_STUDENT_WORKOUT}/12345`]}>
-                <AgogeAppBar onSidebarToggle={vi.fn()} />
-            </MemoryRouter>
-        );
-
-        expect(screen.queryByRole('link', { name: 'Agoge · CORE Center' })).toBeNull();
     });
 });
