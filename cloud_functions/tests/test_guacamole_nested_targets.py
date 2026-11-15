@@ -1,7 +1,10 @@
+import subprocess
+import textwrap
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from requests.exceptions import ConnectTimeout
 
 from common.models.agoge import HumanInteractionModel, NicModel, ServerModel
 from cloud_fn_utilities.course_objects.compute.base_compute_manager import BaseComputeManager
@@ -144,3 +147,66 @@ def test_rebuild_display_proxy_uses_tenant_or_explicit_boot_image(stored_image, 
 
     assert disk.initialize_params.source_image == expected_image
     manager.compute_image.get.assert_not_called()
+
+
+@pytest.mark.parametrize('swarm, database_ready, repairs_swarm, error_message', [
+    ('active/true/10.0.0.2/1', True, True, ''),
+    ('active/true/10.0.0.3/1', True, False, ''),
+    ('active/true/10.0.0.2/1', False, True, 'MySQL task did not become ready'),
+    ('active/true/10.0.0.2/2', True, False, 'requires an initialized single-node Swarm'),
+], ids=['cloned', 'healthy', 'mysql-timeout', 'multi-node'])
+def test_legacy_guacamole_startup_recovers_clone_and_checks_mysql_in_place(
+    guac, tmp_path, swarm, database_ready, repairs_swarm, error_message,
+):
+    stubs = textwrap.dedent("""\
+        timeout() { shift; "$@"; }
+        curl() { echo '10.0.0.3'; }
+        sleep() { SECONDS=$((SECONDS + 181)); }
+        docker() {
+          printf '%s\\n' "$*" >> docker-calls.log
+          case "$1 $2" in
+            'info --format') echo "$TEST_SWARM" ;;
+            'node inspect') echo 'ready' ;;
+            'swarm init'|'service update') return 0 ;;
+            'ps -q') echo 'mysql-task' ;;
+            'exec mysql-task') test "$TEST_DATABASE_READY" = yes ;;
+            'exec -i') cat > applied.sql ;;
+            *) return 1 ;;
+          esac
+        }
+    """)
+    script = guac.get_guac_startup_script([guac.prepare_guac_connection(_ordinary_ssh(), server_ip='10.0.0.4')])
+    script = script.replace('/etc/guac_init_done', 'guac_init_done')
+    script = script.replace('/opt/guacamole/scripts/create_guacamole_user_connections.sql', 'connections.sql')
+    completed = subprocess.run(
+        ['bash', '-s'], input=stubs + script, cwd=tmp_path, text=True, capture_output=True, timeout=5,
+        env={'TEST_SWARM': swarm, 'TEST_DATABASE_READY': 'yes' if database_ready else 'no'},
+    )
+
+    calls = (tmp_path / 'docker-calls.log').read_text().splitlines()
+    assert ('swarm init --force-new-cluster --advertise-addr 10.0.0.3' in calls) is repairs_swarm
+    assert not any(call.startswith('run ') for call in calls)
+    if error_message:
+        assert completed.returncode == 1 and error_message in completed.stderr
+        assert not (tmp_path / 'guac_init_done').exists()
+    else:
+        assert completed.returncode == 0, completed.stderr
+        assert (tmp_path / 'guac_init_done').exists()
+        assert any(call.startswith('exec mysql-task ') for call in calls)
+        assert "'hostname', '10.0.0.4'" in (tmp_path / 'applied.sql').read_text()
+
+
+def test_guacamole_restart_checks_the_public_https_endpoint():
+    manager = object.__new__(BaseComputeManager)
+    manager.logger = MagicMock()
+    host = 'abcdefghij-display.example.com'
+    not_ready, ready = MagicMock(), MagicMock()
+    not_ready.__enter__.return_value.status_code = 503
+    ready.__enter__.return_value.status_code = 200
+
+    with patch('cloud_fn_utilities.course_objects.compute.base_compute_manager.requests.get',
+               side_effect=[not_ready, ConnectTimeout(), ready]) as get, \
+            patch('cloud_fn_utilities.course_objects.compute.base_compute_manager.time.sleep'):
+        assert manager._wait_for_guacamole(host) is True
+
+    assert [request.args[0] for request in get.call_args_list] == [f'https://{host}/guacamole/'] * 3

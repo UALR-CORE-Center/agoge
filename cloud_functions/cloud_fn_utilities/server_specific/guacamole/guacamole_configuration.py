@@ -17,8 +17,32 @@ class GuacSQL:
         https://guacamole.apache.org/doc/gug/jdbc-auth.html
     """
 
+    legacy_swarm_recovery = textwrap.dedent("""\
+        # The project image carries the builder's single-node Swarm.
+        # Recover its stack and volumes using this VM's address.
+        guac_ip="$(curl -fsS --max-time 10 -H 'Metadata-Flavor: Google' \\
+          http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip)" || exit 1
+        swarm="$(timeout 10s docker info \\
+          --format '{{.Swarm.LocalNodeState}}/{{.Swarm.ControlAvailable}}/{{.Swarm.NodeAddr}}/{{.Swarm.Nodes}}')" || exit 1
+        swarm_recovered=false
+        if [ -z "$guac_ip" ] || [ "${swarm%%/*}" = inactive ] || [ "${swarm##*/}" -gt 1 ]; then
+          echo "Guacamole requires an initialized single-node Swarm on the proxy VM." >&2
+          exit 1
+        fi
+        if [ "$swarm" != "active/true/$guac_ip/1" ] || \\
+           [ "$(timeout 10s docker node inspect self --format '{{.Status.State}}')" != ready ]; then
+          echo "Recovering the Guacamole Swarm on this proxy VM."
+          timeout 45s docker swarm init --force-new-cluster --advertise-addr "$guac_ip" >/dev/null || exit 1
+          for service in guacamole_db guacamole_guacd guacamole_guacamole guacamole_nginx; do
+            timeout 20s docker service update --detach --force "$service" >/dev/null || exit 1
+          done
+          swarm_recovered=true
+        fi
+    """)
+
     guac_startup_begin = textwrap.dedent("""\
         #!/bin/bash
+        umask 077
         export GUAC_HOST="{guac_host}"
         export GUAC_DOMAIN="{guac_domain}"
         {prepare_swarm}
@@ -40,11 +64,20 @@ class GuacSQL:
         # --------------------------------------------------------------------------------
         echo "⏳ Waiting for MySQL (service name: 'db') to be ready in Swarm..."
         
-        # Ping MySQL inside a throwaway container that shares the overlay network
-        until docker run --rm --network guacamole_guacnet \
-               mysql:8.0 mysqladmin ping -h"db" -u root --silent
-        do
-          echo "   MySQL not yet reachable. Retrying..."
+        # Check the existing Swarm task directly. Starting another container
+        # would require a fresh overlay network attachment.
+        deadline=$((SECONDS + 180))
+        while :; do
+          DB_CID="$(timeout 8s docker ps -q --filter label=com.docker.swarm.service.name=guacamole_db | head -n 1)"
+          if [ -n "$DB_CID" ] && timeout 8s docker exec "$DB_CID" sh -c \\
+            'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --connect-timeout=5 --host=127.0.0.1 --user=root guacamole_db -e "SELECT 1 FROM guacamole_entity LIMIT 0"' \\
+            >/dev/null 2>&1; then
+            break
+          fi
+          if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "Guacamole MySQL task did not become ready within 180 seconds." >&2
+            exit 1
+          fi
           sleep 2
         done
         echo "✅ MySQL is ready!"
@@ -112,22 +145,9 @@ class GuacSQL:
     guac_startup_end = textwrap.dedent("""\
         SQL_DELIMITER
 
-        # Find the running db container created by the swarm service
-        DB_CID="$(docker ps -q --filter name=guacamole_db | head -n 1)"
-        if [ -z "$DB_CID" ]; then
-          echo "Could not find running guacamole_db container"
-          exit 1
-        fi
-
-        # Read the real root password from the db container environment
-        MYSQL_ROOT_PASSWORD="$(docker exec "$DB_CID" printenv MYSQL_ROOT_PASSWORD || true)"
-        if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
-          echo "MYSQL_ROOT_PASSWORD not found in DB container env"
-          exit 1
-        fi
-
-        # Apply SQL by piping it into mysql running inside the db container
-        docker exec -i "$DB_CID" mysql -u root -p"$MYSQL_ROOT_PASSWORD" guacamole_db < "$SQL_FILE" || exit 1
+        # Use the MySQL task's own credentials inside the container.
+        timeout 60s docker exec -i "$DB_CID" sh -c \\
+          'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root guacamole_db' < "$SQL_FILE" || exit 1
 
         # Only mark success after mysql command succeeds
         touch /etc/guac_init_done
@@ -266,13 +286,21 @@ class GuacamoleConfiguration:
         # Begin script
         sql_delimiter = 'AGOGE_GUAC_SQL_' + uuid4().hex
         scale_nginx = 'docker service scale guacamole_nginx=1 || exit 1' if start_nginx else ''
+        prepare_swarm = (
+            'agoge-prepare-guacamole-swarm "$GUAC_HOST" "$GUAC_DOMAIN" || exit 1'
+            if start_nginx else GuacSQL.legacy_swarm_recovery
+        )
+        reload_nginx = '' if start_nginx else (
+            'if [ "$swarm_recovered" = false ]; then '
+            'timeout 20s docker service update --detach --force guacamole_nginx >/dev/null || exit 1; fi'
+        )
         startup_script = GuacSQL.guac_startup_begin.format(
             guac_host=f'{guac_host}.{guac_domain}' if start_nginx else guac_host,
             guac_domain=guac_domain,
             sql_delimiter=sql_delimiter,
-            prepare_swarm='agoge-prepare-guacamole-swarm "$GUAC_HOST" "$GUAC_DOMAIN" || exit 1' if start_nginx else '',
+            prepare_swarm=prepare_swarm,
             resume_nginx=scale_nginx,
-            reload_nginx='' if start_nginx else 'docker service update --force guacamole_nginx',
+            reload_nginx=reload_nginx,
         )
 
         # Append connection details

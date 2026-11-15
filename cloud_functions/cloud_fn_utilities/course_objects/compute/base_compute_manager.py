@@ -897,21 +897,19 @@ class BaseComputeManager:
         self,
         dns: str
     ) -> bool:
-        max_attempts = 15
-        attempts = 0
-        success = False
-        while not success and attempts < max_attempts:
+        url = f'https://{dns}/guacamole/'
+        max_attempts = 12
+        for attempt in range(max_attempts):
             try:
-                response = requests.get(f"https://{dns}:8080/guacamole/#", timeout=40)
-                return True
-            except requests.exceptions.Timeout:
-                self.logger.info(f"{self.class_name}:{self.server_name} - Timeout {attempts} of {max_attempts} "
-                                 f"waiting for guacamole server connection {dns}.")
-                attempts += 1
-            except requests.exceptions.ConnectionError:
-                self.logger.info(f"{self.class_name}:{self.server_name} - HTTP Connection Error for Guacamole "
-                                 f"Server {dns}")
-                attempts += 1
+                with requests.get(url, timeout=(3, 5), stream=True, allow_redirects=False) as response:
+                    if response.status_code == 200:
+                        return True
+                    result = f'HTTP {response.status_code}'
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as error:
+                result = type(error).__name__
+            if attempt + 1 < max_attempts:
+                time.sleep(2)
+        self.logger.warning(f'{self.class_name}:{self.server_name} - Guacamole HTTPS at {dns} is not ready ({result}).')
         return False
 
     def _lookup_machine_type(
