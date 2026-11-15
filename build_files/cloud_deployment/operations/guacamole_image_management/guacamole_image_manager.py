@@ -90,6 +90,10 @@ class GuacamoleImageManager:
         #       with the initial deployment.
         # --------------------------------------------------------------------------------
         echo "🔹 Deploying Guacamole via Docker Swarm..."
+        # Proxy clones need these credentials even if Docker cannot load the captured Swarm.
+        install -m 0600 /dev/null /etc/agoge-guacamole-db.env
+        printf 'MYSQL_ROOT_PASSWORD=%q\\nMYSQL_PASSWORD=%q\\n' \\
+          "$MYSQL_ROOT_PASSWORD" "$MYSQL_PASSWORD" > /etc/agoge-guacamole-db.env
         sudo docker swarm leave --force
         sudo docker swarm init --advertise-addr $(hostname -I | awk '{{print $1}}')
         docker stack deploy -c /opt/guacamole/docker-compose.yml guacamole

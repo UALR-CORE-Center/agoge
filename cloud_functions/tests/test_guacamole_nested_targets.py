@@ -149,26 +149,48 @@ def test_rebuild_display_proxy_uses_tenant_or_explicit_boot_image(stored_image, 
     manager.compute_image.get.assert_not_called()
 
 
-@pytest.mark.parametrize('swarm, database_ready, repairs_swarm, error_message', [
-    ('active/true/10.0.0.2/1', True, True, ''),
-    ('active/true/10.0.0.3/1', True, False, ''),
-    ('active/true/10.0.0.2/1', False, True, 'MySQL task did not become ready'),
-    ('active/true/10.0.0.2/2', True, False, 'requires an initialized single-node Swarm'),
-], ids=['cloned', 'healthy', 'mysql-timeout', 'multi-node'])
-def test_legacy_guacamole_startup_recovers_clone_and_checks_mysql_in_place(
-    guac, tmp_path, swarm, database_ready, repairs_swarm, error_message,
-):
-    stubs = textwrap.dedent("""\
+@pytest.fixture
+def legacy_startup(guac, tmp_path):
+    app_dir = tmp_path / 'guacamole'
+    app_dir.mkdir()
+    (app_dir / 'docker-compose.yml').write_text('Guacamole stack file from project image\n')
+    (tmp_path / 'db_data' / 'mysql').mkdir(parents=True)
+    stubs = textwrap.dedent(r"""
         timeout() { shift; "$@"; }
         curl() { echo '10.0.0.3'; }
         sleep() { SECONDS=$((SECONDS + 181)); }
         docker() {
-          printf '%s\\n' "$*" >> docker-calls.log
+          printf '%s\n' "$*" >> "$TEST_WORKDIR/docker-calls.log"
           case "$1 $2" in
-            'info --format') echo "$TEST_SWARM" ;;
+            'info --format')
+              if [ -f "$TEST_WORKDIR/left" ]; then echo 'inactive/false//0'; else echo "$TEST_SWARM"; fi ;;
             'node inspect') echo 'ready' ;;
-            'swarm init'|'service update') return 0 ;;
-            'ps -q') echo 'mysql-task' ;;
+            'service inspect')
+              if [ "$4" = --format ]; then return 1; fi
+              test "$TEST_STACK_DEPLOYED" = yes ;;
+            'volume inspect') echo "$TEST_WORKDIR/db_data" ;;
+            'ps -aq')
+              if [ "$TEST_IMAGE_CREDENTIALS" = yes ] && [ ! -f "$TEST_WORKDIR/left" ]; then
+                printf '%s\n' 'old-mysql-task' 'older-mysql-task'
+              fi ;;
+            'inspect --type')
+              [ "$6" = old-mysql-task ] || return 1
+              printf '%s\n' 'OTHER=unused' 'MYSQL_ROOT_PASSWORD=test=Root!' 'MYSQL_PASSWORD=test Pass$'
+              ;;
+            'swarm leave') touch "$TEST_WORKDIR/left" ;;
+            'swarm init')
+              [ "$3" != --force-new-cluster ] || { echo 'This node is not a swarm manager.' >&2; return 1; }
+              test "$TEST_SWARM_INIT" = yes ;;
+            'ps -q')
+              case "$4" in
+                'label=com.docker.stack.namespace=guacamole') echo 'orphan-task' ;;
+                'label=com.docker.swarm.service.name=guacamole_db') echo 'mysql-task' ;;
+                *) return 1 ;;
+              esac ;;
+            'stop orphan-task'|'service update') return 0 ;;
+            'stack deploy')
+              [ "$PWD" = "$TEST_WORKDIR/guacamole" ] && [ -f docker-compose.yml ] &&
+                [ "$MYSQL_ROOT_PASSWORD" = 'test=Root!' ] && [ "$MYSQL_PASSWORD" = 'test Pass$' ] ;;
             'exec mysql-task') test "$TEST_DATABASE_READY" = yes ;;
             'exec -i') cat > applied.sql ;;
             *) return 1 ;;
@@ -177,23 +199,91 @@ def test_legacy_guacamole_startup_recovers_clone_and_checks_mysql_in_place(
     """)
     script = guac.get_guac_startup_script([guac.prepare_guac_connection(_ordinary_ssh(), server_ip='10.0.0.4')])
     script = script.replace('/etc/guac_init_done', 'guac_init_done')
+    script = script.replace('/etc/agoge-guacamole-db.env', 'db.env')
+    script = script.replace('/run/agoge-guacamole-startup.lock', 'startup.lock')
     script = script.replace('/opt/guacamole/scripts/create_guacamole_user_connections.sql', 'connections.sql')
-    completed = subprocess.run(
-        ['bash', '-s'], input=stubs + script, cwd=tmp_path, text=True, capture_output=True, timeout=5,
-        env={'TEST_SWARM': swarm, 'TEST_DATABASE_READY': 'yes' if database_ready else 'no'},
-    )
+    script = script.replace('/opt/guacamole', str(app_dir))
 
-    calls = (tmp_path / 'docker-calls.log').read_text().splitlines()
-    assert ('swarm init --force-new-cluster --advertise-addr 10.0.0.3' in calls) is repairs_swarm
-    assert not any(call.startswith('run ') for call in calls)
+    def run(swarm, *, stack_deployed=True, database_ready=True, image_credentials=True, swarm_init=True):
+        log_path = tmp_path / 'docker-calls.log'
+        log_path.unlink(missing_ok=True)
+        completed = subprocess.run(
+            ['bash', '-s'], input=stubs + script, cwd=tmp_path, text=True, capture_output=True, timeout=5,
+            env={
+                'TEST_WORKDIR': str(tmp_path), 'TEST_SWARM': swarm,
+                'TEST_STACK_DEPLOYED': 'yes' if stack_deployed else 'no',
+                'TEST_DATABASE_READY': 'yes' if database_ready else 'no',
+                'TEST_IMAGE_CREDENTIALS': 'yes' if image_credentials else 'no',
+                'TEST_SWARM_INIT': 'yes' if swarm_init else 'no',
+            },
+        )
+        assert 'test=Root!' not in completed.stdout + completed.stderr
+        assert 'test Pass$' not in completed.stdout + completed.stderr
+        return completed, log_path.read_text().splitlines()
+
+    return run
+
+
+@pytest.mark.parametrize('swarm', ['active/true/10.0.0.2/1', 'error/false/10.0.0.2/0'])
+def test_cloned_guacamole_swarm_redeploys_with_existing_database(legacy_startup, tmp_path, swarm):
+    completed, calls = legacy_startup(swarm)
+    assert completed.returncode == 0, completed.stderr
+    assert 'Guacamole connections configured.' in completed.stdout
+    inspect = next(i for i, call in enumerate(calls) if call.startswith('inspect --type container'))
+    assert inspect < calls.index('swarm leave --force') < calls.index('stop orphan-task')
+    assert calls.index('stop orphan-task') < calls.index('swarm init --advertise-addr 10.0.0.3')
+    assert (tmp_path / 'db.env').stat().st_mode & 0o777 == 0o600
+    assert (tmp_path / 'guac_init_done').exists()
+    assert any(call.startswith('exec mysql-task ') for call in calls)
+    assert "'hostname', '10.0.0.4'" in (tmp_path / 'applied.sql').read_text()
+
+
+def test_swarm_retry_uses_saved_credentials_after_stale_tasks_are_gone(legacy_startup, tmp_path):
+    completed, _ = legacy_startup('error/false/10.0.0.2/0', swarm_init=False)
+    assert completed.returncode == 1
+    assert (tmp_path / 'db.env').exists()
+    assert not (tmp_path / 'guac_init_done').exists()
+
+    completed, calls = legacy_startup('error/false/10.0.0.2/0', image_credentials=False)
+    assert completed.returncode == 0, completed.stderr
+    assert 'swarm leave --force' not in calls
+    assert 'swarm init --advertise-addr 10.0.0.3' in calls
+    assert (tmp_path / 'guac_init_done').exists()
+
+
+def test_local_swarm_with_missing_stack_can_be_retried_without_leaving(legacy_startup):
+    completed, calls = legacy_startup('active/true/10.0.0.3/1', stack_deployed=False)
+    assert completed.returncode == 0, completed.stderr
+    assert not any(call.startswith('swarm ') for call in calls)
+    assert any(call.startswith('stack deploy ') for call in calls)
+
+
+def test_swarm_recovery_does_not_deploy_an_empty_database(legacy_startup, tmp_path):
+    (tmp_path / 'db_data' / 'mysql').rmdir()
+    completed, calls = legacy_startup('error/false/10.0.0.2/0')
+    assert completed.returncode == 1
+    assert 'initialized MySQL volume' in completed.stderr
+    assert not any(call.startswith(('swarm ', 'stack deploy ')) for call in calls)
+
+
+@pytest.mark.parametrize('swarm, database_ready, image_credentials, error_message', [
+    ('active/true/10.0.0.3/1', True, True, ''),
+    ('active/true/10.0.0.3/1', False, True, 'MySQL task did not become ready'),
+    ('error/false/10.0.0.2/0', True, False, 'could not read the existing MySQL credentials'),
+    ('active/true/10.0.0.2/2', True, True, 'a single-node Swarm'),
+], ids=['healthy', 'mysql-timeout', 'missing-credentials', 'multi-node'])
+def test_guacamole_startup_checks_mysql_and_protects_existing_swarm(
+    legacy_startup, tmp_path, swarm, database_ready, image_credentials, error_message,
+):
+    completed, calls = legacy_startup(swarm, database_ready=database_ready, image_credentials=image_credentials)
+
+    assert not any(call.startswith(('swarm ', 'run ')) for call in calls)
     if error_message:
         assert completed.returncode == 1 and error_message in completed.stderr
         assert not (tmp_path / 'guac_init_done').exists()
     else:
         assert completed.returncode == 0, completed.stderr
         assert (tmp_path / 'guac_init_done').exists()
-        assert any(call.startswith('exec mysql-task ') for call in calls)
-        assert "'hostname', '10.0.0.4'" in (tmp_path / 'applied.sql').read_text()
 
 
 def test_guacamole_restart_checks_the_public_https_endpoint():

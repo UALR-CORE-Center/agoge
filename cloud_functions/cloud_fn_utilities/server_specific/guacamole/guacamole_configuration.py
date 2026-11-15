@@ -18,26 +18,103 @@ class GuacSQL:
     """
 
     legacy_swarm_recovery = textwrap.dedent("""\
-        # The project image carries the builder's single-node Swarm.
-        # Recover its stack and volumes using this VM's address.
+        # Serialize startup and manual retries on this proxy.
+        exec 9>/run/agoge-guacamole-startup.lock || exit 1
+        flock -n 9 || exit 1
+
+        # Read credentials from the image before Docker discards its old tasks.
+        load_legacy_mysql_credentials() {
+          local tasks env_lines='' entry
+          tasks="$(timeout 10s docker ps -aq --filter label=com.docker.swarm.service.name=guacamole_db)" || return 1
+          if [ -n "$tasks" ]; then
+            env_lines="$(timeout 10s docker inspect --type container \\
+              --format '{{range .Config.Env}}{{println .}}{{end}}' "${tasks%%$'\\n'*}" 2>/dev/null)"
+          fi
+          if [ -z "$env_lines" ]; then
+            env_lines="$(timeout 10s docker service inspect guacamole_db \\
+              --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' 2>/dev/null)"
+          fi
+          if [ -z "$env_lines" ] && [ -s /opt/guacamole/.env ]; then
+            env_lines="$(
+              source /opt/guacamole/.env >/dev/null 2>&1 || exit 1
+              printf 'MYSQL_ROOT_PASSWORD=%s\\nMYSQL_PASSWORD=%s\\n' "$MYSQL_ROOT_PASSWORD" "$MYSQL_PASSWORD"
+            )" || return 1
+          fi
+          while IFS= read -r entry; do
+            case "$entry" in
+              MYSQL_ROOT_PASSWORD=*) MYSQL_ROOT_PASSWORD="${entry#*=}" ;;
+              MYSQL_PASSWORD=*) MYSQL_PASSWORD="${entry#*=}" ;;
+            esac
+          done <<< "$env_lines"
+          [ -n "$MYSQL_ROOT_PASSWORD" ] && [ -n "$MYSQL_PASSWORD" ]
+        }
+
         guac_ip="$(curl -fsS --max-time 10 -H 'Metadata-Flavor: Google' \\
           http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip)" || exit 1
         swarm="$(timeout 10s docker info \\
           --format '{{.Swarm.LocalNodeState}}/{{.Swarm.ControlAvailable}}/{{.Swarm.NodeAddr}}/{{.Swarm.Nodes}}')" || exit 1
-        swarm_recovered=false
-        if [ -z "$guac_ip" ] || [ "${swarm%%/*}" = inactive ] || [ "${swarm##*/}" -gt 1 ]; then
-          echo "Guacamole requires an initialized single-node Swarm on the proxy VM." >&2
+        if [ -z "$guac_ip" ] || [ "${swarm##*/}" -gt 1 ]; then
+          echo "Guacamole recovery requires this proxy's IP and a single-node Swarm." >&2
           exit 1
         fi
-        if [ "$swarm" != "active/true/$guac_ip/1" ] || \\
-           [ "$(timeout 10s docker node inspect self --format '{{.Status.State}}')" != ready ]; then
-          echo "Recovering the Guacamole Swarm on this proxy VM."
-          timeout 45s docker swarm init --force-new-cluster --advertise-addr "$guac_ip" >/dev/null || exit 1
-          for service in guacamole_db guacamole_guacd guacamole_guacamole guacamole_nginx; do
-            timeout 20s docker service update --detach --force "$service" >/dev/null || exit 1
-          done
-          swarm_recovered=true
+
+        local_swarm_ready=false
+        stack_deployed=false
+        if [ "$swarm" = "active/true/$guac_ip/1" ] && \\
+           [ "$(timeout 10s docker node inspect self --format '{{.Status.State}}')" = ready ]; then
+          local_swarm_ready=true
+          if timeout 10s docker service inspect guacamole_db guacamole_guacd \\
+            guacamole_guacamole guacamole_nginx >/dev/null 2>&1; then
+            stack_deployed=true
+          fi
         fi
+
+        if [ "$stack_deployed" = false ]; then
+          db_data="$(timeout 10s docker volume inspect --format '{{.Mountpoint}}' guacamole_db_data 2>/dev/null)"
+          if [ ! -s /opt/guacamole/docker-compose.yml ] || [ -z "$db_data" ] || [ ! -d "$db_data/mysql" ]; then
+            echo "Guacamole recovery needs the stack file and initialized MySQL volume from the project image." >&2
+            exit 1
+          fi
+          export MYSQL_ROOT_PASSWORD= MYSQL_PASSWORD=
+          db_env=/etc/agoge-guacamole-db.env
+          if [ -s "$db_env" ]; then
+            source "$db_env" || exit 1
+          elif load_legacy_mysql_credentials; then
+            # Preserve the credentials if startup is interrupted after leaving the Swarm.
+            saved_env="$(mktemp "$db_env.XXXXXX")" || exit 1
+            printf 'MYSQL_ROOT_PASSWORD=%q\\nMYSQL_PASSWORD=%q\\n' \\
+              "$MYSQL_ROOT_PASSWORD" "$MYSQL_PASSWORD" > "$saved_env" && mv -f "$saved_env" "$db_env" || exit 1
+          fi
+          if [ -z "$MYSQL_ROOT_PASSWORD" ] || [ -z "$MYSQL_PASSWORD" ]; then
+            echo "Guacamole recovery could not read the existing MySQL credentials from the project image." >&2
+            exit 1
+          fi
+
+          if [ "$local_swarm_ready" = false ]; then
+            echo "Recreating the local Guacamole Swarm on this proxy VM."
+            if [ "${swarm%%/*}" != inactive ]; then
+              timeout 30s docker swarm leave --force >/dev/null || exit 1
+            fi
+            # An unusable Swarm can leave running tasks with its old node ID.
+            old_tasks="$(timeout 10s docker ps -q --filter label=com.docker.stack.namespace=guacamole)" || exit 1
+            if [ -n "$old_tasks" ]; then
+              mapfile -t old_task_ids <<< "$old_tasks"
+              timeout 40s docker stop "${old_task_ids[@]}" >/dev/null || exit 1
+            fi
+            timeout 45s docker swarm init --advertise-addr "$guac_ip" >/dev/null || exit 1
+          fi
+
+          echo "Deploying the Guacamole stack with its existing MySQL volume."
+          if ! (cd /opt/guacamole && timeout 90s docker stack deploy --resolve-image never \\
+            --compose-file docker-compose.yml guacamole) >/dev/null 2>&1; then
+            echo "Guacamole stack deployment failed. Check Docker on the proxy VM." >&2
+            exit 1
+          fi
+          swarm_recovered=true
+        else
+          swarm_recovered=false
+        fi
+        unset MYSQL_ROOT_PASSWORD MYSQL_PASSWORD
     """)
 
     guac_startup_begin = textwrap.dedent("""\
@@ -150,8 +227,9 @@ class GuacSQL:
           'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root guacamole_db' < "$SQL_FILE" || exit 1
 
         # Only mark success after mysql command succeeds
-        touch /etc/guac_init_done
+        touch /etc/guac_init_done || exit 1
         GUAC_START_NGINX
+        echo "Guacamole connections configured."
     """)
 
 
