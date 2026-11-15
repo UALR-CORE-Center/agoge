@@ -52,3 +52,5 @@ bugReport.md
 /frontend/.help-docs/
 /frontend/public/help-content/
 wireguard_connection.pptx
+/.venv
+/.venv312
