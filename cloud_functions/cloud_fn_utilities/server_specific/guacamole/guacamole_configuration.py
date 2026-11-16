@@ -70,9 +70,17 @@ class GuacSQL:
         fi
 
         if [ "$stack_deployed" = false ]; then
-          db_data="$(timeout 10s docker volume inspect --format '{{.Mountpoint}}' guacamole_db_data 2>/dev/null)"
-          if [ ! -s /opt/guacamole/docker-compose.yml ] || [ -z "$db_data" ] || [ ! -d "$db_data/mysql" ]; then
-            echo "Guacamole recovery needs the stack file and initialized MySQL volume from the project image." >&2
+          if [ ! -s /opt/guacamole/docker-compose.yml ]; then
+            echo "Guacamole project image is missing /opt/guacamole/docker-compose.yml." >&2
+            exit 1
+          fi
+          if ! db_data="$(timeout 10s docker volume inspect --format '{{.Mountpoint}}' guacamole_db_data)" ||
+             [ -z "$db_data" ]; then
+            echo "Guacamole project image has no accessible guacamole_db_data volume." >&2
+            exit 1
+          fi
+          if [ ! -d "$db_data/mysql" ]; then
+            echo "Guacamole project image has an uninitialized MySQL volume." >&2
             exit 1
           fi
           export MYSQL_ROOT_PASSWORD= MYSQL_PASSWORD=

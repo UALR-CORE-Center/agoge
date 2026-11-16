@@ -25,8 +25,9 @@ class GuacamoleImageManager:
     Manages the creation and synchronization of Guacamole images and startup configurations.
     """
     BASE_IMAGE = 'image-guac-base'
-    CERTIFICATE_WAIT_SECONDS = 15 * 60
-    STARTUP_FAILURE_HINTS = ('error', 'too many', 'retry after', 'denied', 'unauthorized', 'failed')
+    IMAGE_WAIT_SECONDS = 15 * 60
+    STARTUP_READY_MARKER = 'AGOGE_GUAC_PROJECT_IMAGE_READY'
+    STARTUP_FAILURE_HINTS = ('error', 'too many', 'retry after', 'denied', 'unauthorized', 'failed', 'missing')
     COPY_GUAC_BASE = (
         "gcloud compute --project={dst_project} images create image-guac-{dst_project} "
         "--source-image=image-guac-base --source-image-project={src_project}"
@@ -61,6 +62,17 @@ class GuacamoleImageManager:
     GUAC_PROJECT_SERVER_STARTUP_SCRIPT_TEMPLATE = textwrap.dedent("""\
         #!/bin/bash
         set -e  # Exit immediately if a command fails
+        umask 077
+        for file in docker-compose.yml initdb.sql nginx/conf.d/guacamole.conf scripts/update-admin-password.sql.template; do
+          if [ ! -s "/opt/guacamole/$file" ]; then
+            echo "Guacamole base image is missing /opt/guacamole/$file." >&2
+            exit 1
+          fi
+        done
+        cd /opt/guacamole
+        SQL_FILE=$(mktemp)
+        NGINX_OVERRIDE=$(mktemp)
+        trap 'rm -f /secrets/dns-google.json "$SQL_FILE" "$NGINX_OVERRIDE"' EXIT
         
         # --------------------------------------------------------------------------------
         # Step 1: Dynamically Set Environment Variables
@@ -94,9 +106,22 @@ class GuacamoleImageManager:
         install -m 0600 /dev/null /etc/agoge-guacamole-db.env
         printf 'MYSQL_ROOT_PASSWORD=%q\\nMYSQL_PASSWORD=%q\\n' \\
           "$MYSQL_ROOT_PASSWORD" "$MYSQL_PASSWORD" > /etc/agoge-guacamole-db.env
-        sudo docker swarm leave --force
-        sudo docker swarm init --advertise-addr $(hostname -I | awk '{{print $1}}')
-        docker stack deploy -c /opt/guacamole/docker-compose.yml guacamole
+        swarm_state=$(timeout 10s docker info --format '{{{{.Swarm.LocalNodeState}}}}')
+        if [ "$swarm_state" != inactive ]; then
+          timeout 30s docker swarm leave --force
+        fi
+        address=$(curl -fsS --max-time 10 -H 'Metadata-Flavor: Google' \\
+          http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip)
+        timeout 45s docker swarm init --advertise-addr "$address"
+        # Keep HTTPS closed until the initial admin password is changed.
+        cat > "$NGINX_OVERRIDE" <<'NGINX_EOF'
+        version: '3.7'
+        services:
+          nginx:
+            deploy:
+              replicas: 0
+        NGINX_EOF
+        timeout 90s docker stack deploy -c docker-compose.yml -c "$NGINX_OVERRIDE" guacamole
         echo "✅ Guacamole stack deployed."
         
         # --------------------------------------------------------------------------------
@@ -104,27 +129,42 @@ class GuacamoleImageManager:
         # --------------------------------------------------------------------------------
         echo "⏳ Waiting for MySQL (service name: 'db') to be ready in Swarm..."
         
-        # Ping MySQL inside a throwaway container that shares the overlay network
-        until docker run --rm --network guacamole_guacnet \
-               mysql:8.0 mysqladmin ping -h"db" -u root --silent
-        do
-          echo "   MySQL not yet reachable. Retrying..."
-          sleep 2
+        deadline=$((SECONDS + 360))
+        while :; do
+          DB_CID=$(timeout 10s docker ps -q --filter label=com.docker.swarm.service.name=guacamole_db | head -n 1)
+          if [ -n "$DB_CID" ] && timeout 10s docker exec "$DB_CID" sh -c \\
+            'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --connect-timeout=5 --host=127.0.0.1 --user=root guacamole_db -e "SELECT 1 FROM guacamole_user LIMIT 0"' \\
+            >/dev/null 2>&1; then
+            break
+          fi
+          if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "Guacamole image setup failed to initialize its MySQL schema." >&2
+            exit 1
+          fi
+          sleep 5
         done
         echo "✅ MySQL is ready!"
         
         # Generate final SQL for updating the guacadmin password
         TEMPLATE_FILE="/opt/guacamole/scripts/update-admin-password.sql.template"
-        SQL_FILE="/opt/guacamole/scripts/update-admin-password.sql"
         
         echo "🔹 Generating the final SQL to update guacadmin's password..."
         sed "s|REPLACE_ME_PASSWORD|{guac_admin_password}|g" "${{TEMPLATE_FILE}}" > "${{SQL_FILE}}"
         
         echo "🔄 Updating guacadmin password..."
-        docker run --rm --network guacamole_guacnet \
-          -v "${{SQL_FILE}}:/update-admin-password.sql" \
-          mysql:8.0 \
-          sh -c "mysql -h 'db' -u root -p"{guac_sql_root_password}" guacamole_db < /update-admin-password.sql"
+        timeout 60s docker exec -i "$DB_CID" sh -c \\
+          'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --user=root guacamole_db' < "$SQL_FILE"
+        db_data=$(timeout 10s docker volume inspect --format '{{{{.Mountpoint}}}}' guacamole_db_data)
+        if [ -z "$db_data" ] || [ ! -d "$db_data/mysql" ]; then
+          echo "Guacamole image setup failed to verify the initialized MySQL volume." >&2
+          exit 1
+        fi
+        if ! timeout 10s docker exec "$DB_CID" sh -c \\
+          'MYSQL_PWD="$MYSQL_PASSWORD" exec mysql --connect-timeout=5 --host=127.0.0.1 --user="$MYSQL_USER" guacamole_db -e "SELECT 1 FROM guacamole_user LIMIT 0"' \\
+          >/dev/null 2>&1; then
+          echo "Guacamole image setup failed to verify the application database login." >&2
+          exit 1
+        fi
         
         echo "✅ guacadmin password updated successfully."
         
@@ -132,8 +172,12 @@ class GuacamoleImageManager:
         # Step 5: Clean Up Secrets
         # --------------------------------------------------------------------------------
         echo "🔹 Removing sensitive secrets file"
-        rm -f /secrets/dns-google.json
+        rm -f /secrets/dns-google.json "$SQL_FILE" "$NGINX_OVERRIDE"
+        trap - EXIT
         echo "✅ Secrets have been cleaned up!"
+        timeout 60s docker service scale --detach guacamole_nginx=1
+        sync
+        echo '{ready_marker}'
 
     """)
 
@@ -193,21 +237,21 @@ class GuacamoleImageManager:
         self.image_manager.load(server_name=server_name)
         self.image_manager.check_out()
 
-        # Certbot's DNS challenge alone waits 60s, so poll rather than sleep a
-        # fixed time. Capturing before the certificate exists produces an image
-        # every shared lab proxy then fails to start from.
-        print("🔍 Waiting for the Guacamole server's wildcard SSL certificate...")
-        deadline = time.monotonic() + self.CERTIFICATE_WAIT_SECONDS
-        while not self._verify_certificate_operation():
-            # The startup script stops at the first failed command (usually
-            # certbot), so waiting out the deadline after that only hides why.
-            if (failure := self._startup_script_failure()) is not None:
+        # Nginx can present a valid certificate before the proxy database is usable.
+        print("🔍 Waiting for the Guacamole database, startup cleanup, and wildcard SSL certificate...")
+        deadline = time.monotonic() + self.IMAGE_WAIT_SECONDS
+        while True:
+            ready, failure = self._startup_status()
+            if failure is not None:
                 print(f"❌ The Guacamole server's startup script failed:\n{failure}\n"
                       f"The server '{server_name}' stays checked out and was NOT captured; fix the cause "
                       "and rerun this option.")
                 return False
+            if ready and self._verify_certificate_operation():
+                break
             if time.monotonic() >= deadline:
-                print(f"❌ No valid wildcard certificate after {self.CERTIFICATE_WAIT_SECONDS // 60} minutes. "
+                pending = 'wildcard certificate verification' if ready else 'Guacamole database setup and startup cleanup'
+                print(f"❌ Timed out waiting for {pending} after {self.IMAGE_WAIT_SECONDS // 60} minutes. "
                       f"The server '{server_name}' stays checked out and was NOT captured; inspect it with "
                       "'sudo journalctl -u google-startup-scripts.service' and rerun this option.")
                 return False
@@ -273,26 +317,31 @@ class GuacamoleImageManager:
         print("✅ SSL certificate verified successfully.")
         return True
 
-    def _startup_script_failure(self) -> str | None:
-        """Certbot's explanation once the current boot's startup script has failed, else None."""
+    def _startup_status(self) -> tuple[bool, str | None]:
+        """Read readiness or failure from the current boot of the template VM."""
         try:
             output = compute_v1.InstancesClient().get_serial_port_output(
-                project=self.env.project, zone=self.env.zone, instance=self.image_manager.server_name
+                project=self.env.project, zone=self.image_manager.server_zone or self.env.zone,
+                instance=self.image_manager.server_name,
             ).contents
         except Exception:
             # Serial output is a diagnostic; without it, fall back to the deadline.
-            return None
+            return False, None
         # A rerun can reuse the instance, so only the latest boot counts.
         boot = output.rsplit('Starting startup scripts', 1)[-1]
-        if 'Script "startup-script" failed' not in boot:
-            return None
         # Each line appears twice (console and journal); the script never echoes its secrets.
         lines = list(dict.fromkeys(
             line.split('startup-script: ', 1)[1].strip()
             for line in boot.splitlines() if 'startup-script: ' in line
         ))
-        reasons = [line for line in lines if any(hint in line.lower() for hint in self.STARTUP_FAILURE_HINTS)]
-        return '\n'.join(f'   {line}' for line in (reasons or lines[-5:]))
+        if 'Script "startup-script" failed' in boot:
+            reasons = [line for line in lines if any(hint in line.lower() for hint in self.STARTUP_FAILURE_HINTS)]
+            return False, '\n'.join(f'   {line}' for line in (reasons or lines[-5:]))
+        if self.STARTUP_READY_MARKER in lines:
+            return True, None
+        if 'Finished running startup scripts' in boot:
+            return False, '   The startup script finished without confirming image readiness. Check the builder VM startup script.'
+        return False, None
 
     def _get_guac_startup_script(self) -> str:
         """
@@ -331,7 +380,8 @@ class GuacamoleImageManager:
                 guac_sql_password=self.env.guac_sql_password,
                 guac_admin_password=self.env.guac_admin_password,
                 google_dns_service_key=self.env.google_dns_service_key,
-                cert_section=cert_section
+                cert_section=cert_section,
+                ready_marker=self.STARTUP_READY_MARKER,
             )
         except KeyError as e:
             print(f"A KeyError occurred, missing environment variable: {e}")

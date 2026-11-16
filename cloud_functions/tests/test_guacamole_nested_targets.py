@@ -262,7 +262,7 @@ def test_swarm_recovery_does_not_deploy_an_empty_database(legacy_startup, tmp_pa
     (tmp_path / 'db_data' / 'mysql').rmdir()
     completed, calls = legacy_startup('error/false/10.0.0.2/0')
     assert completed.returncode == 1
-    assert 'initialized MySQL volume' in completed.stderr
+    assert 'uninitialized MySQL volume' in completed.stderr
     assert not any(call.startswith(('swarm ', 'stack deploy ')) for call in calls)
 
 

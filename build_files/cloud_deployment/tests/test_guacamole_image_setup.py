@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -22,6 +23,7 @@ def setup(monkeypatch):
     )
     manager.db = MagicMock()
     manager.image_manager = MagicMock()
+    manager.image_manager.server_zone = 'us-central1-a'
     manager._get_guac_startup_script = MagicMock(return_value='#!/bin/bash\necho setup')
     manager._verify_certificate_operation = MagicMock(return_value=True)
     client = MagicMock()
@@ -31,7 +33,7 @@ def setup(monkeypatch):
     )
     monkeypatch.setattr(guac_module.compute_v1, 'ImagesClient', lambda: client)
     manager.instances = MagicMock()
-    manager.instances.get_serial_port_output.return_value = compute_v1.SerialPortOutput(contents='')
+    manager.instances.get_serial_port_output.return_value = compute_v1.SerialPortOutput(contents=READY)
     monkeypatch.setattr(guac_module.compute_v1, 'InstancesClient', lambda: manager.instances)
     monkeypatch.setattr(guac_module.time, 'sleep', lambda _: None)
     return manager, client
@@ -107,7 +109,7 @@ def test_unready_source_does_not_replace_the_existing_image_record(setup, status
 
 def test_image_is_not_captured_without_a_verified_wildcard_certificate(setup, monkeypatch):
     manager, _ = setup
-    manager.CERTIFICATE_WAIT_SECONDS = 30
+    manager.IMAGE_WAIT_SECONDS = 30
     manager._verify_certificate_operation = MagicMock(return_value=False)
     clock = iter(range(0, 1000, 15))
     monkeypatch.setattr(guac_module.time, 'monotonic', lambda: next(clock))
@@ -117,12 +119,46 @@ def test_image_is_not_captured_without_a_verified_wildcard_certificate(setup, mo
     manager.image_manager.check_in.assert_not_called()
 
 
-def test_image_is_captured_once_the_certificate_verifies(setup):
+def test_image_is_captured_only_after_database_and_certificate_are_ready(setup):
     manager, _ = setup
-    manager._verify_certificate_operation = MagicMock(side_effect=[False, False, True])
+    manager.image_manager.server_zone = 'us-central1-b'
+    manager.instances.get_serial_port_output.side_effect = [
+        compute_v1.SerialPortOutput(contents=BOOT),
+        compute_v1.SerialPortOutput(contents=READY),
+        compute_v1.SerialPortOutput(contents=READY),
+    ]
+    manager._verify_certificate_operation = MagicMock(side_effect=[False, True])
     assert manager.create_guac_project_image() is True
-    assert manager._verify_certificate_operation.call_count == 3
+    assert manager._verify_certificate_operation.call_count == 2
+    assert manager.instances.get_serial_port_output.call_count == 3
+    assert manager.instances.get_serial_port_output.call_args.kwargs['zone'] == 'us-central1-b'
     manager.image_manager.check_in.assert_called_once_with()
+
+
+def test_valid_certificate_alone_cannot_publish_an_uninitialized_image(setup, monkeypatch):
+    manager, _ = setup
+    manager.instances.get_serial_port_output.return_value = compute_v1.SerialPortOutput(contents=BOOT)
+    manager.IMAGE_WAIT_SECONDS = 30
+    clock = iter(range(0, 1000, 15))
+    monkeypatch.setattr(guac_module.time, 'monotonic', lambda: next(clock))
+    assert manager.create_guac_project_image() is False
+    manager.image_manager.check_in.assert_not_called()
+
+
+def test_rendered_legacy_builder_checks_sql_before_opening_https():
+    manager = object.__new__(GuacamoleImageManager)
+    manager.env = SimpleNamespace(
+        parent_dns_suffix='.example.com', admin_email='admin@example.com',
+        guac_sql_root_password='root-test', guac_sql_password='app-test',
+        guac_admin_password='admin-test', google_dns_service_key='{}',
+    )
+    script = manager._get_guac_startup_script()
+    subprocess.run(['bash', '-n'], input=script, text=True, check=True)
+    assert "docker info --format '{{.Swarm.LocalNodeState}}'" in script
+    assert "docker volume inspect --format '{{.Mountpoint}}' guacamole_db_data" in script
+    assert script.index('replicas: 0') < script.index('docker exec -i "$DB_CID"')
+    assert script.index("failed to verify the application database login") < script.index('docker service scale')
+    assert script.index('trap - EXIT') < script.index('docker service scale') < script.index(manager.STARTUP_READY_MARKER)
 
 
 class _TlsSocket:
@@ -183,6 +219,7 @@ def test_project_template_is_local_so_check_in_never_replaces_the_shared_base(se
 
 BOOT = ('Starting startup scripts (version 1).\n'
         '[ 42.7] google_metadata_script_runner[1]: startup-script: 🔹 Obtaining wildcard SSL certificate\n')
+READY = BOOT + f'[ 49.6] google_metadata_script_runner[1]: startup-script: {GuacamoleImageManager.STARTUP_READY_MARKER}\n'
 RATE_LIMITED = (
     '[ 49.6] google_metadata_script_runner[1]: startup-script: An unexpected error occurred:\n'
     'Oct 27 google_metadata_script_runner[1]: startup-script: An unexpected error occurred:\n'
@@ -212,13 +249,19 @@ def test_failure_from_an_earlier_boot_is_ignored(setup):
     manager, _ = setup
     manager.instances.get_serial_port_output.return_value = compute_v1.SerialPortOutput(
         contents=BOOT + RATE_LIMITED + BOOT)
-    assert manager._startup_script_failure() is None
+    assert manager._startup_status() == (False, None)
+
+
+def test_readiness_from_an_earlier_boot_is_ignored(setup):
+    manager, _ = setup
+    manager.instances.get_serial_port_output.return_value = compute_v1.SerialPortOutput(contents=READY + BOOT)
+    assert manager._startup_status() == (False, None)
 
 
 def test_unreadable_serial_output_falls_back_to_the_deadline(setup):
     manager, _ = setup
     manager.instances.get_serial_port_output.side_effect = PermissionDenied('denied')
-    assert manager._startup_script_failure() is None
+    assert manager._startup_status() == (False, None)
 
 
 def test_baked_compose_restarts_every_service_after_a_clean_exit():
