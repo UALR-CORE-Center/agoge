@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from google.cloud.compute_v1 import Image
+from google.cloud.compute_v1 import AccessConfig, Image, Instance, NetworkInterface
 
 from cloud_fn_utilities.course_objects.compute.image_template_manager import ImageTemplateManager
 from cloud_fn_utilities.course_objects.compute.snapshot_manager import SnapshotManager
@@ -25,6 +25,27 @@ PUBLIC_SOURCE = (
 )
 CUSTOM_SOURCE = ComputeImageAPI.self_link('image-wireguard-server', 'test-dev-787001')
 SHARED_SOURCE = ComputeImageAPI.self_link('image-wireguard-server', 'agoge-shared-resources')
+
+
+def test_template_retry_accepts_default_subnet_selected_by_compute_engine():
+    project = 'projects/test-dev-787001'
+    desired = Instance(
+        machine_type='zones/us-central1-a/machineTypes/e2-standard-2',
+        network_interfaces=[NetworkInterface(network='global/networks/default', access_configs=[AccessConfig()])],
+    )
+    existing = Instance(
+        status='RUNNING',
+        machine_type=f'{project}/{desired.machine_type}',
+        network_interfaces=[NetworkInterface(
+            network=f'{project}/global/networks/default',
+            subnetwork=f'{project}/regions/us-central1/subnetworks/default',
+            access_configs=[AccessConfig(nat_i_p='203.0.113.1')],
+        )],
+    )
+
+    assert ImageTemplateManager._existing_instance_matches(existing, desired)
+    desired.network_interfaces[0].subnetwork = 'regions/us-central1/subnetworks/explicit-subnet'
+    assert not ImageTemplateManager._existing_instance_matches(existing, desired)
 
 
 @pytest.fixture

@@ -530,11 +530,16 @@ class BaseComputeManager:
         if len(existing_nics) != len(desired_nics):
             return False
         for current_nic, requested_nic in zip(existing_nics, desired_nics):
-            for path_field in ('network', 'subnetwork'):
-                if cls._resource_tail(cls._resource_field(current_nic, path_field)) != cls._resource_tail(
-                    cls._resource_field(requested_nic, path_field)
-                ):
-                    return False
+            if cls._resource_tail(cls._resource_field(current_nic, 'network')) != cls._resource_tail(
+                cls._resource_field(requested_nic, 'network')
+            ):
+                return False
+            # Compute Engine selects the subnet for requests that only name an auto-mode network.
+            requested_subnet = cls._resource_field(requested_nic, 'subnetwork')
+            if requested_subnet and cls._resource_tail(requested_subnet) != cls._resource_tail(
+                cls._resource_field(current_nic, 'subnetwork')
+            ):
+                return False
             requested_internal_ip = cls._resource_field(requested_nic, 'network_i_p')
             if requested_internal_ip and (
                 requested_internal_ip != cls._resource_field(current_nic, 'network_i_p')

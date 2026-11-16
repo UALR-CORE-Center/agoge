@@ -16,6 +16,7 @@ from common.document_database.factory import DocumentDatabaseFactory
 from common.constants.database import DatabaseTypes, DATABASE_NAME, DbCollections
 from common.constants.pub_sub import PubSub
 from common.constants.build_constants import BuildConstants
+from common.exceptions import Conflict
 from common.models.agoge import AgogeImageModel
 from .clean_guacamole_image import publish_clean_guacamole_image
 
@@ -235,7 +236,15 @@ class GuacamoleImageManager:
         # 2. Check out the server, which will also request the new certificate, and then check the server back in.
         print("🚀 Deploying Guacamole server for initial setup and certificate provisioning...")
         self.image_manager.load(server_name=server_name)
-        self.image_manager.check_out()
+        try:
+            self.image_manager.check_out()
+        except Conflict as error:
+            zone = self.image_manager.server_zone
+            print(f"❌ Guacamole builder checkout failed in {self.env.project}/{zone}. {error}")
+            print("Inspect the builder VM and its attached disk before retrying.\n"
+                  f"  gcloud compute instances describe {server_name} --project={self.env.project} "
+                  f"--zone={zone} --format='yaml(name,status,disks)'")
+            return False
 
         # Nginx can present a valid certificate before the proxy database is usable.
         print("🔍 Waiting for the Guacamole database, startup cleanup, and wildcard SSL certificate...")

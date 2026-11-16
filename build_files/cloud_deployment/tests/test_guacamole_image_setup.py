@@ -11,6 +11,7 @@ from google.cloud import compute_v1
 from cloud_deployment.operations.guacamole_image_management import guacamole_image_manager as guac_module
 from cloud_deployment.operations.guacamole_image_management.guacamole_image_manager import GuacamoleImageManager
 from common.constants.database import DbCollections
+from common.exceptions import Conflict
 
 
 @pytest.fixture
@@ -52,6 +53,20 @@ def test_shared_image_source_and_tenant_vm_identity_are_kept_separate(setup):
     manager.image_manager.load.assert_called_once_with(server_name='guac-tenant-project')
     manager.image_manager.check_out.assert_called_once_with()
     manager.image_manager.check_in.assert_called_once_with()
+
+
+def test_checkout_conflict_identifies_builder_without_attempting_capture(setup, capsys):
+    manager, _ = setup
+    manager.image_manager.server_zone = 'us-central1-b'
+    manager.image_manager.check_out.side_effect = Conflict('Existing instance does not match the requested build')
+
+    assert manager.create_guac_project_image() is False
+
+    manager.instances.get_serial_port_output.assert_not_called()
+    manager.image_manager.check_in.assert_not_called()
+    output = capsys.readouterr().out
+    assert 'Existing instance does not match the requested build' in output
+    assert 'gcloud compute instances describe guac-tenant-project --project=tenant-project --zone=us-central1-b' in output
 
 
 @pytest.mark.parametrize('clean_image', [None, 'projects/shared-images/global/images/image-guac-tls-new'])
