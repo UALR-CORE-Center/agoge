@@ -61,6 +61,8 @@ class PubSub:
         ACTION = 'action'
         BUILD_ID = 'build_id'
         BUILD_ATTEMPT_ID = 'build_attempt_id'
+        # Times a build was republished to keep waiting on Compute creates still in flight
+        BUILD_RESUME = 'build_resume'
         CHILD_ID = 'child_id'
         CHILD_BUILD_ATTEMPT_ID = 'child_build_attempt_id'
         CLAIMED_BY = 'claimed_by'

@@ -22,6 +22,18 @@ class BuildSuperseded(Exception):
     """The build was replaced, failed, or entered cleanup."""
 
 
+class BuildPending(Exception):
+    """A wait ran out while Compute creates were still in flight; the build can be resumed."""
+
+
+# A Compute create can outlast both its 150-second poll and the parent's
+# 300-second wait (a 100 GB image took 280 seconds). The deployed function
+# does not retry, so the build handler republishes the parent instead. Each
+# resume gives the parent another wait and lets its server workers rejoin the
+# operation recorded in pending_compute_creates.
+MAX_BUILD_RESUMES = 3
+
+
 _PENDING_CREATES = 'pending_compute_creates'
 # The deployed Pub/Sub function has a 540-second timeout. A worker that
 # stopped before recording an operation cannot issue a request after this.
@@ -55,6 +67,12 @@ class BuildExecution:
     unit_id: str
     attempt_id: str | None
     server_id: str | None = None
+    # Resumes already spent on this build; None when the delivery cannot be republished.
+    resume: int | None = None
+
+    @property
+    def resumable(self):
+        return self.resume is not None and self.resume < MAX_BUILD_RESUMES
 
     def _check(self, owner, unit, server=None):
         if (
@@ -169,9 +187,21 @@ def ensure_current_build():
 
 def build_message_attempt():
     execution = current_build_execution()
+    attributes = {}
     if execution and execution.attempt_id:
-        return {PubSub.EventAttributes.BUILD_ATTEMPT_ID: execution.attempt_id}
-    return {}
+        attributes[PubSub.EventAttributes.BUILD_ATTEMPT_ID] = execution.attempt_id
+    if execution and execution.resume:
+        # A child's timeout stays resumable only while its parent can still resume it.
+        attributes[PubSub.EventAttributes.BUILD_RESUME] = str(execution.resume)
+    return attributes
+
+
+def unfinished_build_error(message, state_manager):
+    """The error for a server wait that ran out: resumable while every child can still finish."""
+    execution = current_build_execution()
+    if execution and execution.resumable and state_manager.are_server_builds_pending():
+        return BuildPending(message)
+    return TimeoutError(message)
 
 
 def record_build_event(db, project, logger, kind, *, event_id, **location):

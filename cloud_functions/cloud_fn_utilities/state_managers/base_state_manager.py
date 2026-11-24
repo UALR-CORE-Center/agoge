@@ -163,6 +163,12 @@ class BaseStateManager:
         else:
             return False
 
+    def are_server_builds_pending(self) -> bool:
+        """Whether an unfinished build can still finish: every child is waiting, building, or built."""
+        in_progress = (None, self.server_states.START.value, self.server_states.BUILDING.value,
+                       self.server_states.RUNNING.value)
+        return all(server.get('state') in in_progress for server in self.db_queries.get_servers(parent_id=self.build_id))
+
     def are_servers_started(self) -> bool:
         return self._server_state_check(server_states=[self.server_states.RUNNING.value])
 

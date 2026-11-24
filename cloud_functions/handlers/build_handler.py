@@ -10,8 +10,10 @@ from common.utilities.gcp.cloud_env import CloudEnv
 from common.utilities.gcp.cloud_logger import Logger, LoggerNames
 from common.utilities.gcp.compute.quota_failure import ComputeQuotaFailure
 
+from common.utilities.gcp.pubsub_manager import PubSubManager
+
 from cloud_fn_utilities.build_execution import (
-    BuildExecution, BuildSuperseded, build_execution, record_build_event, server_owner,
+    BuildExecution, BuildPending, BuildSuperseded, build_execution, record_build_event, server_owner,
 )
 from cloud_fn_utilities.course_objects.compute.factory import ComputeManagerFactory
 from cloud_fn_utilities.server_specific.guacamole.display_proxy import DisplayProxy
@@ -20,6 +22,8 @@ from cloud_fn_utilities.course_objects.workout.factory_workout import WorkoutFac
 
 
 class BuildHandler:
+    RESUME_PUBLISH_TIMEOUT_SECONDS = 30
+
     def __init__(
         self,
         event_attributes,
@@ -70,7 +74,7 @@ class BuildHandler:
                     workout_id is not None or owner.get('unit_type') == BuildConstants.UnitType.COMMUNITY.value
                 )
                 if owner.get('state') not in ready_states or joins_workout:
-                    if log_owner:
+                    if log_owner and not execution.resume:
                         self._record_event('build_started', location)
                     log_failure = log_owner or execution.server_id is not None
                     self._dispatch()
@@ -78,6 +82,8 @@ class BuildHandler:
                     owner = execution.check()
             except BuildSuperseded:
                 self.logger.info('Skipped an obsolete lab build', **location)
+            except BuildPending as pending:
+                self._resume(execution, location, pending)
             except (ComputeQuotaFailure, BuildQuotaHold) as error:
                 if getattr(error, '_lab_incident_recorded', False):
                     raise
@@ -115,6 +121,20 @@ class BuildHandler:
                         self._record_event('build_completed', location)
                     incidents.resolve_target(**location, resolution='build_succeeded')
 
+    def _resume(self, execution, location, pending):
+        """Keep a build alive whose Compute creates outlasted this delivery."""
+        if execution.server_id:
+            # The server stays BUILDING. Its parent is still waiting and resends
+            # this build when it resumes, which rejoins the recorded operation.
+            self.logger.info(f'{pending} The parent build will resume it.', **location)
+            return
+        resume = execution.resume + 1
+        self.logger.warning(f'{pending} Resuming the build (resume {resume}).', **location)
+        PubSubManager(PubSub.Topics.AGOGE, env_dict=self.env_dict).msg(**{
+            **self.event_attributes,
+            self.event_attr_keys.BUILD_RESUME: resume,
+        }).result(timeout=self.RESUME_PUBLISH_TIMEOUT_SECONDS)
+
     def _record_event(self, kind, location, **details):
         record_build_event(self.db, self.env.project, self.logger, kind, event_id=self.event_id, **location, **details)
 
@@ -148,7 +168,15 @@ class BuildHandler:
             workout = self.db.get(collection, build_id) or {}
             unit_id = workout.get('parent_id') or build_id
         attempt_id = self.event_attributes.get(self.event_attr_keys.BUILD_ATTEMPT_ID)
-        return BuildExecution(self.db, collection, build_id, unit_id, attempt_id, server_id), stage
+        # A local debug run builds in-process and has no topic to resume through.
+        resume = None if self.debug_mode else self._resume_count()
+        return BuildExecution(self.db, collection, build_id, unit_id, attempt_id, server_id, resume), stage
+
+    def _resume_count(self):
+        try:
+            return max(int(self.event_attributes.get(self.event_attr_keys.BUILD_RESUME) or 0), 0)
+        except (TypeError, ValueError):
+            return 0
 
     @staticmethod
     def _failure_stage(error, stage):

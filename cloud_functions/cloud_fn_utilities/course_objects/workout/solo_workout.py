@@ -7,7 +7,8 @@ from common.models.agoge import ServerModel, UnitModel, WorkoutModel
 
 from cloud_fn_utilities.server_specific.guacamole.display_proxy import DisplayProxy
 from cloud_fn_utilities.build_execution import (
-    build_message_attempt, current_build_execution, ensure_current_build, wait_for_pending_creates,
+    build_message_attempt, current_build_execution, ensure_current_build, unfinished_build_error,
+    wait_for_pending_creates,
 )
 from ...server_specific.firewall_server import FirewallServer
 from .base_workout import BaseWorkout
@@ -154,11 +155,36 @@ class SoloWorkout(BaseWorkout):
         if self.promiscuous_mode:
             self.packet_mirroring.create()
 
+        if (execution := current_build_execution()) and execution.resume:
+            self._resume_server_builds()
         if not self.state_manager.are_server_builds_finished():
-            raise TimeoutError(f'Workout {self.workout_id} is still waiting for server builds')
+            raise unfinished_build_error(
+                f'Workout {self.workout_id} is still waiting for server builds',
+                self.state_manager,
+            )
         else:
             self.state_manager.state_transition(self.s.RUNNING)
             self.logger.info(f"{self.class_name}:{self.workout_id} - Finished building Workout!")
+
+    def _resume_server_builds(self):
+        """Send each server still BUILDING a worker that rejoins its recorded Compute create.
+
+        A resumed delivery is past the stage that issues the child builds. The server records are
+        reused as written: preparing them again would rotate the display proxy's credentials.
+        """
+        prefix = f'{self.workout_id}-'
+        for server in self.db_queries.get_servers(parent_id=self.workout_id):
+            name = server.get('name')
+            if not name or server.get('state') != ServerStates.BUILDING.value:
+                continue
+            ensure_current_build()
+            self.pubsub_manager.msg(
+                handler=str(PubSub.Handlers.BUILD.value),
+                action=str(PubSub.Actions.BUILD.value),
+                server_name=name if name.startswith(prefix) else f'{prefix}{name}',
+                course_object=str(PubSub.CourseObjects.LAB_SERVER.value),
+                **build_message_attempt(),
+            )
 
     def start(self):
         self._add_build_action(PubSub.Actions.START.value, True)

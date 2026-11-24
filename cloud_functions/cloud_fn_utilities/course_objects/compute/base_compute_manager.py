@@ -30,7 +30,9 @@ from common.utilities.gcp.compute.resources.attached_disk_resource import Attach
 from common.utilities.gcp.compute.resources.instance_resource import InstanceResource
 from common.utilities.gcp.pubsub_manager import PubSubManager
 
-from cloud_fn_utilities.build_execution import BuildSuperseded, tracked_compute_create
+from cloud_fn_utilities.build_execution import (
+    BuildPending, BuildSuperseded, current_build_execution, tracked_compute_create,
+)
 from cloud_fn_utilities.gcp.dns_manager import DnsManager
 
 
@@ -451,9 +453,15 @@ class BaseComputeManager:
                 self.state_manager.state_transition(self.s.RUNNING)
         else:
             msg = f'{self.class_name}:{self.server_name} - Timeout in trying to build server.'
-            self.logger.error(msg)
             # The zone accepted the insert, so the VM may still appear there; delete and stop must find it.
             self._on_instance_created(self.server_zone)
+            execution = current_build_execution()
+            if execution and execution.resumable:
+                # The accepted operation is recorded on the owner and may still succeed. Stay BUILDING so
+                # the resumed parent build sends a worker that rejoins that operation.
+                self.logger.warning(f'{msg} The create is still in progress and will be resumed.')
+                raise BuildPending(msg)
+            self.logger.error(msg)
             self.state_manager.state_transition(self.s.BROKEN)
             raise TimeoutError(msg)
 

@@ -12,7 +12,9 @@ from common.exceptions import BadRequest
 from common.utilities.timestamps import Timestamps
 from common.models.agoge import WorkoutModel, UnitModel, ServerModel, ProxyConnectionModel
 
-from cloud_fn_utilities.build_execution import build_message_attempt, ensure_current_build, wait_for_pending_creates
+from cloud_fn_utilities.build_execution import (
+    build_message_attempt, ensure_current_build, unfinished_build_error, wait_for_pending_creates,
+)
 
 from ..unit.unit_dhcp_service import UnitDHCP
 from .base_workout import BaseWorkout
@@ -91,10 +93,11 @@ class CommunityWorkout(BaseWorkout):
                 server_build_count += 1
                 self.__send_server_build_msg(server)
             if not self.state_manager.are_server_builds_finished():
-                # Preserve BUILDING_SERVERS so a Pub/Sub redelivery can resume
+                # Preserve BUILDING_SERVERS so the build handler can resume
                 # provisioning instead of stranding the Workout in BROKEN.
-                raise TimeoutError(
-                    f"Timed out waiting for servers for Workout {self.workout_id}"
+                raise unfinished_build_error(
+                    f"Timed out waiting for servers for Workout {self.workout_id}",
+                    self.state_manager,
                 )
             self.state_manager.state_transition(self.s.COMPLETED_SERVERS)
 

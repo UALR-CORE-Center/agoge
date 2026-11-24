@@ -11,7 +11,9 @@ from common.models.agoge import UnitModel, ServerModel
 from common.services.wireguard_endpoint import WireGuardEndpointRegistry
 from common.services.community_proxy_spec import community_proxy, ensure_community_proxy
 from common.utilities.wireguard_firewall import has_public_wireguard_ingress
-from cloud_fn_utilities.build_execution import build_message_attempt, ensure_current_build, wait_for_pending_creates
+from cloud_fn_utilities.build_execution import (
+    build_message_attempt, ensure_current_build, unfinished_build_error, wait_for_pending_creates,
+)
 
 from ...gcp.vpc_manager import VpcManager
 from ..compute.factory import ComputeManagerFactory
@@ -114,10 +116,12 @@ class CommunityUnit(BaseUnit):
                 ensure_current_build()
                 self.__send_server_build_msg(server)
             if not self.state_manager.are_server_builds_finished():
-                # Leave the Unit in BUILDING_SERVERS. Raising makes the Pub/Sub
-                # delivery retryable and the next delivery reuses server records.
-                raise TimeoutError(
-                    f"Timed out waiting for community servers for Unit {self.unit_id}"
+                # Leave the Unit in BUILDING_SERVERS. The build handler resumes
+                # a build whose servers are still being created, and the next
+                # delivery reuses server records.
+                raise unfinished_build_error(
+                    f"Timed out waiting for community servers for Unit {self.unit_id}",
+                    self.state_manager,
                 )
             self.state_manager.state_transition(self.s.COMPLETED_SERVERS)
 

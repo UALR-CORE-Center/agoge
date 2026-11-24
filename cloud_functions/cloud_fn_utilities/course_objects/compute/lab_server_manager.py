@@ -5,7 +5,7 @@ from typing import Optional
 from google.api_core.exceptions import NotFound as GoogleNotFound
 
 from cloud_fn_utilities.build_execution import (
-    BuildSuperseded, ensure_current_build, server_owner, wait_for_pending_creates,
+    BuildPending, BuildSuperseded, ensure_current_build, server_owner, wait_for_pending_creates,
 )
 from cloud_fn_utilities.course_objects.compute.base_compute_manager import BaseComputeManager
 from cloud_fn_utilities.gcp.address_manager import AddressManager
@@ -153,7 +153,7 @@ class LabServerManager(BaseComputeManager):
             # installed the ingress firewall rules. The Unit promotes it to
             # active only after that final dependency succeeds.
             self.state_manager.state_transition(self.s.RUNNING)
-        except BuildSuperseded:
+        except (BuildSuperseded, BuildPending):
             raise
         except Exception:
             self.state_manager.state_transition(self.s.BROKEN)
